@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"import gspread\")",
+      "Bash(python3 -c \"import requests\")",
+      "Bash(python3 -m pip install -r requirements.txt)",
+      "Bash(python3 -c \"import requests, gspread, google.auth, dotenv, anthropic; print\\('all third-party deps import OK'\\)\")",
+      "Bash(python3 -c \"import config, fitr_client, sheets_client, summariser, recovery; print\\('all project modules import OK'\\)\")",
+      "Bash(python3 -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(python3 -m pip show gspread)",
+      "Bash(python3 -m site --user-site)",
+      "Bash(python3 -c \"import sys; print\\('\\\\n'.join\\(sys.path\\)\\)\")",
+      "Bash(python3 -m venv .venv)",
+      "Bash(./.venv/bin/python -m pip install --quiet --upgrade pip)",
+      "Bash(./.venv/bin/python -m pip install --quiet -r requirements.txt)",
+      "Bash(./.venv/bin/python -c \"import requests, gspread, google.auth, dotenv, anthropic; print\\('all third-party deps import OK'\\)\")",
+      "Bash(./.venv/bin/python -c \"import config, fitr_client, sheets_client, summariser, recovery; print\\('all project modules import OK'\\)\")",
+      "Bash(SHEET_ID=dummy GOOGLE_SERVICE_ACCOUNT_FILE=service_account.json ./.venv/bin/python -c \"import config, fitr_client, sheets_client, summariser, recovery; print\\('all project modules import OK \\(with dummy SHEET_ID\\)'\\)\")",
+      "Bash(.venv/bin/python -c ' *)",
+      "Bash(cp \"/Users/jakcornthwaite/Downloads/jst-sheets-5268b26e740d.json\" \"/Users/jakcornthwaite/Library/Application Support/Claude/local-agent-mode-sessions/02e0f29f-cf77-4a4e-9427-384c23917a7f/3376dedd-6c05-47a4-ae34-08bd46795645/local_0c481bfc-a5c3-44f3-8ca6-986fe05c6d58/outputs/fitr-athlete-sync/service_account.json\" && echo \"copied\")",
+      "Bash(python3 -c \"import json; d=json.load\\(open\\('/Users/jakcornthwaite/Library/Application Support/Claude/local-agent-mode-sessions/02e0f29f-cf77-4a4e-9427-384c23917a7f/3376dedd-6c05-47a4-ae34-08bd46795645/local_0c481bfc-a5c3-44f3-8ca6-986fe05c6d58/outputs/fitr-athlete-sync/service_account.json'\\)\\); print\\(d['client_email']\\)\")",
+      "Bash(DRY_RUN=1 .venv/bin/python sync.py)",
+      "Bash(.venv/bin/python sync.py)",
+      "Bash(git init *)",
+      "Bash(git add *)"
+    ]
+  }
+}

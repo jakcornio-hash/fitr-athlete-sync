@@ -1,0 +1,38 @@
+name: Weekly Fitr Sync
+
+# Runs every Sunday 18:00 Europe/London.
+# NOTE: GitHub cron is in UTC. 17:00 UTC = 18:00 BST (summer) / 17:00 GMT (winter).
+# Adjust if you care about the winter hour, or just leave it — close enough.
+on:
+  schedule:
+    - cron: "0 17 * * 0"
+  workflow_dispatch: {}   # lets you run it manually from the Actions tab
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Write service account file
+        run: echo "$GOOGLE_SERVICE_ACCOUNT_JSON" > service_account.json
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+
+      - name: Run sync
+        env:
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          FITR_EMAIL: ${{ secrets.FITR_EMAIL }}
+          FITR_PASSWORD: ${{ secrets.FITR_PASSWORD }}
+          FITR_CLIENT_ID: ${{ secrets.FITR_CLIENT_ID }}
+          FITR_CLIENT_SECRET: ${{ secrets.FITR_CLIENT_SECRET }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_SERVICE_ACCOUNT_FILE: service_account.json
+        run: python sync.py
