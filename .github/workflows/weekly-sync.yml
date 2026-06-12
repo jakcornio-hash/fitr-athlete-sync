@@ -22,7 +22,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Write service account file
-        run: echo "$GOOGLE_SERVICE_ACCOUNT_JSON" > service_account.json
+        run: printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > service_account.json
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
 
