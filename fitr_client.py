@@ -6,6 +6,7 @@ Endpoints below were captured by inspecting the live Fitr coach app
 liable to change. Auth is a bearer token, obtained either from a pasted
 token (testing) or an OAuth password-grant login (automation).
 """
+import datetime as dt
 import time
 import requests
 
@@ -163,14 +164,22 @@ class FitrClient:
 
     # ------------------------------------------------------------------ inbox
     def chat_rooms(self, max_pages=20):
-        """Inbox conversations, newest activity first. Each room has
-        {id, chat_room_type, created_at, last_message:{text,...}, opponent}."""
+        """Inbox conversations, newest activity first.
+
+        Each room is enriched with two extra keys:
+          last_message_date  — datetime.date parsed from last_message.created_at (or None)
+          last_message_text  — human-readable string built from text + performance attachments
+        """
         out, page = [], 1
         while page <= max_pages:
             data = self._get("/api/chat/rooms", {"page": page})
             if not data:
                 break
             items = data.get("items", [])
+            for room in items:
+                lm = room.get("last_message") or {}
+                room["last_message_date"] = _parse_unix_date(lm.get("created_at"))
+                room["last_message_text"] = _format_last_message(lm)
             out.extend(items)
             if not items:
                 break
@@ -193,3 +202,54 @@ class FitrClient:
             page += 1
             time.sleep(0.3)
         return out
+
+
+# ------------------------------------------------------------------ helpers
+
+def _parse_unix_date(ts):
+    """Convert a Unix timestamp integer to datetime.date, or None."""
+    if not ts:
+        return None
+    try:
+        return dt.datetime.fromtimestamp(int(ts)).date()
+    except (ValueError, OSError):
+        return None
+
+
+def _format_last_message(lm):
+    """
+    Build a plain-text description of a last_message object.
+
+    Handles both text messages and performance-log attachments (the
+    latter have text=null but carry workout section + athlete notes).
+    Returns empty string if there is nothing useful to extract.
+    """
+    parts = []
+    text = (lm.get("text") or "").strip()
+    if text:
+        parts.append(text)
+
+    for att in lm.get("attachments") or []:
+        if att.get("attachment_type") != "performance":
+            continue
+        res = att.get("resource") or {}
+        section = res.get("section") or {}
+        section_title = (section.get("title") or "").strip()
+        workout_desc = (section.get("description") or section.get("preview_description") or "").strip()
+        athlete_note = (res.get("text") or "").strip()
+        date_str = (res.get("date") or "").strip()
+
+        block = []
+        if date_str:
+            block.append(f"[Workout logged {date_str}]")
+        if section_title:
+            block.append(f"Section: {section_title}")
+        if workout_desc:
+            # Trim long descriptions to first 200 chars
+            block.append(f"Workout: {workout_desc[:200]}")
+        if athlete_note:
+            block.append(f"Athlete note: {athlete_note}")
+        if block:
+            parts.append("\n".join(block))
+
+    return "\n\n".join(parts)

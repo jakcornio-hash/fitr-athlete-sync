@@ -56,6 +56,19 @@ class SheetsClient:
             return
         self.worksheet(title).update(a1, [[value]], value_input_option="USER_ENTERED")
 
+    def overwrite_tab(self, title, rows):
+        """Clear a tab and write rows from the top. Creates the tab if missing."""
+        if config.DRY_RUN:
+            print(f"[DRY_RUN] would overwrite '{title}' with {len(rows)} rows")
+            return
+        try:
+            ws = self.sh.worksheet(title)
+            ws.clear()
+        except gspread.WorksheetNotFound:
+            ws = self.sh.add_worksheet(title=title, rows=max(200, len(rows) + 10), cols=20)
+        if rows:
+            ws.update("A1", rows, value_input_option="USER_ENTERED")
+
     def update_cells_by_rowmap(self, title, col_letter, rowmap):
         """Set many single cells in one column. rowmap = {row_number: value}."""
         if config.DRY_RUN:

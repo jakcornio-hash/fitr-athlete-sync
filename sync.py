@@ -23,6 +23,7 @@ import sys
 import config
 from fitr_client import FitrClient, FitrError
 from sheets_client import SheetsClient
+import analytics
 import summariser
 import recovery
 
@@ -162,25 +163,29 @@ def collect_challenges(fitr, existing_keys):
 
 
 def collect_chat_summaries(fitr, valid_names):
-    """Return {athlete_name: summary_line} for conversations active in window."""
+    """Return {athlete_name: summary_line} for conversations active within CHAT_LOOKBACK_DAYS."""
+    chat_cutoff = TODAY - dt.timedelta(days=config.CHAT_LOOKBACK_DAYS)
     rooms = fitr.chat_rooms()
     candidates = []
     for room in rooms:
         if room.get("chat_room_type") != "individual":
             continue
-        last = room.get("last_message") or {}
-        ts = room.get("created_at")
-        # last_message has no explicit date in the list payload; use room
-        # recency ordering — Fitr returns newest first, so stop once stale.
         opp = room.get("opponent") or {}
         name = (opp.get("full_name") or opp.get("name") or "").strip()
-        text = last.get("text", "")
-        if not name or not text:
+        if not name:
             continue
-        candidates.append((name, text))
+        # Use the parsed timestamp; skip rooms with no recent activity
+        msg_date = room.get("last_message_date")
+        if msg_date and msg_date < chat_cutoff:
+            break  # rooms are newest-first, so we can stop early
+        # Use the enriched text (covers both text messages and performance logs)
+        text = room.get("last_message_text", "").strip()
+        if not text:
+            continue
+        candidates.append((name, text, msg_date))
     out = {}
-    for name, text in candidates[: config.MAX_CHAT_SUMMARIES]:
-        summary = summariser.summarise_conversation(name, text)
+    for name, text, msg_date in candidates[: config.MAX_CHAT_SUMMARIES]:
+        summary = summariser.summarise_conversation(name, text, activity_date=msg_date)
         if summary:
             out[name] = f"[{TODAY.isoformat()} — chat] {summary}"
     return out
@@ -272,6 +277,21 @@ def main():
 
     if scraped_rows:
         sheets.update_cells_by_rowmap(config.TAB_BENCHMARKS, "E", scraped_rows)
+
+    # ---- analytics: trends + engagement → Coach Alerts tab ----
+    pr_records = sheets.read_records(config.TAB_PR_LOG)
+    trend_results = analytics.trend_analysis(pr_records)
+    engagement_results = analytics.engagement_check(
+        pr_records, athletes, threshold_days=config.ENGAGEMENT_THRESHOLD_DAYS
+    )
+    flagged_count = sum(1 for e in engagement_results if e["flag"])
+    concern_count = sum(
+        1 for signals in trend_results.values()
+        for s in signals if s["trend"] == "declining" or s["peak_drop_flag"]
+    )
+    print(f"Engagement flags: {flagged_count}  |  Performance concerns: {concern_count}")
+    alert_rows = analytics.build_coach_alerts_rows(engagement_results, trend_results)
+    sheets.overwrite_tab(config.TAB_COACH_ALERTS, alert_rows)
 
     # ---- sync log ----
     unknown = sorted({n for n in chat_notes} - valid_names)
