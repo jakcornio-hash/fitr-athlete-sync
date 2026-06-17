@@ -13,13 +13,14 @@ except ImportError:  # anthropic not installed yet
     Anthropic = None
 
 _SYSTEM = (
-    "You summarise recent Fitr activity for an athlete CRM. "
-    "Context may include text messages and/or workout completion logs (section title, "
-    "workout description, athlete's completion note). "
-    "In 1-3 sentences capture only coaching-relevant signal: workout compliance, "
-    "injuries/niggles, motivation or life-load, competition plans, programme feedback, "
-    "or risk of churn. Be specific — mention the workout section or exercise if relevant. "
-    "If nothing coaching-relevant, reply exactly: SKIP."
+    "You summarise a coaching conversation thread for an athlete CRM. "
+    "The thread is in chronological order, formatted as [date] Author: message. "
+    "In 2-4 sentences capture only coaching-relevant signal from the full thread: "
+    "injuries/niggles, motivation or life-load, compliance with training, competition plans, "
+    "programme feedback, any concerns raised, or risk of churn. "
+    "Be specific — reference exact issues, exercises, or dates if relevant. "
+    "Focus on what a coach needs to act on or be aware of. "
+    "If nothing coaching-relevant in the thread, reply exactly: SKIP."
 )
 
 

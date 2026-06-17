@@ -187,6 +187,30 @@ class FitrClient:
             time.sleep(0.3)
         return out
 
+    # --------------------------------------------------------- chat messages
+    def chat_messages(self, room_id, max_messages=40):
+        """
+        Full message thread for a chat room, newest-first.
+        Returns a list of message dicts with keys:
+          id, text, created_at, author.full_name, attachments
+        Fetches up to max_messages (default 40 = 2 pages of 20).
+        """
+        out = []
+        page = 1
+        while len(out) < max_messages:
+            data = self._get("/api/chat/messages", {"chat_room_id": room_id, "page": page})
+            if not data:
+                break
+            msgs = data.get("messages", [])
+            if not msgs:
+                break
+            out.extend(msgs)
+            if len(msgs) < 20:  # last page
+                break
+            page += 1
+            time.sleep(0.2)
+        return out[:max_messages]
+
     # --------------------------------------------------------------- clients
     def clients(self, max_pages=30):
         """Coach's athletes (for name <-> fitr id reconciliation)."""
@@ -253,3 +277,36 @@ def _format_last_message(lm):
             parts.append("\n".join(block))
 
     return "\n\n".join(parts)
+
+
+def format_thread(messages):
+    """
+    Format a list of message dicts (from chat_messages()) into a plain-text
+    transcript suitable for passing to the summariser. Messages are newest-first
+    from the API so we reverse to get chronological order.
+    """
+    lines = []
+    for msg in reversed(messages):
+        ts = msg.get("created_at")
+        date_str = dt.datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d") if ts else "?"
+        author = (msg.get("author") or {}).get("full_name", "Unknown")
+        text = (msg.get("text") or "").strip()
+        # Include performance attachment context too
+        att_parts = []
+        for att in msg.get("attachments") or []:
+            if att.get("attachment_type") != "performance":
+                continue
+            res = att.get("resource") or {}
+            section = (res.get("section") or {}).get("title", "")
+            note = (res.get("text") or "").strip()
+            date = (res.get("date") or "")
+            part = f"[Workout {date}: {section}]"
+            if note:
+                part += f" — {note}"
+            att_parts.append(part)
+        content = text
+        if att_parts:
+            content = (content + "\n" + "\n".join(att_parts)).strip()
+        if content:
+            lines.append(f"[{date_str}] {author}: {content[:300]}")
+    return "\n".join(lines)

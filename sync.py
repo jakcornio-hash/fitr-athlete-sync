@@ -21,7 +21,7 @@ import datetime as dt
 import sys
 
 import config
-from fitr_client import FitrClient, FitrError
+from fitr_client import FitrClient, FitrError, format_thread
 from sheets_client import SheetsClient
 import analytics
 import summariser
@@ -163,7 +163,8 @@ def collect_challenges(fitr, existing_keys):
 
 
 def collect_chat_summaries(fitr, valid_names):
-    """Return {athlete_name: summary_line} for conversations active within CHAT_LOOKBACK_DAYS."""
+    """Return {athlete_name: summary_line} for conversations active within CHAT_LOOKBACK_DAYS.
+    Fetches full thread history (up to 40 messages) per active conversation."""
     chat_cutoff = TODAY - dt.timedelta(days=config.CHAT_LOOKBACK_DAYS)
     rooms = fitr.chat_rooms()
     candidates = []
@@ -174,18 +175,24 @@ def collect_chat_summaries(fitr, valid_names):
         name = (opp.get("full_name") or opp.get("name") or "").strip()
         if not name:
             continue
-        # Use the parsed timestamp; skip rooms with no recent activity
         msg_date = room.get("last_message_date")
         if msg_date and msg_date < chat_cutoff:
-            break  # rooms are newest-first, so we can stop early
-        # Use the enriched text (covers both text messages and performance logs)
-        text = room.get("last_message_text", "").strip()
-        if not text:
+            break  # rooms are newest-first, stop early once stale
+        if not msg_date and not room.get("last_message_text", "").strip():
             continue
-        candidates.append((name, text, msg_date))
+        candidates.append((room["id"], name, msg_date))
+
     out = {}
-    for name, text, msg_date in candidates[: config.MAX_CHAT_SUMMARIES]:
-        summary = summariser.summarise_conversation(name, text, activity_date=msg_date)
+    for room_id, name, msg_date in candidates[: config.MAX_CHAT_SUMMARIES]:
+        try:
+            messages = fitr.chat_messages(room_id, max_messages=40)
+        except FitrError as e:
+            print(f"  ! chat_messages failed for {name}: {e}")
+            messages = []
+        thread_text = format_thread(messages)
+        if not thread_text:
+            continue
+        summary = summariser.summarise_conversation(name, thread_text, activity_date=msg_date)
         if summary:
             out[name] = f"[{TODAY.isoformat()} — chat] {summary}"
     return out
