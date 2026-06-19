@@ -13,10 +13,15 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 
 class SheetsClient:
-    def __init__(self):
-        creds = Credentials.from_service_account_file(
-            config.GOOGLE_SERVICE_ACCOUNT_FILE, scopes=SCOPES
-        )
+    def __init__(self, service_account_info=None):
+        if service_account_info:
+            creds = Credentials.from_service_account_info(
+                service_account_info, scopes=SCOPES
+            )
+        else:
+            creds = Credentials.from_service_account_file(
+                config.GOOGLE_SERVICE_ACCOUNT_FILE, scopes=SCOPES
+            )
         self.gc = gspread.authorize(creds)
         self.sh = self.gc.open_by_key(config.SHEET_ID)
 

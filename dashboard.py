@@ -5,9 +5,7 @@ Run locally:  streamlit run dashboard.py
 Deploy:       Streamlit Community Cloud → connect GitHub repo → add secrets
 """
 import datetime as dt
-import json
 import os
-import tempfile
 
 import streamlit as st
 import altair as alt
@@ -43,14 +41,11 @@ def get_sheets():
     """Return SheetsClient, using Streamlit secrets on Cloud or .env locally."""
     try:
         sa = dict(st.secrets["gcp_service_account"])
-        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
-        json.dump(sa, tmp)
-        tmp.close()
-        config.GOOGLE_SERVICE_ACCOUNT_FILE = tmp.name  # patch before SheetsClient reads it
-    except Exception:
-        pass
-    from sheets_client import SheetsClient
-    return SheetsClient()
+        from sheets_client import SheetsClient
+        return SheetsClient(service_account_info=sa)
+    except (KeyError, Exception):
+        from sheets_client import SheetsClient
+        return SheetsClient()
 
 
 # ── Data ──────────────────────────────────────────────────────────────────────
