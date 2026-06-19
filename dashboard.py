@@ -456,6 +456,24 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
                 "_order": 5,
             })
 
+    # 7. In contact but not logging — monthly nudge
+    for e in engagement_results:
+        if not e.get("nudge_flag"):
+            continue
+        days = e["days_since"]
+        last_contact = e.get("last_contact", "recently")
+        reason = (
+            f"No results logged ({days} days) — last contact {last_contact}"
+            if days else f"Never logged — but in contact (last {last_contact})"
+        )
+        rows.append({
+            "Priority": "📝 Remind to Log",
+            "Athlete": e["name"],
+            "Reason": reason,
+            "Action": "Ask them to record their results",
+            "_order": 6,
+        })
+
     rows.sort(key=lambda x: x["_order"])
     for r in rows:
         del r["_order"]
@@ -475,6 +493,7 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
             "⚠️ Re-engage":     "background-color: #fff3e0",
             "⚠️ Check In":      "background-color: #fff3e0",
             "📉 Performance":   "background-color: #fce4ec",
+            "📝 Remind to Log": "background-color: #e3f2fd",
         }
         colour = colours.get(row["Priority"], "")
         return [colour] * len(row)

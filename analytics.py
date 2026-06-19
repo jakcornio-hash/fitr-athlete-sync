@@ -134,22 +134,33 @@ def engagement_check(pr_log_records, athletes, threshold_days=21, last_contact_b
         if d and (name not in last_logged or d > last_logged[name]):
             last_logged[name] = d
 
-    # Merge chat contact dates — a recent conversation suppresses the flag
-    for name, contact_date in (last_contact_by_name or {}).items():
-        if contact_date and (name not in last_logged or contact_date > last_logged[name]):
-            last_logged[name] = contact_date
+    last_contact = last_contact_by_name or {}
 
     out = []
     for a in athletes:
         name = a["name"]
-        last = last_logged.get(name)
-        days = (TODAY - last).days if last else None
+        last_log = last_logged.get(name)
+        last_chat = last_contact.get(name)
+
+        days_since_log = (TODAY - last_log).days if last_log else None
+        days_since_contact = (TODAY - last_chat).days if last_chat else None
+
+        log_inactive = days_since_log is None or days_since_log >= threshold_days
+        contact_recent = days_since_contact is not None and days_since_contact < threshold_days
+
+        # nudge_flag: not logging but coach is in contact — softer monthly prompt
+        # flag: not logging AND no recent contact — genuine dropout, needs re-engagement
+        nudge_flag = log_inactive and contact_recent
+        flag = log_inactive and not contact_recent
+
         out.append({
             "name": name,
             "jst_id": a.get("jst_id", ""),
-            "last_logged": last.isoformat() if last else "never",
-            "days_since": days,
-            "flag": days is None or days >= threshold_days,
+            "last_logged": last_log.isoformat() if last_log else "never",
+            "last_contact": last_chat.isoformat() if last_chat else None,
+            "days_since": days_since_log,
+            "flag": flag,
+            "nudge_flag": nudge_flag,
         })
 
     out.sort(key=lambda x: (0 if x["days_since"] is None else 1, -(x["days_since"] or 99999)))
