@@ -15,15 +15,6 @@ import analytics
 import config
 import recovery as rec_mod
 
-# Patch config values from Streamlit secrets when running on Cloud.
-# (config.SHEET_ID defaults to "" when the env var isn't set locally.)
-try:
-    if not config.SHEET_ID:
-        config.SHEET_ID = str(st.secrets["SHEET_ID"])
-    if not config.RECOVERY_SHEET_ID:
-        config.RECOVERY_SHEET_ID = str(st.secrets.get("RECOVERY_SHEET_ID", ""))
-except Exception:
-    pass
 
 st.set_page_config(
     page_title="JST Compete Coaching",
@@ -42,6 +33,11 @@ def get_sheets():
     from sheets_client import SheetsClient
     try:
         sa = dict(st.secrets["gcp_service_account"])
+        # Patch sheet IDs here — st.secrets is guaranteed available inside a cached function
+        if not config.SHEET_ID:
+            config.SHEET_ID = str(st.secrets["SHEET_ID"])
+        if not config.RECOVERY_SHEET_ID:
+            config.RECOVERY_SHEET_ID = str(st.secrets.get("RECOVERY_SHEET_ID", ""))
         return SheetsClient(service_account_info=sa)
     except KeyError:
         return SheetsClient()  # local dev — uses service_account.json
