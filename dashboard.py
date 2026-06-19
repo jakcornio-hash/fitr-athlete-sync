@@ -39,13 +39,15 @@ TODAY = dt.date.today()
 @st.cache_resource
 def get_sheets():
     """Return SheetsClient, using Streamlit secrets on Cloud or .env locally."""
+    from sheets_client import SheetsClient
     try:
         sa = dict(st.secrets["gcp_service_account"])
-        from sheets_client import SheetsClient
+        # TOML stores \n as literal two-char sequences; Google's RSA needs real newlines
+        if "private_key" in sa:
+            sa["private_key"] = sa["private_key"].replace("\\n", "\n")
         return SheetsClient(service_account_info=sa)
-    except (KeyError, Exception):
-        from sheets_client import SheetsClient
-        return SheetsClient()
+    except KeyError:
+        return SheetsClient()  # local dev — uses service_account.json
 
 
 # ── Data ──────────────────────────────────────────────────────────────────────
