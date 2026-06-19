@@ -34,5 +34,6 @@ jobs:
           FITR_CLIENT_ID: ${{ secrets.FITR_CLIENT_ID }}
           FITR_CLIENT_SECRET: ${{ secrets.FITR_CLIENT_SECRET }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          RECOVERY_SHEET_ID: ${{ secrets.RECOVERY_SHEET_ID }}
           GOOGLE_SERVICE_ACCOUNT_FILE: service_account.json
         run: python sync.py

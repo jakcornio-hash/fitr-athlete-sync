@@ -26,11 +26,18 @@ RECOVERY_COLS = {
 
 
 def latest_by_email(sheets):
-    """Return {lower_email: response_dict} keeping the most recent row per athlete."""
+    """Return {lower_email: response_dict} keeping the most recent row per athlete.
+
+    When RECOVERY_SHEET_ID is set reads from the Typeform-managed sheet directly;
+    otherwise falls back to a 'Recovery' tab in the main athlete sheet.
+    """
     try:
-        rows = sheets.read_records(config.TAB_RECOVERY)
+        if config.RECOVERY_SHEET_ID:
+            rows = sheets.read_external_records(config.RECOVERY_SHEET_ID, config.RECOVERY_TAB)
+        else:
+            rows = sheets.read_records(config.TAB_RECOVERY)
     except Exception:
-        return {}  # tab not set up yet — recovery is optional
+        return {}  # not set up yet — recovery is optional
     out = {}
     for row in rows:
         email = str(row.get(RECOVERY_COLS["email"], "")).strip().lower()

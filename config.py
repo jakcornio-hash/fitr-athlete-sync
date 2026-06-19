@@ -44,3 +44,7 @@ TAB_COACH_ALERTS = "Coach Alerts"
 # Analytics thresholds (overridable via env)
 ENGAGEMENT_THRESHOLD_DAYS = int(_get("ENGAGEMENT_THRESHOLD_DAYS", "21"))
 CHAT_LOOKBACK_DAYS = int(_get("CHAT_LOOKBACK_DAYS", "14"))
+
+# Recovery survey (Typeform sheet — separate from main athlete sheet)
+RECOVERY_SHEET_ID = _get("RECOVERY_SHEET_ID", "")
+RECOVERY_TAB = "New form"

@@ -69,6 +69,11 @@ class SheetsClient:
         if rows:
             ws.update("A1", rows, value_input_option="USER_ENTERED")
 
+    def read_external_records(self, sheet_id, tab_title):
+        """Read all records from a different Google Sheet by ID."""
+        sh = self.gc.open_by_key(sheet_id)
+        return sh.worksheet(tab_title).get_all_records()
+
     def update_cells_by_rowmap(self, title, col_letter, rowmap):
         """Set many single cells in one column. rowmap = {row_number: value}."""
         if config.DRY_RUN:

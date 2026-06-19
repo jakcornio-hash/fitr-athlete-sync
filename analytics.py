@@ -147,12 +147,55 @@ def engagement_check(pr_log_records, athletes, threshold_days=21):
     return out
 
 
-def build_coach_alerts_rows(engagement_results, trend_results):
+def recovery_alerts(recovery_by_name):
+    """
+    Flag athletes with concerning recovery survey scores.
+
+    recovery_by_name: {athlete_name: raw_row_dict} from sheets (Typeform column headers).
+    Returns list of [athlete, issue, submitted_at].
+    Thresholds: soreness >= 7, stress >= 7, motivation <= 3, injury mention in availability.
+    """
+    def _num(val):
+        try:
+            return float(str(val).strip())
+        except (ValueError, TypeError):
+            return None
+
+    alerts = []
+    for name in sorted(recovery_by_name):
+        row = recovery_by_name[name]
+        issues = []
+        s = _num(row.get("Soreness"))
+        if s is not None and s >= 7:
+            issues.append(f"High soreness ({s:.0f}/10)")
+        st = _num(row.get("Stress"))
+        if st is not None and st >= 7:
+            issues.append(f"High stress ({st:.0f}/10)")
+        m = _num(row.get("Motivation"))
+        if m is not None and m <= 3:
+            issues.append(f"Low motivation ({m:.0f}/10)")
+        avail = str(row.get("Availability this week", "")).strip()
+        if any(w in avail.lower() for w in ("injur", "carrying", "niggle")):
+            issues.append(f"Injury flag: {avail}")
+        ts = str(row.get("Submitted At", "")).strip()
+        for issue in issues:
+            alerts.append([name, issue, ts])
+    return alerts
+
+
+def build_coach_alerts_rows(engagement_results, trend_results, recovery_by_name=None):
     """
     Build a list-of-lists ready to write into the Coach Alerts tab.
-    Sections: Engagement Alerts, then Performance Concerns.
+    Sections: Recovery Alerts, Engagement Alerts, Performance Concerns.
     """
     rows = []
+
+    # ---- recovery section ----
+    rec_alerts = recovery_alerts(recovery_by_name or {})
+    rows.append(["== RECOVERY ALERTS ==", f"{len(rec_alerts)} flags from latest survey"])
+    rows.append(["Athlete", "Issue", "Submitted At"])
+    rows.extend(rec_alerts if rec_alerts else [["(none — no concerning recovery scores)"]])
+    rows.append([])
 
     # ---- engagement section ----
     flagged = [e for e in engagement_results if e["flag"]]

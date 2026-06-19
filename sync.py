@@ -261,14 +261,17 @@ def main():
 
     # recovery merge (optional)
     rec_latest = recovery.latest_by_email(sheets)
+    rec_by_name = {}
     rec_notes = {}
     if rec_latest:
         email_to_name = {v.lower(): k for k, v in email_by_name.items()}
         for email, row in rec_latest.items():
-            rstr = recovery.readiness_string(row)
-            nm = email_to_name.get(email)
-            if nm and rstr:
-                rec_notes[nm] = rstr
+            nm = email_to_name.get(email.lower())
+            if nm:
+                rec_by_name[nm] = row
+                rstr = recovery.readiness_string(row)
+                if rstr:
+                    rec_notes[nm] = rstr
     print(f"Recovery responses merged: {len(rec_notes)}")
 
     # ---- writes ----
@@ -297,7 +300,7 @@ def main():
         for s in signals if s["trend"] == "declining" or s["peak_drop_flag"]
     )
     print(f"Engagement flags: {flagged_count}  |  Performance concerns: {concern_count}")
-    alert_rows = analytics.build_coach_alerts_rows(engagement_results, trend_results)
+    alert_rows = analytics.build_coach_alerts_rows(engagement_results, trend_results, rec_by_name)
     sheets.overwrite_tab(config.TAB_COACH_ALERTS, alert_rows)
 
     # ---- sync log ----
