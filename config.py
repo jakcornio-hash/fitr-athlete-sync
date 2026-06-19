@@ -42,7 +42,7 @@ TAB_SYNC_LOG = "Sync Log"
 TAB_COACH_ALERTS = "Coach Alerts"
 
 # Analytics thresholds (overridable via env)
-ENGAGEMENT_THRESHOLD_DAYS = int(_get("ENGAGEMENT_THRESHOLD_DAYS", "21"))
+ENGAGEMENT_THRESHOLD_DAYS = int(_get("ENGAGEMENT_THRESHOLD_DAYS", "28"))
 CHAT_LOOKBACK_DAYS = int(_get("CHAT_LOOKBACK_DAYS", "14"))
 
 # Recovery survey (Typeform sheet — separate from main athlete sheet)
