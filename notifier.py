@@ -6,10 +6,17 @@ Covers: recovery flags, engagement/dropout, performance concerns,
 """
 import json
 import smtplib
+import ssl
 import urllib.request
 from email.message import EmailMessage
 
 import config
+
+try:
+    import certifi
+    _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    _SSL_CONTEXT = ssl.create_default_context()
 
 
 def _fmt_date(d):
@@ -122,7 +129,7 @@ def send_slack(slack_text):
     req = urllib.request.Request(
         url, data=payload, headers={"Content-Type": "application/json"}
     )
-    urllib.request.urlopen(req, timeout=10)
+    urllib.request.urlopen(req, timeout=10, context=_SSL_CONTEXT)
 
 
 def send_email(subject, plain_text):
