@@ -6,6 +6,7 @@ Deploy:       Streamlit Community Cloud → connect GitHub repo → add secrets
 """
 import datetime as dt
 import os
+import re
 
 import streamlit as st
 import altair as alt
@@ -14,6 +15,8 @@ import pandas as pd
 import analytics
 import config
 import recovery as rec_mod
+
+_CHAT_DATE_RE = re.compile(r'\[(\d{4}-\d{2}-\d{2}) — chat\]')
 
 
 st.set_page_config(
@@ -68,6 +71,12 @@ def load_all():
                 "row": i,
             })
 
+    data_records = []
+    try:
+        data_records = sheets.read_records(config.TAB_DATA)
+    except Exception:
+        pass
+
     rec_latest = {}
     try:
         if config.RECOVERY_SHEET_ID:
@@ -75,13 +84,28 @@ def load_all():
     except Exception:
         pass
 
-    return pr_records, athletes, rec_latest
+    return pr_records, athletes, rec_latest, data_records
 
 
-def run_analytics(pr_records, athletes, rec_latest):
+def run_analytics(pr_records, athletes, rec_latest, data_records=None):
     trend_results = analytics.trend_analysis(pr_records)
+
+    # Parse most recent chat date per athlete from Coaching Notes in _DATA
+    last_contact_by_name = {}
+    for rec in (data_records or []):
+        name = str(rec.get("Full Name", "")).strip()
+        notes = str(rec.get("Coaching Notes", "")).strip()
+        if not name or not notes:
+            continue
+        dates = [_parse_date(m) for m in _CHAT_DATE_RE.findall(notes)]
+        dates = [d for d in dates if d]
+        if dates:
+            last_contact_by_name[name] = max(dates)
+
     engagement_results = analytics.engagement_check(
-        pr_records, athletes, threshold_days=config.ENGAGEMENT_THRESHOLD_DAYS
+        pr_records, athletes,
+        threshold_days=config.ENGAGEMENT_THRESHOLD_DAYS,
+        last_contact_by_name=last_contact_by_name,
     )
     consistency_wins = analytics.consistency_check(pr_records, athletes)
 
@@ -466,9 +490,9 @@ def main():
     st.caption(f"Data refreshes every 15 minutes · Last loaded: {dt.datetime.now().strftime('%H:%M')}")
 
     with st.spinner("Loading..."):
-        pr_records, athletes, rec_latest = load_all()
+        pr_records, athletes, rec_latest, data_records = load_all()
         trend_results, engagement_results, consistency_wins, rec_alert_rows, rec_by_name = run_analytics(
-            pr_records, athletes, rec_latest
+            pr_records, athletes, rec_latest, data_records
         )
         # Recent results this week = things to celebrate; dedupe per athlete+benchmark
         _week_ago = TODAY - dt.timedelta(days=7)

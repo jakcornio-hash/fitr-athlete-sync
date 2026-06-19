@@ -115,10 +115,14 @@ def trend_analysis(pr_log_records):
     return results
 
 
-def engagement_check(pr_log_records, athletes, threshold_days=21):
+def engagement_check(pr_log_records, athletes, threshold_days=21, last_contact_by_name=None):
     """
     Return sorted list of {name, jst_id, last_logged, days_since, flag}
     — most-overdue athletes first, never-logged athletes at the top.
+
+    last_contact_by_name: optional {name: date} of most recent coach contact
+    (from Fitr chat). When provided, an athlete who hasn't logged but was
+    contacted recently won't be flagged.
     """
     last_logged = {}
     for rec in pr_log_records:
@@ -129,6 +133,11 @@ def engagement_check(pr_log_records, athletes, threshold_days=21):
         d = _parse_date(date_str)
         if d and (name not in last_logged or d > last_logged[name]):
             last_logged[name] = d
+
+    # Merge chat contact dates — a recent conversation suppresses the flag
+    for name, contact_date in (last_contact_by_name or {}).items():
+        if contact_date and (name not in last_logged or contact_date > last_logged[name]):
+            last_logged[name] = contact_date
 
     out = []
     for a in athletes:

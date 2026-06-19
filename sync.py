@@ -294,8 +294,12 @@ def main():
     # ---- analytics: trends + engagement + milestones + consistency ----
     pr_records = sheets.read_records(config.TAB_PR_LOG)
     trend_results = analytics.trend_analysis(pr_records)
+    # Athletes contacted in this sync run count as recently reached — don't flag them
+    last_contact_by_name = {name: TODAY for name in chat_notes}
     engagement_results = analytics.engagement_check(
-        pr_records, athletes, threshold_days=config.ENGAGEMENT_THRESHOLD_DAYS
+        pr_records, athletes,
+        threshold_days=config.ENGAGEMENT_THRESHOLD_DAYS,
+        last_contact_by_name=last_contact_by_name,
     )
     milestones = analytics.milestone_detection(bench_rows)
     consistency_wins = analytics.consistency_check(pr_records, athletes)
