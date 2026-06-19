@@ -35,5 +35,9 @@ jobs:
           FITR_CLIENT_SECRET: ${{ secrets.FITR_CLIENT_SECRET }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           RECOVERY_SHEET_ID: ${{ secrets.RECOVERY_SHEET_ID }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_TO: ${{ secrets.SMTP_TO }}
           GOOGLE_SERVICE_ACCOUNT_FILE: service_account.json
         run: python sync.py

@@ -45,6 +45,12 @@ TAB_COACH_ALERTS = "Coach Alerts"
 ENGAGEMENT_THRESHOLD_DAYS = int(_get("ENGAGEMENT_THRESHOLD_DAYS", "28"))
 CHAT_LOOKBACK_DAYS = int(_get("CHAT_LOOKBACK_DAYS", "14"))
 
+# Notifications (Slack + email)
+SLACK_WEBHOOK_URL = _get("SLACK_WEBHOOK_URL", "")
+SMTP_FROM = _get("SMTP_FROM", "")
+SMTP_PASSWORD = _get("SMTP_PASSWORD", "")
+SMTP_TO = _get("SMTP_TO", "")
+
 # Recovery survey (Typeform sheet — separate from main athlete sheet)
 RECOVERY_SHEET_ID = _get("RECOVERY_SHEET_ID", "")
 RECOVERY_TAB = "New form"

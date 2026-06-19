@@ -147,6 +147,68 @@ def engagement_check(pr_log_records, athletes, threshold_days=21):
     return out
 
 
+def milestone_detection(new_bench_rows):
+    """
+    From newly-added benchmark rows, identify results that changed vs previous.
+    new_bench_rows: [[date, name, email, bench, value, type, prev, link, note], ...]
+    Returns [[name, bench, new_value, prev_value], ...]
+    prev_value is "first entry" when no prior result existed.
+    """
+    milestones = []
+    for row in new_bench_rows:
+        if len(row) < 7:
+            continue
+        name, bench, value, prev = row[1], row[3], row[4], row[6]
+        if not prev:
+            milestones.append([name, bench, value, "first entry"])
+            continue
+        v_num = _parse_numeric(value)
+        p_num = _parse_numeric(prev)
+        if v_num is not None and p_num is not None and v_num != p_num:
+            milestones.append([name, bench, value, prev])
+    return milestones
+
+
+def consistency_check(pr_log_records, athletes, min_consecutive_weeks=4):
+    """
+    Find athletes on a logging streak of min_consecutive_weeks or more consecutive weeks.
+    Returns [(name, consecutive_weeks), ...] sorted by streak length desc.
+    """
+    from collections import defaultdict
+
+    weeks_by_athlete = defaultdict(set)
+    for rec in pr_log_records:
+        name = str(rec.get("Athlete Name", "")).strip()
+        date_str = str(rec.get("Date", "")).strip()
+        d = _parse_date(date_str)
+        if name and d:
+            weeks_by_athlete[name].add(d.isocalendar()[:2])  # (year, week_num)
+
+    valid_names = {a["name"] for a in athletes}
+    wins = []
+    for name, week_set in weeks_by_athlete.items():
+        if name not in valid_names:
+            continue
+        weeks = sorted(week_set)
+        if len(weeks) < min_consecutive_weeks:
+            continue
+        consecutive = 1
+        for i in range(len(weeks) - 1, 0, -1):
+            y1, w1 = weeks[i]
+            y2, w2 = weeks[i - 1]
+            d1 = dt.date.fromisocalendar(y1, w1, 1)
+            d2 = dt.date.fromisocalendar(y2, w2, 1)
+            if (d1 - d2).days == 7:
+                consecutive += 1
+            else:
+                break
+        if consecutive >= min_consecutive_weeks:
+            wins.append((name, consecutive))
+
+    wins.sort(key=lambda x: -x[1])
+    return wins
+
+
 def recovery_alerts(recovery_by_name):
     """
     Flag athletes with concerning recovery survey scores.
@@ -183,10 +245,12 @@ def recovery_alerts(recovery_by_name):
     return alerts
 
 
-def build_coach_alerts_rows(engagement_results, trend_results, recovery_by_name=None):
+def build_coach_alerts_rows(engagement_results, trend_results,
+                            recovery_by_name=None, milestones=None,
+                            consistency_wins=None):
     """
     Build a list-of-lists ready to write into the Coach Alerts tab.
-    Sections: Recovery Alerts, Engagement Alerts, Performance Concerns.
+    Sections: Recovery Alerts, Milestones, Consistency, Engagement, Performance.
     """
     rows = []
 
@@ -232,5 +296,25 @@ def build_coach_alerts_rows(engagement_results, trend_results, recovery_by_name=
     rows.append(["== PERFORMANCE CONCERNS ==", f"{len(concerns)} declining or below-peak benchmarks"])
     rows.append(["Athlete", "Benchmark", "Trend", "Last Value", "Peak", "% From Peak", "Last Date"])
     rows.extend(concerns if concerns else [["(none — no declining benchmarks detected)"]])
+    rows.append([])
+
+    # ---- milestones section ----
+    ms = milestones or []
+    rows.append(["== MILESTONES / NEW PBs ==", f"{len(ms)} new results this week"])
+    rows.append(["Athlete", "Benchmark", "New Value", "Previous"])
+    for m in ms:
+        rows.append(m)
+    if not ms:
+        rows.append(["(none this week)"])
+    rows.append([])
+
+    # ---- consistency section ----
+    cw = consistency_wins or []
+    rows.append(["== CONSISTENCY WINS ==", f"{len(cw)} athletes on a streak"])
+    rows.append(["Athlete", "Consecutive Weeks"])
+    for name, weeks in cw:
+        rows.append([name, weeks])
+    if not cw:
+        rows.append(["(none — no 4+ week streaks detected)"])
 
     return rows

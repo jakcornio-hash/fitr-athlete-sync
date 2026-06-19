@@ -24,6 +24,7 @@ import config
 from fitr_client import FitrClient, FitrError, format_thread
 from sheets_client import SheetsClient
 import analytics
+import notifier
 import summariser
 import recovery
 
@@ -288,20 +289,35 @@ def main():
     if scraped_rows:
         sheets.update_cells_by_rowmap(config.TAB_BENCHMARKS, "E", scraped_rows)
 
-    # ---- analytics: trends + engagement → Coach Alerts tab ----
+    # ---- analytics: trends + engagement + milestones + consistency ----
     pr_records = sheets.read_records(config.TAB_PR_LOG)
     trend_results = analytics.trend_analysis(pr_records)
     engagement_results = analytics.engagement_check(
         pr_records, athletes, threshold_days=config.ENGAGEMENT_THRESHOLD_DAYS
     )
+    milestones = analytics.milestone_detection(bench_rows)
+    consistency_wins = analytics.consistency_check(pr_records, athletes)
+    rec_alert_rows = analytics.recovery_alerts(rec_by_name)
+
     flagged_count = sum(1 for e in engagement_results if e["flag"])
     concern_count = sum(
         1 for signals in trend_results.values()
         for s in signals if s["trend"] == "declining" or s["peak_drop_flag"]
     )
     print(f"Engagement flags: {flagged_count}  |  Performance concerns: {concern_count}")
-    alert_rows = analytics.build_coach_alerts_rows(engagement_results, trend_results, rec_by_name)
+    print(f"Milestones: {len(milestones)}  |  Consistency streaks: {len(consistency_wins)}")
+
+    alert_rows = analytics.build_coach_alerts_rows(
+        engagement_results, trend_results, rec_by_name, milestones, consistency_wins
+    )
     sheets.overwrite_tab(config.TAB_COACH_ALERTS, alert_rows)
+
+    # ---- digest notification ----
+    print("Sending digest...")
+    notifier.send_digest(
+        TODAY, engagement_results, trend_results,
+        rec_alert_rows, milestones, consistency_wins,
+    )
 
     # ---- sync log ----
     unknown = sorted({n for n in chat_notes} - valid_names)
