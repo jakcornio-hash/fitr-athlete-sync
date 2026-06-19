@@ -10,22 +10,22 @@ import os
 import tempfile
 
 import streamlit as st
-
-# Inject Streamlit secrets into os.environ BEFORE importing config,
-# which reads env vars at module load time.
-try:
-    for _k in ("SHEET_ID", "RECOVERY_SHEET_ID"):
-        if _k in st.secrets and _k not in os.environ:
-            os.environ[_k] = str(st.secrets[_k])
-except Exception:
-    pass
-
 import altair as alt
 import pandas as pd
 
 import analytics
 import config
 import recovery as rec_mod
+
+# Patch config values from Streamlit secrets when running on Cloud.
+# (config.SHEET_ID defaults to "" when the env var isn't set locally.)
+try:
+    if not config.SHEET_ID:
+        config.SHEET_ID = str(st.secrets["SHEET_ID"])
+    if not config.RECOVERY_SHEET_ID:
+        config.RECOVERY_SHEET_ID = str(st.secrets.get("RECOVERY_SHEET_ID", ""))
+except Exception:
+    pass
 
 st.set_page_config(
     page_title="JST Compete Coaching",

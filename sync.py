@@ -237,6 +237,8 @@ def _idx_to_col(idx):
 
 # --------------------------------------------------------------------- driver
 def main():
+    if not config.SHEET_ID:
+        raise RuntimeError("Missing required env var: SHEET_ID")
     print(f"== Fitr sync {TODAY} (lookback {config.LOOKBACK_DAYS}d, dry_run={config.DRY_RUN}) ==")
     fitr = FitrClient()
     fitr.authenticate()

@@ -13,7 +13,7 @@ def _get(name, default=None, required=False):
 
 
 # Google Sheet
-SHEET_ID = _get("SHEET_ID", required=True)
+SHEET_ID = _get("SHEET_ID", "")
 GOOGLE_SERVICE_ACCOUNT_FILE = _get("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
 
 # Fitr
