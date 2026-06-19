@@ -347,6 +347,118 @@ def page_recovery(rec_by_name):
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
 
+def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins):
+    """Prioritised list of every athlete who needs contact this week."""
+    rows = []
+
+    # 1. Recovery flags — most urgent
+    for alert in rec_alert_rows:
+        rows.append({
+            "Priority": "🔴 Contact Today",
+            "Athlete": alert[0],
+            "Reason": alert[1],
+            "Action": "Recovery check-in",
+            "_order": 0,
+        })
+
+    # 2. Milestones — quick win to celebrate
+    for m in milestones:
+        name, bench, val = m[0], m[1], m[2]
+        prev = m[3] if len(m) > 3 else ""
+        reason = (f"New result — {bench}: {val} (was {prev})" if prev and prev != "first entry"
+                  else f"Logged this week — {bench}: {val}")
+        rows.append({
+            "Priority": "🏆 Celebrate",
+            "Athlete": name,
+            "Reason": reason,
+            "Action": "Congratulate",
+            "_order": 1,
+        })
+
+    # 3. Consistency streaks — acknowledge
+    for name, weeks in consistency_wins:
+        rows.append({
+            "Priority": "✅ Positive",
+            "Athlete": name,
+            "Reason": f"{weeks} consecutive weeks logging",
+            "Action": "Acknowledge streak",
+            "_order": 2,
+        })
+
+    # 4. Long-term dropout (45+ days) — urgent re-engage
+    for e in engagement_results:
+        if not e["flag"]:
+            continue
+        days = e["days_since"]
+        never = e["last_logged"] == "never"
+        if never or (days and days >= 45):
+            reason = "Never logged" if never else f"{days} days inactive"
+            rows.append({
+                "Priority": "⚠️ Re-engage",
+                "Athlete": e["name"],
+                "Reason": reason,
+                "Action": "Re-engagement message",
+                "_order": 3,
+            })
+
+    # 5. Performance concerns
+    for athlete, signals in sorted(trend_results.items()):
+        for s in signals:
+            if s["trend"] == "declining" or s["peak_drop_flag"]:
+                parts = []
+                if s["trend"] == "declining":
+                    parts.append(f"declining ({s['trend_pct']:+.1f}%/entry)")
+                if s["peak_drop_flag"]:
+                    parts.append(f"{s['peak_drop_pct']:.0f}% below peak")
+                rows.append({
+                    "Priority": "📉 Performance",
+                    "Athlete": athlete,
+                    "Reason": f"{s['benchmark']}: {', '.join(parts)}",
+                    "Action": "Performance check-in",
+                    "_order": 4,
+                })
+
+    # 6. Standard inactive (28-44 days)
+    for e in engagement_results:
+        if not e["flag"]:
+            continue
+        days = e["days_since"]
+        if days and 28 <= days < 45:
+            rows.append({
+                "Priority": "⚠️ Check In",
+                "Athlete": e["name"],
+                "Reason": f"{days} days inactive (last: {e['last_logged']})",
+                "Action": "Check-in message",
+                "_order": 5,
+            })
+
+    rows.sort(key=lambda x: x["_order"])
+    for r in rows:
+        del r["_order"]
+
+    if not rows:
+        st.success("Nothing to action this week — all athletes on track.")
+        return
+
+    st.caption(f"{len(rows)} athletes to contact this week")
+    df = pd.DataFrame(rows)
+
+    def _row_colour(row):
+        colours = {
+            "🔴 Contact Today": "background-color: #ffe5e5",
+            "🏆 Celebrate":     "background-color: #fff8e1",
+            "✅ Positive":      "background-color: #e8f5e9",
+            "⚠️ Re-engage":     "background-color: #fff3e0",
+            "⚠️ Check In":      "background-color: #fff3e0",
+            "📉 Performance":   "background-color: #fce4ec",
+        }
+        colour = colours.get(row["Priority"], "")
+        return [colour] * len(row)
+
+    styled = df.style.apply(_row_colour, axis=1)
+    st.dataframe(styled, use_container_width=True, hide_index=True, height=600)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -358,16 +470,33 @@ def main():
         trend_results, engagement_results, consistency_wins, rec_alert_rows, rec_by_name = run_analytics(
             pr_records, athletes, rec_latest
         )
+        # Recent results this week = things to celebrate; dedupe per athlete+benchmark
+        _week_ago = TODAY - dt.timedelta(days=7)
+        _seen_milestones = set()
+        milestones = []
+        for _r in pr_records:
+            _d = _parse_date(str(_r.get("Date", "")))
+            if not _d or _d < _week_ago:
+                continue
+            _nm = str(_r.get("Athlete Name", "")).strip()
+            _bn = str(_r.get("Benchmark Name", "")).strip()
+            _val = str(_r.get("Value", "")).strip()
+            if not _nm or not _bn or (_nm, _bn) in _seen_milestones:
+                continue
+            _seen_milestones.add((_nm, _bn))
+            milestones.append((_nm, _bn, _val))
 
-    tabs = st.tabs(["🚨 Alerts", "👥 Athletes", "📈 Trends", "💤 Recovery"])
+    tabs = st.tabs(["📋 Outreach List", "🚨 Alerts", "👥 Athletes", "📈 Trends", "💤 Recovery"])
 
     with tabs[0]:
-        page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_wins)
+        page_outreach(engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins)
     with tabs[1]:
-        page_athletes(pr_records, athletes, trend_results, engagement_results, rec_by_name)
+        page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_wins)
     with tabs[2]:
-        page_trends(pr_records, athletes)
+        page_athletes(pr_records, athletes, trend_results, engagement_results, rec_by_name)
     with tabs[3]:
+        page_trends(pr_records, athletes)
+    with tabs[4]:
         page_recovery(rec_by_name)
 
 
