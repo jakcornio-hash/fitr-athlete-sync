@@ -9,9 +9,19 @@ import json
 import os
 import tempfile
 
+import streamlit as st
+
+# Inject Streamlit secrets into os.environ BEFORE importing config,
+# which reads env vars at module load time.
+try:
+    for _k in ("SHEET_ID", "RECOVERY_SHEET_ID"):
+        if _k in st.secrets and _k not in os.environ:
+            os.environ[_k] = str(st.secrets[_k])
+except Exception:
+    pass
+
 import altair as alt
 import pandas as pd
-import streamlit as st
 
 import analytics
 import config
