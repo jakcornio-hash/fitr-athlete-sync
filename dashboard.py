@@ -27,20 +27,21 @@ TODAY = dt.date.today()
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
+# Sheet IDs are config, not secrets — hard-code them as Cloud fallbacks
+_SHEET_ID = "1Fx4r3IrYeytoysX_hkarZ5I5SoQdq3ZSPZkS0Y2yDOc"
+_RECOVERY_SHEET_ID = "1hSBGVWppOfzI1GUO-ZK74tgLbSye8apDpLn3b2QDoys"
+
+
 @st.cache_resource
 def get_sheets():
     """Return SheetsClient, using Streamlit secrets on Cloud or .env locally."""
     from sheets_client import SheetsClient
-    try:
+    if "gcp_service_account" in st.secrets:
         sa = dict(st.secrets["gcp_service_account"])
-        # Patch sheet IDs here — st.secrets is guaranteed available inside a cached function
-        if not config.SHEET_ID:
-            config.SHEET_ID = str(st.secrets["SHEET_ID"])
-        if not config.RECOVERY_SHEET_ID:
-            config.RECOVERY_SHEET_ID = str(st.secrets.get("RECOVERY_SHEET_ID", ""))
+        config.SHEET_ID = config.SHEET_ID or _SHEET_ID
+        config.RECOVERY_SHEET_ID = config.RECOVERY_SHEET_ID or _RECOVERY_SHEET_ID
         return SheetsClient(service_account_info=sa)
-    except KeyError:
-        return SheetsClient()  # local dev — uses service_account.json
+    return SheetsClient()  # local dev — uses .env + service_account.json
 
 
 # ── Data ──────────────────────────────────────────────────────────────────────
