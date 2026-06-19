@@ -42,9 +42,6 @@ def get_sheets():
     from sheets_client import SheetsClient
     try:
         sa = dict(st.secrets["gcp_service_account"])
-        # TOML stores \n as literal two-char sequences; Google's RSA needs real newlines
-        if "private_key" in sa:
-            sa["private_key"] = sa["private_key"].replace("\\n", "\n")
         return SheetsClient(service_account_info=sa)
     except KeyError:
         return SheetsClient()  # local dev — uses service_account.json
