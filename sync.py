@@ -21,7 +21,7 @@ import datetime as dt
 import sys
 
 import config
-from fitr_client import FitrClient, FitrError, format_thread
+from fitr_client import FitrClient, FitrError, format_thread, profiles_from_rooms
 from sheets_client import SheetsClient
 import analytics
 import notifier
@@ -163,11 +163,10 @@ def collect_challenges(fitr, existing_keys):
     return new_rows
 
 
-def collect_chat_summaries(fitr, valid_names):
+def collect_chat_summaries(rooms, valid_names, fitr):
     """Return {athlete_name: summary_line} for conversations active within CHAT_LOOKBACK_DAYS.
-    Fetches full thread history (up to 40 messages) per active conversation."""
+    Accepts pre-fetched rooms to avoid a second API call."""
     chat_cutoff = TODAY - dt.timedelta(days=config.CHAT_LOOKBACK_DAYS)
-    rooms = fitr.chat_rooms()
     candidates = []
     for room in rooms:
         if room.get("chat_room_type") != "individual":
@@ -197,6 +196,27 @@ def collect_chat_summaries(fitr, valid_names):
         if summary:
             out[name] = f"[{TODAY.isoformat()} — chat] {summary}"
     return out
+
+
+def update_athlete_profiles(sheets, athletes, fitr_profiles_by_id):
+    """Write Fitr-sourced profile fields (Email, Age) into _DATA.
+    Only updates cells that Fitr provided a non-empty value for."""
+    updates = {}
+    for a in athletes:
+        fitr_id = a.get("fitr_id")
+        if not fitr_id:
+            continue
+        profile = fitr_profiles_by_id.get(int(fitr_id) if str(fitr_id).isdigit() else fitr_id, {})
+        row_updates = {}
+        if profile.get("email"):
+            row_updates["Email"] = profile["email"]
+        if profile.get("age") is not None:
+            row_updates["Age"] = profile["age"]
+        if row_updates:
+            updates[a["name"]] = row_updates
+    if updates:
+        sheets.batch_update_by_name(config.TAB_DATA, "Full Name", updates)
+    return len(updates)
 
 
 # --------------------------------------------------------------- notes writer
@@ -259,8 +279,13 @@ def main():
     print(f"New challenge scores: {len(chal_rows)}")
 
     valid_names = {a["name"] for a in athletes}
-    chat_notes = collect_chat_summaries(fitr, valid_names)
+    rooms = fitr.chat_rooms()
+    chat_notes = collect_chat_summaries(rooms, valid_names, fitr)
     print(f"Conversations summarised: {len(chat_notes)}")
+
+    fitr_profiles = profiles_from_rooms(rooms)
+    profiles_updated = update_athlete_profiles(sheets, athletes, fitr_profiles)
+    print(f"Athlete profiles updated: {profiles_updated}")
 
     # recovery merge (optional)
     rec_latest = recovery.latest_by_email(sheets)

@@ -230,6 +230,24 @@ class FitrClient:
 
 # ------------------------------------------------------------------ helpers
 
+def profiles_from_rooms(rooms):
+    """Extract {fitr_id: {email, age}} from already-fetched chat rooms list.
+    This is the only way to get athlete profile data from the Fitr API."""
+    out = {}
+    for room in rooms:
+        opp = room.get("opponent") or {}
+        fid = opp.get("id")
+        if not fid:
+            continue
+        out[int(fid)] = {
+            "email": (opp.get("email") or "").strip(),
+            "age": opp.get("age"),
+        }
+    return out
+
+
+# ------------------------------------------------------------------ helpers
+
 def _parse_unix_date(ts):
     """Convert a Unix timestamp integer to datetime.date, or None."""
     if not ts:

@@ -74,6 +74,40 @@ class SheetsClient:
         if rows:
             ws.update("A1", rows, value_input_option="USER_ENTERED")
 
+    def batch_update_by_name(self, tab_title, name_col, updates_by_name):
+        """Update cells across many rows identified by name_col value.
+
+        updates_by_name: {row_name: {col_name: value}}
+        Silently skips columns that don't exist in the header.
+        """
+        if config.DRY_RUN:
+            print(f"[DRY_RUN] would update {len(updates_by_name)} rows in '{tab_title}'")
+            return
+        ws = self.worksheet(tab_title)
+        all_values = ws.get_all_values()
+        if not all_values:
+            return
+        header = all_values[0]
+        try:
+            name_idx = header.index(name_col)
+        except ValueError:
+            return
+        cells = []
+        for row_idx, row in enumerate(all_values[1:], start=2):
+            cell_name = (row[name_idx] if name_idx < len(row) else "").strip()
+            row_updates = updates_by_name.get(cell_name, {})
+            for col_name, value in row_updates.items():
+                try:
+                    col_idx = header.index(col_name)
+                except ValueError:
+                    continue
+                cells.append(gspread.Cell(
+                    row=row_idx, col=col_idx + 1,
+                    value=str(value) if value is not None else "",
+                ))
+        if cells:
+            ws.update_cells(cells, value_input_option="USER_ENTERED")
+
     def read_external_records(self, sheet_id, tab_title):
         """Read all records from a different Google Sheet by ID."""
         sh = self.gc.open_by_key(sheet_id)

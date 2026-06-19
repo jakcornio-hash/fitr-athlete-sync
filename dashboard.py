@@ -215,10 +215,179 @@ def page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_w
         st.success("Nothing to flag this week — all athletes on track.")
 
 
-def page_athletes(pr_records, athletes, trend_results, engagement_results, rec_by_name):
-    search = st.text_input("Search athlete", placeholder="Start typing a name...")
+def _parse_notes_timeline(notes_str):
+    """Parse a Coaching Notes cell into [{date, kind, text}, ...] newest-first."""
+    entries = []
+    if not notes_str:
+        return entries
+    current_date = current_kind = None
+    current_lines = []
 
-    # Build summary per athlete
+    def _flush():
+        if current_date and current_lines:
+            entries.append({
+                "date": current_date,
+                "kind": current_kind or "note",
+                "text": " ".join(current_lines).strip(),
+            })
+
+    header_re = re.compile(r'^\[(\d{4}-\d{2}-\d{2}) — ([^\]]+)\]\s*(.*)')
+    for line in notes_str.split("\n"):
+        m = header_re.match(line.strip())
+        if m:
+            _flush()
+            current_date = m.group(1)
+            current_kind = m.group(2).strip()
+            current_lines = [m.group(3).strip()] if m.group(3).strip() else []
+        else:
+            if current_date and line.strip():
+                current_lines.append(line.strip())
+    _flush()
+    entries.sort(key=lambda x: x["date"], reverse=True)
+    return entries
+
+
+def _athlete_profile_panel(name, data_by_name, pr_records, trend_results,
+                           engagement_results, rec_by_name):
+    """Render the full profile panel for one athlete."""
+    profile = data_by_name.get(name, {})
+
+    # ── Header row ────────────────────────────────────────────────────────────
+    h1, h2, h3, h4 = st.columns([3, 1, 1, 2])
+    h1.markdown(f"### {name}")
+    age = str(profile.get("Age", "")).strip()
+    h2.metric("Age", age if age else "—")
+    tier = str(profile.get("Tier", "")).strip()
+    h3.metric("Tier", tier if tier else "—")
+    email = str(profile.get("Email", "")).strip()
+    h4.markdown(f"**Email**  \n{email or '—'}")
+
+    st.divider()
+
+    # ── Two-column stats ──────────────────────────────────────────────────────
+    left, right = st.columns(2)
+
+    with left:
+        st.markdown("**Physical**")
+        height = str(profile.get("Height (cm)", "")).strip()
+        weight = str(profile.get("Weight (kg)", "")).strip()
+        dob    = str(profile.get("DOB", "")).strip()
+        t_age  = str(profile.get("Training Age (yrs)", "")).strip()
+        sleep  = str(profile.get("Sleep Avg (hrs)", "")).strip()
+        equip  = str(profile.get("Equipment Access", "")).strip()
+        for label, val in [
+            ("Height", f"{height} cm" if height else "—"),
+            ("Weight", f"{weight} kg" if weight else "—"),
+            ("Training Age", f"{t_age} yrs" if t_age else "—"),
+            ("Sleep Avg", f"{sleep} hrs" if sleep else "—"),
+            ("Equipment", equip or "—"),
+        ]:
+            st.markdown(f"- **{label}:** {val}")
+
+        st.markdown("")
+        st.markdown("**Competition**")
+        comp = str(profile.get("Next Competition", "")).strip()
+        comp_date = str(profile.get("Competition Date", "")).strip()
+        plan = str(profile.get("Subscription Plan", "")).strip()
+        for label, val in [
+            ("Next Competition", comp or "—"),
+            ("Competition Date", comp_date or "—"),
+            ("Plan", plan or "—"),
+        ]:
+            st.markdown(f"- **{label}:** {val}")
+
+    with right:
+        st.markdown("**Athlete Profile**")
+        goal = str(profile.get("North Star Goal", "")).strip()
+        comms = str(profile.get("Communication Style", "")).strip()
+        prog_tier = str(profile.get("Programming Tier", "")).strip()
+        occ = str(profile.get("Occupation", "")).strip()
+        occ_type = str(profile.get("Occupation Type", "")).strip()
+        for label, val in [
+            ("Goal", goal or "—"),
+            ("Comms Style", comms or "—"),
+            ("Programming Tier", prog_tier or "—"),
+            ("Occupation", f"{occ} ({occ_type})" if occ and occ_type else occ or "—"),
+        ]:
+            st.markdown(f"- **{label}:** {val}")
+
+        st.markdown("")
+        inj_status = str(profile.get("Injury Status", "")).strip()
+        inj_notes  = str(profile.get("Injury Notes", "")).strip()
+        if inj_status or inj_notes:
+            colour = "🔴" if inj_status.lower() not in ("", "none", "ok", "healthy", "clear") else "🟢"
+            st.markdown(f"**{colour} Injury Status:** {inj_status or '—'}")
+            if inj_notes:
+                st.markdown(f"> {inj_notes}")
+        else:
+            st.markdown("**🟢 Injury Status:** —")
+
+    st.divider()
+
+    # ── Benchmark snapshots ───────────────────────────────────────────────────
+    bench_cols = [
+        "Back Squat 1RM (kg)", "Front Squat 1RM (kg)", "Clean & Jerk 1RM (kg)",
+        "Snatch 1RM (kg)", "Deadlift 1RM (kg)", "Strict Press 1RM (kg)",
+        "Max Pull-ups", "2k Row (mm:ss)", "1.2km Run (mm:ss)",
+    ]
+    snap_vals = {c: str(profile.get(c, "")).strip() for c in bench_cols if profile.get(c)}
+    if snap_vals:
+        st.markdown("**🏋️ Benchmark Snapshots**")
+        cols = st.columns(min(len(snap_vals), 4))
+        for i, (col, val) in enumerate(snap_vals.items()):
+            short = col.replace(" (kg)", "").replace(" (mm:ss)", "").replace("1RM ", "")
+            cols[i % 4].metric(short, val)
+        st.divider()
+
+    # ── Latest recovery ───────────────────────────────────────────────────────
+    rec_row = rec_by_name.get(name)
+    if rec_row:
+        st.markdown("**💤 Latest Recovery Survey**")
+        rc1, rc2, rc3 = st.columns(3)
+        def _num(v):
+            try: return float(str(v).strip())
+            except: return None
+        s = _num(rec_row.get("Soreness"))
+        st_ = _num(rec_row.get("Stress"))
+        m = _num(rec_row.get("Motivation"))
+        rc1.metric("Soreness", f"{s:.0f}/10" if s is not None else "—",
+                   delta_color="inverse" if s and s >= 7 else "normal")
+        rc2.metric("Stress", f"{st_:.0f}/10" if st_ is not None else "—",
+                   delta_color="inverse" if st_ and st_ >= 7 else "normal")
+        rc3.metric("Motivation", f"{m:.0f}/10" if m is not None else "—")
+        avail = str(rec_row.get("Availability this week", "")).strip()
+        if avail:
+            st.markdown(f"**Availability:** {avail}")
+        submitted = str(rec_row.get("Submitted At", "")).strip()
+        if submitted:
+            st.caption(f"Survey submitted: {submitted}")
+        st.divider()
+
+    # ── Coaching notes timeline ───────────────────────────────────────────────
+    notes_raw = str(profile.get("Coaching Notes", "")).strip()
+    timeline = _parse_notes_timeline(notes_raw)
+    if timeline:
+        st.markdown("**📝 Coaching Notes**")
+        kind_icons = {"chat": "💬", "result": "🏆", "recovery": "💤"}
+        for entry in timeline:
+            icon = kind_icons.get(entry["kind"], "📌")
+            with st.expander(f"{icon} {entry['date']} — {entry['kind']}", expanded=False):
+                st.write(entry["text"])
+    else:
+        st.markdown("**📝 Coaching Notes**")
+        st.caption("No notes yet.")
+
+
+def page_athletes(pr_records, athletes, trend_results, engagement_results,
+                  rec_by_name, data_records=None):
+    # Build per-name lookup from _DATA
+    data_by_name = {}
+    for rec in (data_records or []):
+        nm = str(rec.get("Full Name", "")).strip()
+        if nm:
+            data_by_name[nm] = rec
+
+    # Build summary table
     last_logged = {}
     for r in pr_records:
         nm = str(r.get("Athlete Name", "")).strip()
@@ -228,16 +397,11 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results, rec_b
 
     eng_map = {e["name"]: e for e in engagement_results}
 
-    rows = []
+    summary_rows = []
     for a in athletes:
         nm = a["name"]
-        if search and search.lower() not in nm.lower():
-            continue
-        e = eng_map.get(nm, {})
         last = last_logged.get(nm)
         days = (TODAY - last).days if last else None
-
-        # trend summary for this athlete
         signals = trend_results.get(nm, [])
         declining = sum(1 for s in signals if s["trend"] == "declining")
         improving = sum(1 for s in signals if s["trend"] == "improving")
@@ -246,27 +410,41 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results, rec_b
             else f"📈 {improving} improving" if improving
             else "—"
         )
-
-        # recovery
+        e = eng_map.get(nm, {})
+        nudge = e.get("nudge_flag", False)
         rec_row = rec_by_name.get(nm)
         rec_str = rec_mod.readiness_string(rec_row) if rec_row else "—"
-        if rec_str and len(rec_str) > 60:
-            rec_str = rec_str[:60] + "…"
-
-        rows.append({
+        if rec_str and len(rec_str) > 50:
+            rec_str = rec_str[:50] + "…"
+        summary_rows.append({
             "Name": nm,
-            "JST ID": a["jst_id"],
+            "Age": str(data_by_name.get(nm, {}).get("Age", "")).strip() or "—",
+            "Tier": str(data_by_name.get(nm, {}).get("Tier", "")).strip() or "—",
             "Last Logged": last.isoformat() if last else "Never",
             "Days Since": days if days is not None else "—",
             "Trend": trend_label,
             "Recovery": rec_str,
+            "Logging": "📝 Nudge" if nudge else ("✅ Active" if (days is not None and days < 28) else "⚠️ Inactive"),
         })
 
-    if rows:
-        df = pd.DataFrame(rows)
-        st.dataframe(df, use_container_width=True, hide_index=True, height=600)
+    df = pd.DataFrame(summary_rows)
+
+    st.caption("Click a row to open the full athlete profile.")
+    event = st.dataframe(
+        df, use_container_width=True, hide_index=True,
+        on_select="rerun", selection_mode="single-row",
+    )
+
+    selected_rows = event.selection.rows if hasattr(event, "selection") else []
+    if selected_rows:
+        selected_name = df.iloc[selected_rows[0]]["Name"]
+        st.divider()
+        _athlete_profile_panel(
+            selected_name, data_by_name, pr_records, trend_results,
+            engagement_results, rec_by_name,
+        )
     else:
-        st.info("No athletes match your search.")
+        st.caption("No athlete selected.")
 
 
 def page_trends(pr_records, athletes):
@@ -536,7 +714,7 @@ def main():
     with tabs[1]:
         page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_wins)
     with tabs[2]:
-        page_athletes(pr_records, athletes, trend_results, engagement_results, rec_by_name)
+        page_athletes(pr_records, athletes, trend_results, engagement_results, rec_by_name, data_records)
     with tabs[3]:
         page_trends(pr_records, athletes)
     with tabs[4]:
