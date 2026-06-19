@@ -46,7 +46,7 @@ def get_sheets():
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
         json.dump(sa, tmp)
         tmp.close()
-        os.environ["GOOGLE_SERVICE_ACCOUNT_FILE"] = tmp.name
+        config.GOOGLE_SERVICE_ACCOUNT_FILE = tmp.name  # patch before SheetsClient reads it
     except Exception:
         pass
     from sheets_client import SheetsClient
