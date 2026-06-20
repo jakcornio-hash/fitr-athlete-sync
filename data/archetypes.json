@@ -1,0 +1,499 @@
+{
+  "source": "Brett Bartholomew, Conscious Coaching (2017)",
+  "count": 17,
+  "archetypes": {
+    "technician": {
+      "name": "Technician",
+      "athlete": {
+        "tagline": "You treat movement like a puzzle — precise, analytical, always hunting the why behind a drill.",
+        "works": [
+          "You get the reasoning behind a session, not just the reps",
+          "Minimal effective dose so your mind doesn't overload",
+          "A trigger to stop analysing and just execute when it counts"
+        ],
+        "trips": [
+          "Over-thinking a lift until it won't transfer to competition",
+          "Drowning in cues and complexity"
+        ],
+        "tell_coach": "Ask for the rationale, then ask your coach for one simple cue to switch the brain off on max efforts and comp days."
+      },
+      "coach": {
+        "tagline": "Cerebral and perfectionistic — treats every movement like a puzzle and relentlessly asks why.",
+        "coach_toward": [
+          "Give the science and rationale behind each session",
+          "Use minimal effective dose to protect their mind",
+          "Coach them to stop analysing and execute on max efforts and comp days"
+        ],
+        "avoid": [
+          "Over-stimulating with constant repetition and complexity",
+          "Expecting clean performance under pressure before training the mental switch"
+        ],
+        "programming_read": "Feed the why in training, then hand them one simple cue to switch the brain off when it counts."
+      }
+    },
+    "skeptic": {
+      "name": "Skeptic",
+      "athlete": {
+        "tagline": "You don't take a programme on faith — the logic has to stack up before you commit.",
+        "works": [
+          "A coach who explains the science and drops the ego",
+          "Work you enjoy blended with the work you need",
+          "Time to digest before you fully buy in"
+        ],
+        "trips": [
+          "'Because I said so' with no reasoning",
+          "Being rushed into commitment"
+        ],
+        "tell_coach": "Get the why once, then trust it — so you're not re-litigating every session in your head."
+      },
+      "coach": {
+        "tagline": "Doubts accepted methods and won't buy in until the reasoning holds up.",
+        "coach_toward": [
+          "Explain the science thoroughly and drop your ego",
+          "Blend exercises they enjoy with the work they need",
+          "Give them time to digest before expecting commitment"
+        ],
+        "avoid": [
+          "Getting defensive or pulling rank when questioned",
+          "Rushing their buy-in"
+        ],
+        "programming_read": "Win the why once, clearly, then they commit — re-explaining every session keeps the door open for doubt."
+      }
+    },
+    "soldier": {
+      "name": "Soldier",
+      "athlete": {
+        "tagline": "Your work ethic is your superpower — and your single biggest injury risk.",
+        "works": [
+          "Rest and recovery framed as weapons, not weakness",
+          "Ownership of your process",
+          "A coach who pulls the volume back before you break"
+        ],
+        "trips": [
+          "All-or-nothing training that ignores the warning signs",
+          "Treating a deload as failure"
+        ],
+        "tell_coach": "Let your coach rein you in sometimes — a managed week now buys the big sessions later."
+      },
+      "coach": {
+        "tagline": "Indomitable will and huge work ethic — views rest as weakness and won't pull back on their own.",
+        "coach_toward": [
+          "Reframe rest and recovery as weapons for long-term performance",
+          "Give them ownership of the process",
+          "Moderate the volume — protect them from themselves"
+        ],
+        "avoid": [
+          "All-or-nothing programming that ignores warning signs",
+          "Letting their willingness to suffer go unchecked"
+        ],
+        "programming_read": "Their biggest injury risk is their own engine. Use their attention to detail to sell recovery as part of the work."
+      }
+    },
+    "specialist": {
+      "name": "Specialist",
+      "athlete": {
+        "tagline": "Your identity is the sport itself — general prep can feel like a distraction from competing.",
+        "works": [
+          "Every drill tied directly to competition performance",
+          "Sport-specific framing, not generic jargon",
+          "A coach who connects the gym to the floor"
+        ],
+        "trips": [
+          "Training that feels disconnected from your goals",
+          "Putting all your identity in one outcome"
+        ],
+        "tell_coach": "Ask how each accessory feeds your competition — and build an identity outside the sport too."
+      },
+      "coach": {
+        "tagline": "Identity is tied to the sport itself; sees general prep as a distraction from competing.",
+        "coach_toward": [
+          "Tie every drill directly to competition performance",
+          "Use sport-specific framing, never generic jargon",
+          "Help them build identity outside the sport"
+        ],
+        "avoid": [
+          "Generic performance language with no sport context",
+          "Programming that feels disconnected from their goals"
+        ],
+        "programming_read": "Sell the gym in the language of the floor. If they can't see the transfer, they won't care."
+      }
+    },
+    "politician": {
+      "name": "Politician",
+      "athlete": {
+        "tagline": "You're self-directed — but you'll quietly route around anything you don't agree with.",
+        "works": [
+          "A genuine element of choice in the programme",
+          "Issues handled one-to-one, never publicly",
+          "Feeling in control of your direction"
+        ],
+        "trips": [
+          "A rigid, do-as-you're-told approach",
+          "Cutting corners when no one's watching"
+        ],
+        "tell_coach": "Tell your coach where you want options — you'll commit far harder to a plan you helped shape."
+      },
+      "coach": {
+        "tagline": "Charismatic and self-directed; quietly cuts corners or routes around anything they don't agree with.",
+        "coach_toward": [
+          "Give a genuine element of choice within the programme",
+          "Address issues one-to-one, never publicly",
+          "Make them feel in control of their direction"
+        ],
+        "avoid": [
+          "An authoritarian, do-as-I-say approach",
+          "Public confrontation — they comply then undermine"
+        ],
+        "programming_read": "Offer real options inside the plan. Autonomy buys compliance; orders buy quiet rebellion."
+      }
+    },
+    "novice": {
+      "name": "Novice",
+      "athlete": {
+        "tagline": "You're early on the road — keen, a little overwhelmed, and a blank canvas with huge upside.",
+        "works": [
+          "A patient, slow-roast approach",
+          "Knowing your nerves are normal",
+          "Small wins called out so you see progress"
+        ],
+        "trips": [
+          "Being rushed or held to perfection too early",
+          "Too much information at once"
+        ],
+        "tell_coach": "Ask questions freely and trust the process — you'll adapt fast, and confidence is part of the training."
+      },
+      "coach": {
+        "tagline": "Wide-eyed and inexperienced — a blank canvas with few hardwired habits, often overwhelmed.",
+        "coach_toward": [
+          "Use a patient, slow-roast approach",
+          "Normalise their nerves with your own early stories",
+          "Celebrate small neurological wins to build confidence"
+        ],
+        "avoid": [
+          "Rushing development or demanding early perfection",
+          "Overwhelming them with too much at once"
+        ],
+        "programming_read": "Their consistency mirrors yours. Be steady, patient, quick to acknowledge the small wins."
+      }
+    },
+    "leader": {
+      "name": "Leader",
+      "athlete": {
+        "tagline": "You hold yourself — and everyone around you — to the highest standard.",
+        "works": [
+          "Being given ownership in the process",
+          "A coach who watches your mental load",
+          "Using your influence to lift others"
+        ],
+        "trips": [
+          "Carrying blame that isn't yours",
+          "Replaying your own errors on a loop"
+        ],
+        "tell_coach": "Let your coach take some of the load — you don't have to carry the whole room to set the standard."
+      },
+      "coach": {
+        "tagline": "Highly accountable and charismatic — raises those around them, but carries the team's weight.",
+        "coach_toward": [
+          "Involve them in the process — give power to gain power",
+          "Monitor their mental load",
+          "Challenge them to use their influence for the group"
+        ],
+        "avoid": [
+          "Letting them absorb blame that isn't theirs",
+          "Leaving them to shoulder the room's emotions alone"
+        ],
+        "programming_read": "Take some of the load off them deliberately. Watch for harsh self-talk after a bad day."
+      }
+    },
+    "self_sabotager": {
+      "name": "Self-Sabotager",
+      "athlete": {
+        "tagline": "The ability is there — but pressure can turn into paralysis right when it matters.",
+        "works": [
+          "A simple trigger cue to cut through the noise",
+          "Visualisation and mindfulness built into training",
+          "Reps under pressure so the response goes automatic"
+        ],
+        "trips": [
+          "A coach matching your anxiety or shouting",
+          "Over-thinking in the moments that count"
+        ],
+        "tell_coach": "Build one go-to cue for competition with your coach — fire it when doubt creeps in and let your prep take over."
+      },
+      "coach": {
+        "tagline": "Gifted but derailed by anxiety — turns high-pressure moments into monsters and gets paralysis by analysis.",
+        "coach_toward": [
+          "Give a simple trigger cue to cut the noise",
+          "Build visualisation, mindfulness and thought-stoppage into training",
+          "Immerse them in pressure so the response goes automatic"
+        ],
+        "avoid": [
+          "Matching their anxiety or raising your voice",
+          "Letting them over-analyse in the moments that count"
+        ],
+        "programming_read": "Unconditional support plus one rehearsed cue for competition. Never meet their panic with more intensity."
+      }
+    },
+    "hypochondriac": {
+      "name": "Hypochondriac",
+      "athlete": {
+        "tagline": "You're hyper-tuned to your body — every twinge can feel like the start of something serious.",
+        "works": [
+          "A coach who hears it, then helps you reframe it",
+          "Being eased into discomfort to build tolerance",
+          "Honest education about what's normal under load"
+        ],
+        "trips": [
+          "Constant reassurance that feeds the worry",
+          "Over-doing rehab and chasing a flawless body"
+        ],
+        "tell_coach": "Raise a concern once, get the read, then trust it — training does its job even when your body isn't perfect."
+      },
+      "coach": {
+        "tagline": "Hyper-aware of their body; ruminates over minor tweaks and seeks constant reassurance.",
+        "coach_toward": [
+          "Use Acknowledge -> Aim -> Alter: hear it, find the real fear, reframe it",
+          "Ease them into discomfort to build tolerance",
+          "Educate honestly about what's normal under load"
+        ],
+        "avoid": [
+          "Constant reassurance that validates the avoidance",
+          "Letting them over-do rehab and chase a flawless body"
+        ],
+        "programming_read": "Hear the concern once, find the fear underneath, reframe — and reel them back from over-rehab."
+      }
+    },
+    "manipulator": {
+      "name": "Manipulator",
+      "athlete": {
+        "tagline": "You read people well and know how to get what you want — sometimes by working the room not the work.",
+        "works": [
+          "Straight, calm, consistent communication",
+          "An aligned coaching team",
+          "Honesty about what you actually need"
+        ],
+        "trips": [
+          "Charm used to dodge the hard sessions",
+          "Corner-cutting that catches up with you"
+        ],
+        "tell_coach": "The shortcuts cost you later — be straight with your coach about what you're avoiding."
+      },
+      "coach": {
+        "tagline": "Reads people well and camouflages intent — works the room and cuts corners when it suits them.",
+        "coach_toward": [
+          "Keep communication aligned across the coaching team",
+          "Confront the behaviour calmly and directly",
+          "Ask why they feel the need to disguise their intentions"
+        ],
+        "avoid": [
+          "Letting flattery cloud your judgement",
+          "Ignoring patterns of corner-cutting or charm"
+        ],
+        "programming_read": "Stay aligned with co-coaches so they can't play one of you off another. Confront calmly, never emotionally."
+      }
+    },
+    "mouthpiece": {
+      "name": "Mouthpiece",
+      "athlete": {
+        "tagline": "You're vocal and full of energy — though the noise sometimes covers something underneath.",
+        "works": [
+          "A coach who checks in quietly, one-to-one",
+          "Reasonable requests met to build trust",
+          "A fair, clear 'no' with the reasoning"
+        ],
+        "trips": [
+          "Public power struggles you can't win",
+          "Letting the talk get ahead of the work"
+        ],
+        "tell_coach": "Channel the energy when the room needs it — and let your coach see the athlete behind the volume."
+      },
+      "coach": {
+        "tagline": "Highly vocal and always seen and heard — the chatter often masks an underlying insecurity.",
+        "coach_toward": [
+          "Connect quietly, one-to-one, to check how they really are",
+          "Accommodate reasonable requests to build trust",
+          "Say no tactfully with the reasoning attached"
+        ],
+        "avoid": [
+          "Public shouting matches or power struggles",
+          "Surrendering control of the environment to them"
+        ],
+        "programming_read": "Don't fight them in the open. Connect on the side and you'll get the athlete behind the noise."
+      }
+    },
+    "wolverine": {
+      "name": "Wolverine",
+      "athlete": {
+        "tagline": "You're fiercely self-sufficient and slow to trust — usually for good reason.",
+        "works": [
+          "Logic first — reasoning before relationship",
+          "Meaningful work, never busy work",
+          "A coach who's authentic and admits what they don't know"
+        ],
+        "trips": [
+          "Head-on clashes and shows of authority",
+          "Anyone trying to bend you by force of will"
+        ],
+        "tell_coach": "Give a coach the chance to earn it on logic and consistency — once trust is there, you'll pour everything in."
+      },
+      "coach": {
+        "tagline": "Introverted, fiery and self-sufficient — deeply distrustful of authority, usually rooted in past hardship.",
+        "coach_toward": [
+          "Lead with logic first — give them safe distance to assess you",
+          "Assign meaningful work, never busy work or punishment",
+          "Be authentic and admit what you don't know"
+        ],
+        "avoid": [
+          "Head-on clashes or shows of dominance",
+          "Trying to bend them by force of will"
+        ],
+        "programming_read": "Earn it on logic and consistency. Once trust is built they pour everything in — you can't shortcut the trust."
+      }
+    },
+    "free_spirit": {
+      "name": "Free Spirit",
+      "athlete": {
+        "tagline": "You compete for the love of it — and the moment it stops being fun, you check out.",
+        "works": [
+          "Variety, games, and creativity in the programme",
+          "Shorter cycles tied to what you enjoy",
+          "Polite bluntness and short-term goals when things wobble"
+        ],
+        "trips": [
+          "Rigid, dictatorial programming",
+          "Being over-coached with endless cues"
+        ],
+        "tell_coach": "Tell your coach you need variety to stay locked in — and lean on short, concrete goals when motivation dips."
+      },
+      "coach": {
+        "tagline": "Playful and enthusiastic — competes for the joy of improvement, disengages the moment it stops being fun.",
+        "coach_toward": [
+          "Gamify sessions and build in variety",
+          "Shorten microcycles and link work to their interests",
+          "Use polite bluntness and short-term goals when they wobble"
+        ],
+        "avoid": [
+          "Rigid, dictatorial programming",
+          "Over-coaching with too many cues"
+        ],
+        "programming_read": "Keep it varied and let them play. When they crash, anchor them with blunt, concrete short-term goals."
+      }
+    },
+    "crusader": {
+      "name": "Crusader",
+      "athlete": {
+        "tagline": "You're the emotional glue of any group — connected to something bigger than the result.",
+        "works": [
+          "Being included in the leadership conversation",
+          "Your read on the group genuinely valued",
+          "Protection from carrying everyone's weight"
+        ],
+        "trips": [
+          "Becoming the team's therapist at your own cost",
+          "Your needs going unnoticed because you seem steady"
+        ],
+        "tell_coach": "Keep some in the tank for yourself — you serve the group best when your own training doesn't suffer."
+      },
+      "coach": {
+        "tagline": "The team's emotional unifier — connected to a higher purpose and an excellent read on the group.",
+        "coach_toward": [
+          "Include them in leadership conversations",
+          "Use them as a sounding board for group dynamics",
+          "Protect them from carrying everyone's emotional load"
+        ],
+        "avoid": [
+          "Letting them become the team's therapist at their own cost",
+          "Overlooking their needs because they seem steady"
+        ],
+        "programming_read": "Brilliant ear to the room — just make sure their own training doesn't pay for everyone else's stability."
+      }
+    },
+    "underdog_blue_collar": {
+      "name": "Underdog (Blue Collar)",
+      "athlete": {
+        "tagline": "You weren't handed natural gifts — so you out-work everyone, and you're proud of it.",
+        "works": [
+          "Time, consistency, and room to fail safely",
+          "Being paired with talent that lacks your grind",
+          "Simple, clear instruction"
+        ],
+        "trips": [
+          "Being scolded for mistakes — it kills the courage you're building",
+          "Rushing the process"
+        ],
+        "tell_coach": "Keep grinding, but give the work time to compound — your consistency is the weapon."
+      },
+      "coach": {
+        "tagline": "Lacks natural gifts but is an absolute mental warrior who grinds relentlessly and thrives on routine.",
+        "coach_toward": [
+          "Give time, consistency and room to fail safely",
+          "Pair them with talent that lacks their grind",
+          "Keep instruction simple and clear"
+        ],
+        "avoid": [
+          "Chastising mistakes — it destroys the courage they're building",
+          "Rushing their development"
+        ],
+        "programming_read": "Protect their consistency from impatience. The grind is the gift — give it time to compound."
+      }
+    },
+    "underdog_sleeping_giant": {
+      "name": "Underdog (Sleeping Giant)",
+      "athlete": {
+        "tagline": "The physical tools are all there — the belief is the thing that comes and goes.",
+        "works": [
+          "Being paired with grinders who model commitment",
+          "Concise, execution-focused coaching",
+          "Safe conditions to take risks without fear"
+        ],
+        "trips": [
+          "Praise for talent that ignores the mental gap",
+          "Complex systems that give you more to doubt"
+        ],
+        "tell_coach": "Your ceiling is higher than your self-belief — let your coach build evidence, win by win, until belief catches up."
+      },
+      "coach": {
+        "tagline": "Phenomenal physical tools but lacks the self-belief and mental fortitude to use them.",
+        "coach_toward": [
+          "Pair them with grinders who model commitment",
+          "Keep coaching concise and execution-focused",
+          "Create safe conditions to take risks without fear"
+        ],
+        "avoid": [
+          "Praising talent in a way that ignores the mental gap",
+          "Complex systems that give them more to doubt"
+        ],
+        "programming_read": "Build belief win by win. Their ceiling is far above their current confidence — close the gap."
+      }
+    },
+    "royal": {
+      "name": "Royal",
+      "athlete": {
+        "tagline": "You guard your reputation hard — you'd rather dodge something than be seen struggling at it.",
+        "works": [
+          "Watching a peer praised for the thing you're avoiding",
+          "A coach who earns trust before pushing you",
+          "Your competitive edge used as fuel"
+        ],
+        "trips": [
+          "Being publicly singled out",
+          "Avoiding new skills to protect your image"
+        ],
+        "tell_coach": "The thing you're avoiding is usually the thing that moves you most — let your coach put you in the deep end privately."
+      },
+      "coach": {
+        "tagline": "Guards their reputation fiercely — dodges anything they might look bad doing.",
+        "coach_toward": [
+          "Use social proof — praise a peer for the task they're avoiding",
+          "Earn trust before pushing their comfort zone",
+          "Channel their competitive ego as fuel"
+        ],
+        "avoid": [
+          "Trying to artificially humble or harden them",
+          "Calling them out in front of the group"
+        ],
+        "programming_read": "Their ego is a lever, not an obstacle. Praise someone else doing the hard thing and watch them follow."
+      }
+    }
+  }
+}

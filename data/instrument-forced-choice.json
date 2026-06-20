@@ -1,0 +1,352 @@
+{
+  "id": "forced_choice",
+  "version": 1,
+  "label": "Quick read",
+  "est_minutes": 4,
+  "questions": [
+    {
+      "q_athlete": "You've just been handed a detailed new training programme. What's your honest first move?",
+      "q_coach": "You hand them a detailed new programme. What do they tend to do?",
+      "options": [
+        {
+          "athlete": "I study every movement and cue — I want to understand the mechanics before I start.",
+          "coach": "Study every movement and cue — they want the mechanics before they start.",
+          "archetypes": [
+            "technician"
+          ]
+        },
+        {
+          "athlete": "I push back until I understand the reasoning behind the exercise choices.",
+          "coach": "Push back until they understand the reasoning behind your choices.",
+          "archetypes": [
+            "skeptic"
+          ]
+        },
+        {
+          "athlete": "I just want to know how this makes me better on the competition floor — skip the filler.",
+          "coach": "Skim past the detail — they only care how it makes them better on the floor.",
+          "archetypes": [
+            "specialist"
+          ]
+        },
+        {
+          "athlete": "I read it once, trust the coach, and get straight to work.",
+          "coach": "Read it once, trust you, and get straight to work.",
+          "archetypes": [
+            "soldier"
+          ]
+        }
+      ]
+    },
+    {
+      "q_athlete": "You make a visible mistake at a crucial moment in training. What actually happens in your head?",
+      "q_coach": "They make a visible mistake at a crucial moment. How do they respond?",
+      "options": [
+        {
+          "athlete": "I spiral — I over-analyse what went wrong and struggle to move on.",
+          "coach": "They spiral — over-analysing the error and struggling to move on.",
+          "archetypes": [
+            "self_sabotager"
+          ]
+        },
+        {
+          "athlete": "I hate looking bad in front of people, so I quietly avoid that movement for a while.",
+          "coach": "They hate looking bad, so they quietly avoid that movement for a while.",
+          "archetypes": [
+            "royal"
+          ]
+        },
+        {
+          "athlete": "I use it as fuel. I've been underestimated before — I just grind harder.",
+          "coach": "They use it as fuel and grind harder — they're used to proving people wrong.",
+          "archetypes": [
+            "underdog_blue_collar"
+          ]
+        },
+        {
+          "athlete": "I take full blame, even if it wasn't all mine, because I feel responsible for everyone.",
+          "coach": "They take full blame, even when it isn't all theirs, out of responsibility for the group.",
+          "archetypes": [
+            "leader"
+          ]
+        }
+      ]
+    },
+    {
+      "q_athlete": "How do you really handle a niggle, soreness, or minor tweak mid-cycle?",
+      "q_coach": "How do they handle a niggle, soreness, or minor tweak mid-cycle?",
+      "options": [
+        {
+          "athlete": "I'm hyper-aware of it — I'll keep asking whether it's normal or something serious.",
+          "coach": "Hyper-aware — they keep asking whether it's normal or something serious.",
+          "archetypes": [
+            "hypochondriac"
+          ]
+        },
+        {
+          "athlete": "I ignore it completely. Showing weakness isn't an option.",
+          "coach": "They ignore it completely and push through, no matter the cost.",
+          "archetypes": [
+            "soldier"
+          ]
+        },
+        {
+          "athlete": "If I'm honest, I've used the odd ache to get out of work I didn't fancy.",
+          "coach": "They use the odd ache to slip out of work they didn't fancy.",
+          "archetypes": [
+            "manipulator"
+          ]
+        },
+        {
+          "athlete": "I panic a bit — I don't have the experience yet to know what's serious.",
+          "coach": "They get anxious — they don't have the experience to know what's serious.",
+          "archetypes": [
+            "novice"
+          ]
+        }
+      ]
+    },
+    {
+      "q_athlete": "A new, no-nonsense coach starts barking orders with zero explanation. What's your instinct?",
+      "q_coach": "A new, no-nonsense coach gives them orders with no explanation. What happens?",
+      "options": [
+        {
+          "athlete": "Instant distrust. You earn my buy-in before I give it.",
+          "coach": "Instant distrust — you have to earn their buy-in before they give it.",
+          "archetypes": [
+            "wolverine"
+          ]
+        },
+        {
+          "athlete": "I rebel internally. I want options, not orders.",
+          "coach": "They rebel internally — they want options, not orders.",
+          "archetypes": [
+            "politician"
+          ]
+        },
+        {
+          "athlete": "I work out what they want to hear so I can stay under the radar.",
+          "coach": "They work out what the coach wants to hear and stay under the radar.",
+          "archetypes": [
+            "manipulator"
+          ]
+        },
+        {
+          "athlete": "If it matches what a top athlete or coach online does, I'm in. Otherwise I doubt it.",
+          "coach": "They'll follow if it matches what a top athlete or online coach does, otherwise they doubt it.",
+          "archetypes": [
+            "skeptic"
+          ]
+        }
+      ]
+    },
+    {
+      "q_athlete": "What's your natural role in the room right before a big session or competition?",
+      "q_coach": "What's their natural role in the room before a big session or competition?",
+      "options": [
+        {
+          "athlete": "I'm the loudest — I make sure the energy's up and everyone notices.",
+          "coach": "The loudest — making sure the energy's up and everyone notices them.",
+          "archetypes": [
+            "mouthpiece"
+          ]
+        },
+        {
+          "athlete": "I'm quietly checking in on people — I'm the glue that holds us together.",
+          "coach": "Quietly checking in on teammates — the emotional glue.",
+          "archetypes": [
+            "crusader"
+          ]
+        },
+        {
+          "athlete": "I sit on my own and get focused. I don't need anyone else to perform.",
+          "coach": "On their own, fiercely self-contained — they don't need anyone to perform.",
+          "archetypes": [
+            "wolverine"
+          ]
+        },
+        {
+          "athlete": "I keep it light and fun — I play best when I'm enjoying it, not when it's heavy.",
+          "coach": "Keeping it light and fun — they perform best when they're enjoying it.",
+          "archetypes": [
+            "free_spirit"
+          ]
+        }
+      ]
+    },
+    {
+      "q_athlete": "Which statement is closest to the truth about your physical talent?",
+      "q_coach": "Which best describes their relationship with their own physical talent?",
+      "options": [
+        {
+          "athlete": "I don't have natural gifts — I just out-work everyone.",
+          "coach": "Limited natural gifts, but they out-work everyone.",
+          "archetypes": [
+            "underdog_blue_collar"
+          ]
+        },
+        {
+          "athlete": "I've got the tools, but I struggle to fully believe in myself when it counts.",
+          "coach": "Real physical tools, but their self-belief comes and goes when it counts.",
+          "archetypes": [
+            "underdog_sleeping_giant"
+          ]
+        },
+        {
+          "athlete": "My genetics have carried me — I've never really needed structured prep.",
+          "coach": "Heavily reliant on genetics — they doubt they need structured prep.",
+          "archetypes": [
+            "skeptic"
+          ]
+        },
+        {
+          "athlete": "I've got real tools and I hold myself to the highest standard to set the example.",
+          "coach": "Strong tools and they hold themselves to the highest standard for the group.",
+          "archetypes": [
+            "leader"
+          ]
+        }
+      ]
+    },
+    {
+      "q_athlete": "When training gets repetitive or monotonous, what's most likely to happen?",
+      "q_coach": "When training gets repetitive or monotonous, what do they do?",
+      "options": [
+        {
+          "athlete": "I keep going. Routine is a feature, not a bug.",
+          "coach": "Keep going — routine is a feature, not a bug, for them.",
+          "archetypes": [
+            "soldier"
+          ]
+        },
+        {
+          "athlete": "I start looking for ways around the plan — a swap here, a shortcut there.",
+          "coach": "Start finding ways around the plan — swaps, shortcuts, their own terms.",
+          "archetypes": [
+            "politician"
+          ]
+        },
+        {
+          "athlete": "I lose motivation fast. Variety and creativity are what keep me locked in.",
+          "coach": "Lose motivation fast — variety and creativity are what keep them engaged.",
+          "archetypes": [
+            "free_spirit"
+          ]
+        },
+        {
+          "athlete": "I start looking at what other coaches or athletes are doing instead.",
+          "coach": "Start eyeing what other coaches or athletes are doing instead.",
+          "archetypes": [
+            "skeptic"
+          ]
+        }
+      ]
+    },
+    {
+      "q_athlete": "How would the people who train alongside you describe you?",
+      "q_coach": "How would their training partners describe them?",
+      "options": [
+        {
+          "athlete": "Intense and technical — always analysing, sometimes too much.",
+          "coach": "Intense and technical — always analysing, sometimes too much.",
+          "archetypes": [
+            "technician"
+          ]
+        },
+        {
+          "athlete": "The loudest one in the room — not always for the right reasons.",
+          "coach": "The loudest in the room — not always for the right reasons.",
+          "archetypes": [
+            "mouthpiece"
+          ]
+        },
+        {
+          "athlete": "Quietly reliable, but does things their own way — don't get in the way.",
+          "coach": "Quietly reliable but does things their own way — don't get in the way.",
+          "archetypes": [
+            "wolverine"
+          ]
+        },
+        {
+          "athlete": "Infectious energy — makes training fun and pulls people up.",
+          "coach": "Infectious energy — makes training fun and lifts the room.",
+          "archetypes": [
+            "free_spirit"
+          ]
+        }
+      ]
+    },
+    {
+      "q_athlete": "A coach challenges your approach and tells you to change something. Your honest response?",
+      "q_coach": "You challenge their approach and tell them to change something. Their honest reaction?",
+      "options": [
+        {
+          "athlete": "I need to know exactly why they're right before I change anything.",
+          "coach": "They need to know exactly why you're right before they'll change.",
+          "archetypes": [
+            "technician",
+            "skeptic"
+          ]
+        },
+        {
+          "athlete": "I feel defensive and embarrassed, especially if people are watching.",
+          "coach": "They get defensive and embarrassed, especially with people watching.",
+          "archetypes": [
+            "royal"
+          ]
+        },
+        {
+          "athlete": "I'll say I'll change it, then mostly do what I was going to do anyway.",
+          "coach": "They agree to your face, then mostly carry on as before.",
+          "archetypes": [
+            "manipulator"
+          ]
+        },
+        {
+          "athlete": "I take it hard — I internalise it and replay it for hours.",
+          "coach": "They take it hard — internalising it and replaying it for hours.",
+          "archetypes": [
+            "self_sabotager",
+            "leader"
+          ]
+        }
+      ]
+    },
+    {
+      "q_athlete": "What do you most need from a coach to do your best work?",
+      "q_coach": "What does this athlete most need from you to do their best work?",
+      "options": [
+        {
+          "athlete": "Context and reasoning — I want the thinking behind the decisions.",
+          "coach": "Context and reasoning — the thinking behind the decisions.",
+          "archetypes": [
+            "technician",
+            "skeptic"
+          ]
+        },
+        {
+          "athlete": "Autonomy and variety — fewer rigid rules.",
+          "coach": "Autonomy and variety — fewer rigid rules.",
+          "archetypes": [
+            "politician",
+            "free_spirit"
+          ]
+        },
+        {
+          "athlete": "Patience — I'm still figuring this out.",
+          "coach": "Patience — they're still finding their feet.",
+          "archetypes": [
+            "novice"
+          ]
+        },
+        {
+          "athlete": "Consistency — earn my trust before expecting me to give it.",
+          "coach": "Consistency — they need you to earn trust before they give it.",
+          "archetypes": [
+            "wolverine"
+          ]
+        }
+      ]
+    }
+  ]
+}

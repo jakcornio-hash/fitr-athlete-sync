@@ -1,0 +1,231 @@
+{
+  "id": "rating",
+  "version": 1,
+  "label": "Profile",
+  "est_minutes": 5,
+  "scale": [
+    {
+      "label": "Rarely",
+      "value": 0
+    },
+    {
+      "label": "Sometimes",
+      "value": 1
+    },
+    {
+      "label": "Often",
+      "value": 2
+    },
+    {
+      "label": "Spot on",
+      "value": 3
+    }
+  ],
+  "statements": [
+    {
+      "athlete": "I need to understand the mechanics of a movement before I can fully commit to it.",
+      "coach": "They need to understand the mechanics of a movement before they'll commit to it.",
+      "archetype": "technician"
+    },
+    {
+      "athlete": "I can overthink a lift to the point it stops feeling natural.",
+      "coach": "They can overthink a lift to the point it stops looking natural.",
+      "archetype": "technician"
+    },
+    {
+      "athlete": "If I don't understand why a session is programmed, I quietly doubt it.",
+      "coach": "If they don't understand why a session is programmed, they quietly doubt it.",
+      "archetype": "skeptic"
+    },
+    {
+      "athlete": "I'll keep questioning a coach's method until the reasoning convinces me.",
+      "coach": "They'll keep questioning a method until the reasoning convinces them.",
+      "archetype": "skeptic"
+    },
+    {
+      "athlete": "I'll train through pain I probably shouldn't.",
+      "coach": "They'll train through pain they probably shouldn't.",
+      "archetype": "soldier"
+    },
+    {
+      "athlete": "Taking a rest day or a deload feels like going backwards.",
+      "coach": "A rest day or deload feels like going backwards to them.",
+      "archetype": "soldier"
+    },
+    {
+      "athlete": "I perform worse in competition than I do in training.",
+      "coach": "They perform worse in competition than they do in training.",
+      "archetype": "self_sabotager"
+    },
+    {
+      "athlete": "When the pressure's on, I get stuck in my own head.",
+      "coach": "When the pressure's on, they get stuck in their own head.",
+      "archetype": "self_sabotager"
+    },
+    {
+      "athlete": "If training stops being fun, I check out fast.",
+      "coach": "If training stops being fun, they check out fast.",
+      "archetype": "free_spirit"
+    },
+    {
+      "athlete": "I need variety or I lose interest in a programme.",
+      "coach": "They need variety or they lose interest in a programme.",
+      "archetype": "free_spirit"
+    },
+    {
+      "athlete": "A new coach has to earn my trust before I give it.",
+      "coach": "A new coach has to earn their trust before they give it.",
+      "archetype": "wolverine"
+    },
+    {
+      "athlete": "I'd rather train alone and figure things out for myself.",
+      "coach": "They'd rather train alone and figure things out themselves.",
+      "archetype": "wolverine"
+    },
+    {
+      "athlete": "I take the blame for things that aren't entirely my fault.",
+      "coach": "They take the blame for things that aren't entirely their fault.",
+      "archetype": "leader"
+    },
+    {
+      "athlete": "I replay my own mistakes for hours afterwards.",
+      "coach": "They replay their own mistakes long after the session.",
+      "archetype": "leader"
+    },
+    {
+      "athlete": "I assume I have to work harder than everyone else just to keep up.",
+      "coach": "They behave as if they have to out-work everyone just to keep up.",
+      "archetype": "underdog_blue_collar"
+    },
+    {
+      "athlete": "Being underestimated motivates me more than praise does.",
+      "coach": "Being underestimated motivates them more than praise does.",
+      "archetype": "underdog_blue_collar"
+    },
+    {
+      "athlete": "If I don't agree with part of a programme, I'll quietly do my own thing.",
+      "coach": "If they don't agree with part of a programme, they quietly do their own thing.",
+      "archetype": "politician"
+    },
+    {
+      "athlete": "I've got the physical tools, but my self-belief lets me down when it counts.",
+      "coach": "They've got the physical tools, but their self-belief lets them down when it counts.",
+      "archetype": "underdog_sleeping_giant"
+    },
+    {
+      "athlete": "I'd rather avoid a movement than be seen doing it badly.",
+      "coach": "They'd rather avoid a movement than be seen doing it badly.",
+      "archetype": "royal"
+    },
+    {
+      "athlete": "Accessory and general work feels like a distraction from competing.",
+      "coach": "Accessory and general work feels like a distraction from competing to them.",
+      "archetype": "specialist"
+    },
+    {
+      "athlete": "I'm usually the most vocal one in the room.",
+      "coach": "They're usually the most vocal one in the room.",
+      "archetype": "mouthpiece"
+    },
+    {
+      "athlete": "I spend a lot of energy looking after how everyone else is feeling.",
+      "coach": "They spend a lot of energy managing how everyone else is feeling.",
+      "archetype": "crusader"
+    },
+    {
+      "athlete": "I worry that a minor ache is the start of something serious.",
+      "coach": "They worry a minor ache is the start of something serious.",
+      "archetype": "hypochondriac"
+    },
+    {
+      "athlete": "I'll agree to a change, then mostly carry on how I wanted.",
+      "coach": "They'll agree to a change, then mostly carry on how they wanted.",
+      "archetype": "manipulator"
+    },
+    {
+      "athlete": "I'm still not always sure what's normal and what's a problem in training.",
+      "coach": "They're still unsure what's normal and what's a problem in training.",
+      "archetype": "novice"
+    }
+  ],
+  "forced_pairs": [
+    {
+      "prompt_athlete": "Of these four, which is MOST like you — and which is LEAST?",
+      "prompt_coach": "Of these four, which is MOST like this athlete — and which is LEAST?",
+      "options": [
+        {
+          "athlete": "I push through fatigue and pain to get the work done.",
+          "coach": "Pushes through fatigue and pain to get the work done.",
+          "archetype": "soldier"
+        },
+        {
+          "athlete": "I hold myself responsible when the group falls short.",
+          "coach": "Holds themselves responsible when the group falls short.",
+          "archetype": "leader"
+        },
+        {
+          "athlete": "I grind relentlessly because I assume I have to.",
+          "coach": "Grinds relentlessly because they assume they have to.",
+          "archetype": "underdog_blue_collar"
+        },
+        {
+          "athlete": "I obsess over getting the details of a movement perfect.",
+          "coach": "Obsesses over getting the details of a movement perfect.",
+          "archetype": "technician"
+        }
+      ]
+    },
+    {
+      "prompt_athlete": "Again — which is MOST like you, and which is LEAST?",
+      "prompt_coach": "Again — which is MOST like them, and which is LEAST?",
+      "options": [
+        {
+          "athlete": "Pressure gets in my head and I tighten up.",
+          "coach": "Pressure gets in their head and they tighten up.",
+          "archetype": "self_sabotager"
+        },
+        {
+          "athlete": "I switch off when training gets too serious or rigid.",
+          "coach": "Switches off when training gets too serious or rigid.",
+          "archetype": "free_spirit"
+        },
+        {
+          "athlete": "I keep people at arm's length until they prove themselves.",
+          "coach": "Keeps people at arm's length until they prove themselves.",
+          "archetype": "wolverine"
+        },
+        {
+          "athlete": "I protect my reputation by avoiding things I might fail at.",
+          "coach": "Protects their reputation by avoiding things they might fail at.",
+          "archetype": "royal"
+        }
+      ]
+    },
+    {
+      "prompt_athlete": "Last one — which is MOST like you, and which is LEAST?",
+      "prompt_coach": "Last one — which is MOST like them, and which is LEAST?",
+      "options": [
+        {
+          "athlete": "I need the reasoning before I'll buy into a plan.",
+          "coach": "Needs the reasoning before they'll buy into a plan.",
+          "archetype": "skeptic"
+        },
+        {
+          "athlete": "I bend the programme toward my own preferences.",
+          "coach": "Bends the programme toward their own preferences.",
+          "archetype": "politician"
+        },
+        {
+          "athlete": "I lean on my coach for almost every decision.",
+          "coach": "Leans on you for almost every decision.",
+          "archetype": "novice"
+        },
+        {
+          "athlete": "I resent anything that isn't directly competition prep.",
+          "coach": "Resents anything that isn't directly competition prep.",
+          "archetype": "specialist"
+        }
+      ]
+    }
+  ]
+}

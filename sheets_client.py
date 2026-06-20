@@ -108,6 +108,28 @@ class SheetsClient:
         if cells:
             ws.update_cells(cells, value_input_option="USER_ENTERED")
 
+    # ----------------------------------------------------------------- archetypes
+    TAB_ARCHETYPES = "Archetype Assessments"
+    _ARCHETYPE_HEADERS = [
+        "Athlete Name", "Assessor", "Instrument", "Version",
+        "Taken At", "Primary Archetype", "Profile JSON", "Raw Answers JSON", "Notes",
+    ]
+
+    def load_archetype_assessments(self):
+        """Return all rows from Archetype Assessments tab, or [] if tab missing."""
+        try:
+            ws = self.sh.worksheet(self.TAB_ARCHETYPES)
+            return ws.get_all_records()
+        except gspread.WorksheetNotFound:
+            return []
+
+    def write_archetype_assessment(self, row_dict):
+        """Append one assessment row. Creates the tab with headers if needed."""
+        ws = self.get_or_create(self.TAB_ARCHETYPES, self._ARCHETYPE_HEADERS)
+        row = [str(row_dict.get(h, "")) for h in self._ARCHETYPE_HEADERS]
+        if not config.DRY_RUN:
+            ws.append_rows([row], value_input_option="USER_ENTERED")
+
     def read_external_records(self, sheet_id, tab_title):
         """Read all records from a different Google Sheet by ID."""
         sh = self.gc.open_by_key(sheet_id)

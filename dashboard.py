@@ -5,6 +5,7 @@ Run locally:  streamlit run dashboard.py
 Deploy:       Streamlit Community Cloud → connect GitHub repo → add secrets
 """
 import datetime as dt
+import json
 import os
 import re
 
@@ -13,6 +14,7 @@ import altair as alt
 import pandas as pd
 
 import analytics
+import archetypes as arch_mod
 import config
 import recovery as rec_mod
 
@@ -84,7 +86,13 @@ def load_all():
     except Exception:
         pass
 
-    return pr_records, athletes, rec_latest, data_records
+    archetype_rows = []
+    try:
+        archetype_rows = sheets.load_archetype_assessments()
+    except Exception:
+        pass
+
+    return pr_records, athletes, rec_latest, data_records, archetype_rows
 
 
 def run_analytics(pr_records, athletes, rec_latest, data_records=None):
@@ -247,8 +255,103 @@ def _parse_notes_timeline(notes_str):
     return entries
 
 
+def _archetype_assessment_form(name):
+    """Inline forced-choice assessment — coach voice, saves to Sheets on submit."""
+    questions = arch_mod.FORCED_CHOICE.get("questions", [])
+    with st.form(key=f"arch_assess_{name}", clear_on_submit=True):
+        st.caption("Select the option that best describes this athlete. 10 questions, ~4 minutes.")
+        answers = []
+        for i, q in enumerate(questions):
+            st.markdown(f"**{i + 1}. {q['q_coach']}**")
+            opts = q.get("options", [])
+            choice = st.radio(
+                label=f"q_{i}",
+                options=list(range(len(opts))),
+                format_func=lambda idx, o=opts: o[idx]["coach"],
+                label_visibility="collapsed",
+                key=f"arch_{name}_q{i}",
+            )
+            answers.append(choice)
+        notes = st.text_input(
+            "Notes (optional)", key=f"arch_{name}_notes",
+            placeholder="e.g. Based on 6-month observation",
+        )
+        if st.form_submit_button("Save Assessment"):
+            result = arch_mod.score_forced_choice(answers)
+            row = {
+                "Athlete Name": name,
+                "Assessor": "Coach",
+                "Instrument": "forced_choice",
+                "Version": str(arch_mod.FORCED_CHOICE.get("version", 1)),
+                "Taken At": TODAY.isoformat(),
+                "Primary Archetype": result.get("primary", ""),
+                "Profile JSON": json.dumps(result),
+                "Raw Answers JSON": json.dumps(answers),
+                "Notes": notes,
+            }
+            get_sheets().write_archetype_assessment(row)
+            primary_name = arch_mod.get_archetype(result.get("primary", "")).get("name", result.get("primary", "").title())
+            st.success(f"Saved — Primary archetype: **{primary_name}**")
+            st.cache_data.clear()
+
+
+def _archetype_panel(name, archetype_by_name):
+    """Display archetype profile and offer inline assessment form."""
+    st.markdown("**🧠 Conscious Coaching Archetype**")
+    assessment = (archetype_by_name or {}).get(name)
+
+    if assessment:
+        primary_id = str(assessment.get("Primary Archetype", "")).strip()
+        taken_at   = str(assessment.get("Taken At", "")).strip()
+        arch = arch_mod.get_archetype(primary_id)
+
+        if arch and primary_id:
+            lbl_col, date_col = st.columns([3, 1])
+            with lbl_col:
+                st.markdown(f"**{arch.get('name', primary_id.title())}** — {arch['coach']['tagline']}")
+            with date_col:
+                if taken_at:
+                    st.caption(f"Assessed {taken_at[:10]}")
+
+            # Profile mix
+            try:
+                profile = json.loads(assessment.get("Profile JSON") or "{}").get("profile", [])
+            except (json.JSONDecodeError, TypeError):
+                profile = []
+            if profile:
+                st.markdown("**Profile mix:**")
+                for entry in profile[:5]:
+                    aid = entry.get("archetype", "")
+                    pct = entry.get("pct", 0)
+                    a_def = arch_mod.get_archetype(aid)
+                    label = (a_def.get("name") if a_def else None) or aid.replace("_", " ").title()
+                    st.progress(pct / 100, text=f"{label} — {pct}%")
+
+            # Coach cues
+            coach = arch.get("coach", {})
+            toward = coach.get("coach_toward", [])
+            avoid  = coach.get("avoid", [])
+            prog   = coach.get("programming_read", "")
+            if toward or avoid:
+                cl, cr = st.columns(2)
+                with cl:
+                    st.markdown("**Coach toward:**")
+                    for cue in toward:
+                        st.markdown(f"- {cue}")
+                with cr:
+                    st.markdown("**Avoid:**")
+                    for cue in avoid:
+                        st.markdown(f"- {cue}")
+            if prog:
+                st.info(f"**Programming read:** {prog}")
+
+    label = "📊 Update Assessment" if assessment else "📊 Run First Assessment"
+    with st.expander(label, expanded=not assessment):
+        _archetype_assessment_form(name)
+
+
 def _athlete_profile_panel(name, data_by_name, pr_records, trend_results,
-                           engagement_results, rec_by_name):
+                           engagement_results, rec_by_name, archetype_by_name=None):
     """Render the full profile panel for one athlete."""
     profile = data_by_name.get(name, {})
 
@@ -363,6 +466,10 @@ def _athlete_profile_panel(name, data_by_name, pr_records, trend_results,
             st.caption(f"Survey submitted: {submitted}")
         st.divider()
 
+    # ── Archetype ─────────────────────────────────────────────────────────────
+    _archetype_panel(name, archetype_by_name)
+    st.divider()
+
     # ── Coaching notes timeline ───────────────────────────────────────────────
     notes_raw = str(profile.get("Coaching Notes", "")).strip()
     timeline = _parse_notes_timeline(notes_raw)
@@ -379,7 +486,7 @@ def _athlete_profile_panel(name, data_by_name, pr_records, trend_results,
 
 
 def page_athletes(pr_records, athletes, trend_results, engagement_results,
-                  rec_by_name, data_records=None):
+                  rec_by_name, data_records=None, archetype_by_name=None):
     # Build per-name lookup from _DATA
     data_by_name = {}
     for rec in (data_records or []):
@@ -416,6 +523,12 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
         rec_str = rec_mod.readiness_string(rec_row) if rec_row else "—"
         if rec_str and len(rec_str) > 50:
             rec_str = rec_str[:50] + "…"
+        arch_row = (archetype_by_name or {}).get(nm)
+        arch_primary = ""
+        if arch_row:
+            aid = str(arch_row.get("Primary Archetype", "")).strip()
+            arch_def = arch_mod.get_archetype(aid)
+            arch_primary = arch_def.get("name", aid.replace("_", " ").title()) if arch_def else aid.replace("_", " ").title()
         summary_rows.append({
             "Name": nm,
             "Age": str(data_by_name.get(nm, {}).get("Age", "")).strip() or "—",
@@ -424,6 +537,7 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
             "Days Since": days if days is not None else "—",
             "Trend": trend_label,
             "Recovery": rec_str,
+            "Archetype": arch_primary or "—",
             "Logging": "📝 Nudge" if nudge else ("✅ Active" if (days is not None and days < 28) else "⚠️ Inactive"),
         })
 
@@ -441,7 +555,7 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
         st.divider()
         _athlete_profile_panel(
             selected_name, data_by_name, pr_records, trend_results,
-            engagement_results, rec_by_name,
+            engagement_results, rec_by_name, archetype_by_name=archetype_by_name,
         )
     else:
         st.caption("No athlete selected.")
@@ -687,10 +801,18 @@ def main():
     st.caption(f"Data refreshes every 15 minutes · Last loaded: {dt.datetime.now().strftime('%H:%M')}")
 
     with st.spinner("Loading..."):
-        pr_records, athletes, rec_latest, data_records = load_all()
+        pr_records, athletes, rec_latest, data_records, archetype_rows = load_all()
         trend_results, engagement_results, consistency_wins, rec_alert_rows, rec_by_name = run_analytics(
             pr_records, athletes, rec_latest, data_records
         )
+        # Build per-athlete archetype lookup: name -> latest assessment row
+        archetype_by_name = {}
+        for row in archetype_rows:
+            nm = str(row.get("Athlete Name", "")).strip()
+            if nm:
+                existing = archetype_by_name.get(nm)
+                if not existing or str(row.get("Taken At", "")) > str(existing.get("Taken At", "")):
+                    archetype_by_name[nm] = row
         # Recent results this week = things to celebrate; dedupe per athlete+benchmark
         _week_ago = TODAY - dt.timedelta(days=7)
         _seen_milestones = set()
@@ -714,7 +836,7 @@ def main():
     with tabs[1]:
         page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_wins)
     with tabs[2]:
-        page_athletes(pr_records, athletes, trend_results, engagement_results, rec_by_name, data_records)
+        page_athletes(pr_records, athletes, trend_results, engagement_results, rec_by_name, data_records, archetype_by_name=archetype_by_name)
     with tabs[3]:
         page_trends(pr_records, athletes)
     with tabs[4]:
