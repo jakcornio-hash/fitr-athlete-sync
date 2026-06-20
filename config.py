@@ -56,6 +56,7 @@ SMTP_TO = _get("SMTP_TO", "")
 COMP_FORM_SHEET_ID = _get("COMP_FORM_SHEET_ID", "")
 COMP_FORM_TAB = _get("COMP_FORM_TAB", "Sheet1")
 # These must match the Typeform question text exactly (becomes the column header)
+COMP_FORM_FULL_NAME_COL = "Your full name"
 COMP_FORM_EMAIL_COL = "Email address"
 COMP_FORM_NAME_COL = "What is your next competition?"
 COMP_FORM_DATE_COL = "What is the competition date? (DD/MM/YYYY)"
