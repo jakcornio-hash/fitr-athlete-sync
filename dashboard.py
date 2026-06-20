@@ -95,7 +95,7 @@ def load_all():
     return pr_records, athletes, rec_latest, data_records, archetype_rows
 
 
-def run_analytics(pr_records, athletes, rec_latest, data_records=None):
+def run_analytics(pr_records, athletes, rec_latest, data_records=None):  # noqa: too-many-locals
     trend_results = analytics.trend_analysis(pr_records)
 
     # Parse most recent chat date per athlete from Coaching Notes in _DATA
@@ -131,8 +131,9 @@ def run_analytics(pr_records, athletes, rec_latest, data_records=None):
         if em.lower() in email_to_name
     }
     rec_alert_rows = analytics.recovery_alerts(rec_by_name)
+    comp_results = analytics.comp_schedule(athletes, data_records)
 
-    return trend_results, engagement_results, consistency_wins, rec_alert_rows, rec_by_name
+    return trend_results, engagement_results, consistency_wins, rec_alert_rows, rec_by_name, comp_results
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -497,16 +498,9 @@ def _athlete_profile_panel(name, data_by_name, pr_records, trend_results,
             st.markdown(f"- **{label}:** {val}")
 
         st.markdown("")
-        st.markdown("**Competition**")
-        comp = str(profile.get("Next Competition", "")).strip()
-        comp_date = str(profile.get("Competition Date", "")).strip()
         plan = str(profile.get("Subscription Plan", "")).strip()
-        for label, val in [
-            ("Next Competition", comp or "—"),
-            ("Competition Date", comp_date or "—"),
-            ("Plan", plan or "—"),
-        ]:
-            st.markdown(f"- **{label}:** {val}")
+        if plan:
+            st.markdown(f"- **Plan:** {plan}")
 
     with right:
         st.markdown("**Athlete Profile**")
@@ -561,6 +555,50 @@ def _athlete_profile_panel(name, data_by_name, pr_records, trend_results,
                 st.markdown(f"{'✅' if ok else '❌'} {lbl}")
     else:
         st.success(f"✅ Profile complete ({done}/{total})")
+
+    st.divider()
+
+    # ── Competition prep ──────────────────────────────────────────────────────
+    comp_name = str(profile.get("Next Competition", "")).strip()
+    comp_date_str = str(profile.get("Competition Date", "")).strip()
+    comp_date = _parse_date(comp_date_str) if comp_date_str else None
+
+    st.markdown("**🏁 Competition Prep**")
+    if comp_date:
+        days_out = (comp_date - TODAY).days
+        phase, action = analytics.comp_phase(days_out)
+        emoji = _PHASE_EMOJI.get(phase, "⚪")
+
+        cc1, cc2, cc3 = st.columns(3)
+        if days_out >= 0:
+            w, d = divmod(days_out, 7)
+            cc1.metric(comp_name or "Competition", f"{w}w {d}d")
+        else:
+            cc1.metric(comp_name or "Competition", f"{abs(days_out)}d ago")
+        cc2.markdown(f"**Phase**  \n{emoji} {phase}")
+        if action:
+            cc3.markdown(f"**Action**  \n⚡ {action}")
+
+        msg = analytics.comp_message(name, comp_name, days_out)
+        with st.expander("📨 Message Template — click to copy"):
+            st.code(msg, language=None)
+    else:
+        st.caption("No competition date set.")
+
+    with st.expander("✏️ Update Competition Details"):
+        with st.form(f"comp_form_{name}", clear_on_submit=False):
+            new_comp_name = st.text_input("Competition Name", value=comp_name, key=f"comp_name_{name}")
+            new_comp_date = st.text_input(
+                "Competition Date (DD/MM/YYYY or YYYY-MM-DD)",
+                value=comp_date_str, key=f"comp_date_{name}",
+            )
+            if st.form_submit_button("Save Competition"):
+                get_sheets().batch_update_by_name(
+                    config.TAB_DATA, "Full Name",
+                    {name: {"Next Competition": new_comp_name, "Competition Date": new_comp_date}},
+                )
+                st.success("Competition details saved.")
+                st.cache_data.clear()
 
     st.divider()
 
@@ -834,6 +872,72 @@ def page_recovery(rec_by_name):
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
 
+_PHASE_EMOJI = {
+    "Post-Competition":      "🟣",
+    "2-Week Peak Prep":      "🔴",
+    "Switch → 2-Week Prep":  "🚨",
+    "10-Week Prep":          "🟠",
+    "Switch → 10-Week Prep": "🚨",
+    "Pre-Peak":              "🟡",
+    "Approaching":           "🟢",
+    "Normal Training":       "⚪",
+}
+
+
+def page_competitions(comp_results, athletes, data_records):
+    data_by_name = {str(r.get("Full Name", "")).strip(): r for r in (data_records or [])}
+    all_names = {a["name"] for a in athletes}
+
+    if comp_results:
+        st.subheader("Upcoming & Recent Competitions")
+        rows = []
+        for c in comp_results:
+            emoji = _PHASE_EMOJI.get(c["phase"], "⚪")
+            if c["days_out"] >= 0:
+                w, d = divmod(c["days_out"], 7)
+                time_str = f"{w}w {d}d" if w else f"{d}d"
+            else:
+                time_str = f"{abs(c['days_out'])}d ago"
+            prog = str(data_by_name.get(c["name"], {}).get("Programme", "")).strip()
+            prog_short = prog.replace(" - 2 Sessions Per Day", " 2x").replace(" - 1 Session Per Day", " 1x")
+            rows.append({
+                "": emoji,
+                "Athlete": c["name"],
+                "Competition": c["comp_name"],
+                "Date": c["comp_date"].strftime("%d %b %Y"),
+                "Out": time_str,
+                "Phase": c["phase"],
+                "Action": c["action"] or "—",
+                "Programme": prog_short or "—",
+            })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.divider()
+
+    # Actionable panel: athletes at transition points
+    action_items = [c for c in comp_results if c["action"]]
+    if action_items:
+        st.subheader("⚡ Actions Required Now")
+        for c in action_items:
+            emoji = _PHASE_EMOJI.get(c["phase"], "⚡")
+            with st.expander(f"{emoji} {c['name']} — {c['action']}", expanded=True):
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    st.metric(c["comp_name"] or "Competition", c["comp_date"].strftime("%d %b %Y"))
+                    w, d = divmod(max(c["days_out"], 0), 7)
+                    st.caption(f"{w}w {d}d out — {c['phase']}")
+                with col2:
+                    st.markdown("**Ready-to-send message:**")
+                    st.code(c["message_template"], language=None)
+        st.divider()
+
+    # Athletes without a competition date
+    with_comp = {c["name"] for c in comp_results}
+    no_comp = sorted(all_names - with_comp)
+    if no_comp:
+        with st.expander(f"{len(no_comp)} athletes without a competition date"):
+            st.write(", ".join(no_comp))
+
+
 def page_programmes(athletes, pr_records, trend_results, data_records):
     from collections import defaultdict
 
@@ -893,7 +997,7 @@ def page_programmes(athletes, pr_records, trend_results, data_records):
         st.markdown(f"**{len(unassigned)} not yet assigned:**  " + ", ".join(sorted(unassigned)))
 
 
-def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins):
+def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins, comp_results=None):
     """Prioritised list of every athlete who needs contact this week."""
     rows = []
 
@@ -978,7 +1082,30 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
                 "_order": 5,
             })
 
-    # 7. In contact but not logging — monthly nudge
+    # 7. Competition prep — phase transitions
+    for c in (comp_results or []):
+        if not c["action"]:
+            continue
+        phase = c["phase"]
+        if phase == "Post-Competition":
+            priority, order = "🟣 Post-Comp", 0
+        elif "Switch" in phase:
+            priority, order = "🚨 Programme Switch", 1
+        elif phase == "Pre-Peak":
+            priority, order = "🏁 Comp Prep", 2
+        else:
+            priority, order = "🏁 Comp Prep", 3
+        w, d = divmod(max(c["days_out"], 0), 7)
+        time_str = f"{abs(c['days_out'])}d ago" if c["days_out"] < 0 else f"{w}w {d}d out"
+        rows.append({
+            "Priority": priority,
+            "Athlete": c["name"],
+            "Reason": f"{c['comp_name']} — {time_str}",
+            "Action": c["action"],
+            "_order": order,
+        })
+
+    # 8. In contact but not logging — monthly nudge
     for e in engagement_results:
         if not e.get("nudge_flag"):
             continue
@@ -1009,13 +1136,16 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
 
     def _row_colour(row):
         colours = {
-            "🔴 Contact Today": "background-color: #ffe5e5",
-            "🏆 Celebrate":     "background-color: #fff8e1",
-            "✅ Positive":      "background-color: #e8f5e9",
-            "⚠️ Re-engage":     "background-color: #fff3e0",
-            "⚠️ Check In":      "background-color: #fff3e0",
-            "📉 Performance":   "background-color: #fce4ec",
-            "📝 Remind to Log": "background-color: #e3f2fd",
+            "🔴 Contact Today":   "background-color: #ffe5e5",
+            "🏆 Celebrate":       "background-color: #fff8e1",
+            "✅ Positive":        "background-color: #e8f5e9",
+            "⚠️ Re-engage":       "background-color: #fff3e0",
+            "⚠️ Check In":        "background-color: #fff3e0",
+            "📉 Performance":     "background-color: #fce4ec",
+            "🟣 Post-Comp":       "background-color: #f3e5f5",
+            "🚨 Programme Switch":"background-color: #fff3e0",
+            "🏁 Comp Prep":       "background-color: #e8eaf6",
+            "📝 Remind to Log":   "background-color: #e3f2fd",
         }
         colour = colours.get(row["Priority"], "")
         return [colour] * len(row)
@@ -1036,7 +1166,7 @@ def main():
 
     with st.spinner("Loading..."):
         pr_records, athletes, rec_latest, data_records, archetype_rows = load_all()
-        trend_results, engagement_results, consistency_wins, rec_alert_rows, rec_by_name = run_analytics(
+        trend_results, engagement_results, consistency_wins, rec_alert_rows, rec_by_name, comp_results = run_analytics(
             pr_records, athletes, rec_latest, data_records
         )
         # Build per-athlete archetype lookup: name -> latest assessment row
@@ -1063,19 +1193,21 @@ def main():
             _seen_milestones.add((_nm, _bn))
             milestones.append((_nm, _bn, _val))
 
-    tabs = st.tabs(["📋 Outreach List", "🚨 Alerts", "👥 Athletes", "📊 Programmes", "📈 Trends", "💤 Recovery"])
+    tabs = st.tabs(["📋 Outreach List", "🚨 Alerts", "👥 Athletes", "🏁 Competitions", "📊 Programmes", "📈 Trends", "💤 Recovery"])
 
     with tabs[0]:
-        page_outreach(engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins)
+        page_outreach(engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins, comp_results)
     with tabs[1]:
         page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_wins)
     with tabs[2]:
         page_athletes(pr_records, athletes, trend_results, engagement_results, rec_by_name, data_records, archetype_by_name=archetype_by_name)
     with tabs[3]:
-        page_programmes(athletes, pr_records, trend_results, data_records)
+        page_competitions(comp_results, athletes, data_records)
     with tabs[4]:
-        page_trends(pr_records, athletes)
+        page_programmes(athletes, pr_records, trend_results, data_records)
     with tabs[5]:
+        page_trends(pr_records, athletes)
+    with tabs[6]:
         page_recovery(rec_by_name)
 
 

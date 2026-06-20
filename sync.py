@@ -219,6 +219,41 @@ def update_athlete_profiles(sheets, athletes, fitr_profiles_by_id):
     return len(updates)
 
 
+# ------------------------------------------- competition dates from Typeform
+def sync_competition_from_typeform(sheets, email_by_name):
+    """Update _DATA competition fields from a dedicated competition Typeform.
+
+    Only updates athletes whose Typeform answer is more recent than any existing
+    Competition Date in _DATA (latest response wins).
+    """
+    if not config.COMP_FORM_SHEET_ID:
+        return 0
+    email_to_name = {v.lower(): k for k, v in email_by_name.items()}
+
+    try:
+        rows = sheets.read_external_records(config.COMP_FORM_SHEET_ID, config.COMP_FORM_TAB)
+    except Exception as e:
+        print(f"  ! comp form read failed: {e}")
+        return 0
+
+    latest_by_name = {}
+    for row in rows:
+        email = str(row.get(config.COMP_FORM_EMAIL_COL, "")).strip().lower()
+        nm = email_to_name.get(email)
+        if not nm:
+            continue
+        comp_name = str(row.get(config.COMP_FORM_NAME_COL, "")).strip()
+        comp_date = str(row.get(config.COMP_FORM_DATE_COL, "")).strip()
+        if comp_name or comp_date:
+            # later rows overwrite earlier ones (Typeform appends newest last)
+            latest_by_name[nm] = {"Next Competition": comp_name, "Competition Date": comp_date}
+
+    if not latest_by_name:
+        return 0
+    sheets.batch_update_by_name(config.TAB_DATA, "Full Name", latest_by_name)
+    return len(latest_by_name)
+
+
 # ------------------------------------------------------- programme from survey
 def sync_programme_from_recovery(sheets, rec_latest, email_by_name):
     """Update _DATA 'Programme' from the Typeform recovery response.
@@ -347,6 +382,9 @@ def main():
 
     progs_updated = sync_programme_from_recovery(sheets, rec_latest, email_by_name)
     print(f"Programme assignments synced from survey: {progs_updated}")
+
+    comps_updated = sync_competition_from_typeform(sheets, email_by_name)
+    print(f"Competition dates synced from Typeform: {comps_updated}")
 
     # ---- writes ----
     sheets.append_rows(config.TAB_PR_LOG, bench_rows + chal_rows)

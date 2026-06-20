@@ -51,6 +51,15 @@ SMTP_FROM = _get("SMTP_FROM", "")
 SMTP_PASSWORD = _get("SMTP_PASSWORD", "")
 SMTP_TO = _get("SMTP_TO", "")
 
+# Competition update Typeform (one-time form athletes fill in per competition)
+# Set COMP_FORM_SHEET_ID to the Google Sheet ID of the Typeform responses sheet.
+COMP_FORM_SHEET_ID = _get("COMP_FORM_SHEET_ID", "")
+COMP_FORM_TAB = _get("COMP_FORM_TAB", "Sheet1")
+# These must match the Typeform question text exactly (becomes the column header)
+COMP_FORM_EMAIL_COL = "Email address"
+COMP_FORM_NAME_COL = "What is your next competition?"
+COMP_FORM_DATE_COL = "What is the competition date? (DD/MM/YYYY)"
+
 # Recovery survey (Typeform sheet — separate from main athlete sheet)
 RECOVERY_SHEET_ID = _get("RECOVERY_SHEET_ID", "")
 RECOVERY_TAB = "New form"

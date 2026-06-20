@@ -265,6 +265,135 @@ def recovery_alerts(recovery_by_name):
     return alerts
 
 
+# ── Competition prep ──────────────────────────────────────────────────────────
+
+def comp_phase(days_out):
+    """Classify a competition into a prep phase.
+
+    Returns (phase_label, action_or_None).
+    action is only set during transition windows where the coach needs to act.
+
+    Phase windows:
+      post_comp:     <0 days (up to 14 days after)  → check-in
+      peak_2w:       0–14 days                       → on programme, no action
+      switch_2w:     14–22 days                      → switch to 2-week prep
+      peak_10w:      22–70 days                      → on programme, no action
+      switch_10w:    70–77 days                      → switch to 10-week prep
+      notify_switch: 77–91 days (≈12 weeks)          → warn athlete switch is coming
+      approaching:   91–112 days (≈13–16 weeks)      → plan peak timing
+      normal:        >112 days
+    """
+    if days_out < -14:
+        return None, None
+    elif days_out < 0:
+        return "Post-Competition", "Post-comp check-in — how did it go?"
+    elif days_out <= 14:
+        return "2-Week Peak Prep", None
+    elif days_out <= 22:
+        return "Switch → 2-Week Prep", "Switch to 2-week peak programme now"
+    elif days_out <= 70:
+        return "10-Week Prep", None
+    elif days_out <= 77:
+        return "Switch → 10-Week Prep", "Switch to 10-week peak programme now"
+    elif days_out <= 91:
+        return "Pre-Peak", "Notify: switching to 10-week prep in ~2 weeks"
+    elif days_out <= 112:
+        return "Approaching", "Competition approaching — confirm peak timing"
+    else:
+        return "Normal Training", None
+
+
+def comp_message(name, comp_label, days_out):
+    """Return a ready-to-send coaching message appropriate for this phase."""
+    first = name.split()[0]
+    weeks = round(abs(days_out) / 7)
+    label = comp_label or "your competition"
+
+    if days_out < 0:
+        return (
+            f"Hi {first}, how did {label} go? "
+            f"Brilliant effort — take a few days to recover properly and then "
+            f"let's sit down and plan what's next. You've earned the rest."
+        )
+    elif days_out <= 14:
+        return (
+            f"Hi {first}, {label} is {days_out} day{'s' if days_out != 1 else ''} away. "
+            f"You're in the final peak block — everything has been building to this. "
+            f"Trust the process, stay sharp, and we'll have you firing on the day."
+        )
+    elif days_out <= 22:
+        return (
+            f"Hi {first}, 3 weeks out from {label} — time to switch to the "
+            f"2-week peak programme. This block is about sharpening everything up "
+            f"right before competition day. Stay focused and trust your training."
+        )
+    elif days_out <= 77:
+        return (
+            f"Hi {first}, you're {weeks} weeks out from {label} and deep into "
+            f"the 10-week competition prep block. Keep the quality high — "
+            f"we've planned this so you peak exactly when it counts."
+        )
+    elif days_out <= 91:
+        return (
+            f"Hi {first}, {label} is {weeks} weeks away. "
+            f"In about 2 weeks I'll be switching you onto the 10-week peak competition "
+            f"prep programme — keep training hard until then, we're building momentum."
+        )
+    else:
+        return (
+            f"Hi {first}, great to see you've got {label} in the calendar — "
+            f"{weeks} weeks away. Plenty of time to build something special. "
+            f"Stay consistent and we'll plan your peak timing as we get closer."
+        )
+
+
+def comp_schedule(athletes, data_records, today=None):
+    """Return all athletes with a competition date, sorted soonest first.
+
+    Each entry: {name, comp_name, comp_date, days_out, weeks_out,
+                 phase, action, message_template}
+    Entries with no parseable date or competitions >14 days past are excluded.
+    """
+    if today is None:
+        today = dt.date.today()
+
+    data_by_name = {}
+    for r in (data_records or []):
+        nm = str(r.get("Full Name", "")).strip()
+        if nm:
+            data_by_name[nm] = r
+
+    results = []
+    for a in athletes:
+        profile = data_by_name.get(a["name"], {})
+        comp_date_str = str(profile.get("Competition Date", "")).strip()
+        comp_name = str(profile.get("Next Competition", "")).strip()
+        if not comp_date_str:
+            continue
+        comp_date = _parse_date(comp_date_str)
+        if not comp_date:
+            continue
+
+        days_out = (comp_date - today).days
+        phase, action = comp_phase(days_out)
+        if phase is None:
+            continue
+
+        results.append({
+            "name": a["name"],
+            "comp_name": comp_name or "Competition",
+            "comp_date": comp_date,
+            "days_out": days_out,
+            "weeks_out": round(days_out / 7, 1) if days_out >= 0 else None,
+            "phase": phase,
+            "action": action,
+            "message_template": comp_message(a["name"], comp_name, days_out),
+        })
+
+    results.sort(key=lambda x: x["days_out"])
+    return results
+
+
 def build_coach_alerts_rows(engagement_results, trend_results,
                             recovery_by_name=None, milestones=None,
                             consistency_wins=None):
