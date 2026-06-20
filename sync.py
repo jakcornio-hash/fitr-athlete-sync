@@ -219,6 +219,49 @@ def update_athlete_profiles(sheets, athletes, fitr_profiles_by_id):
     return len(updates)
 
 
+# ------------------------------------------------------- programme from survey
+def sync_programme_from_recovery(sheets, rec_latest, email_by_name):
+    """Update _DATA 'Programme' from the Typeform recovery response.
+
+    Only updates athletes who answered the programme question with a recognised
+    track name AND whose current _DATA value differs (so manual assignments by
+    the coach are only overwritten if the athlete explicitly changed track).
+    """
+    if not rec_latest or not config.RECOVERY_PROGRAMME_COL:
+        return 0
+    email_to_name = {v.lower(): k for k, v in email_by_name.items()}
+
+    values = sheets.read_values(config.TAB_DATA)
+    if not values:
+        return 0
+    header = values[0]
+    try:
+        name_idx = header.index("Full Name")
+        prog_idx = header.index("Programme")
+    except ValueError:
+        return 0  # column doesn't exist yet — safe no-op
+
+    current_by_name = {}
+    for row in values[1:]:
+        nm = (row[name_idx] if name_idx < len(row) else "").strip()
+        prog = (row[prog_idx] if prog_idx < len(row) else "").strip()
+        if nm:
+            current_by_name[nm] = prog
+
+    updates = {}
+    for email, row in rec_latest.items():
+        nm = email_to_name.get(email.lower())
+        if not nm:
+            continue
+        reported = str(row.get(config.RECOVERY_PROGRAMME_COL, "")).strip()
+        if reported in config.JST_TRACKS and reported != current_by_name.get(nm, ""):
+            updates[nm] = {"Programme": reported}
+
+    if updates:
+        sheets.batch_update_by_name(config.TAB_DATA, "Full Name", updates)
+    return len(updates)
+
+
 # --------------------------------------------------------------- notes writer
 def append_coaching_notes(sheets, note_lines_by_name):
     """Append (never overwrite) to the Coaching Notes column in _DATA."""
@@ -301,6 +344,9 @@ def main():
                 if rstr:
                     rec_notes[nm] = rstr
     print(f"Recovery responses merged: {len(rec_notes)}")
+
+    progs_updated = sync_programme_from_recovery(sheets, rec_latest, email_by_name)
+    print(f"Programme assignments synced from survey: {progs_updated}")
 
     # ---- writes ----
     sheets.append_rows(config.TAB_PR_LOG, bench_rows + chal_rows)

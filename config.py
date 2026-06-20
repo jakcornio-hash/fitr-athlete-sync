@@ -54,3 +54,20 @@ SMTP_TO = _get("SMTP_TO", "")
 # Recovery survey (Typeform sheet — separate from main athlete sheet)
 RECOVERY_SHEET_ID = _get("RECOVERY_SHEET_ID", "")
 RECOVERY_TAB = "New form"
+# Column header in the Typeform response sheet for the programme question.
+# Must match the question text exactly as it appears in the Google Sheet.
+RECOVERY_PROGRAMME_COL = "Which programme are you currently following?"
+
+# JST Athlete programme tracks (used in dashboard dropdown and sync validation)
+JST_TRACKS = [
+    "JST Athlete - 2 Sessions Per Day",
+    "JST Athlete - 1 Session Per Day",
+    "Strength Bias - 2 Sessions Per Day",
+    "Strength Bias - 1 Session Per Day",
+    "Gymnastic Bias - 2 Sessions Per Day",
+    "Gymnastics Bias - 1 Session Per Day",
+    "Engine Bias - 2 Sessions Per Day",
+    "Engine Bias - 1 Session Per Day",
+    "Competition Ready - 2 Sessions Per Day",
+    "Competition Ready - 1 Session Per Day",
+]

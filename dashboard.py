@@ -415,6 +415,23 @@ def _athlete_profile_panel(name, data_by_name, pr_records, trend_results,
             st.markdown(f"- **{label}:** {val}")
 
         st.markdown("")
+        st.markdown("**Programme**")
+        current_prog = str(profile.get("Programme", "")).strip()
+        prog_options = ["— not set —"] + config.JST_TRACKS
+        prog_idx = prog_options.index(current_prog) if current_prog in prog_options else 0
+        sel_prog = st.selectbox(
+            "Programme", prog_options, index=prog_idx,
+            label_visibility="collapsed", key=f"prog_sel_{name}",
+        )
+        new_prog = "" if sel_prog == "— not set —" else sel_prog
+        if st.button("Save Programme", key=f"prog_save_{name}", type="secondary"):
+            get_sheets().batch_update_by_name(
+                config.TAB_DATA, "Full Name", {name: {"Programme": new_prog}}
+            )
+            st.success(f"Saved: {new_prog or '(cleared)'}")
+            st.cache_data.clear()
+
+        st.markdown("")
         inj_status = str(profile.get("Injury Status", "")).strip()
         inj_notes  = str(profile.get("Injury Notes", "")).strip()
         if inj_status or inj_notes:
@@ -529,10 +546,17 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
             aid = str(arch_row.get("Primary Archetype", "")).strip()
             arch_def = arch_mod.get_archetype(aid)
             arch_primary = arch_def.get("name", aid.replace("_", " ").title()) if arch_def else aid.replace("_", " ").title()
+        prog_full = str(data_by_name.get(nm, {}).get("Programme", "")).strip()
+        # Shorten "JST Athlete - 2 Sessions Per Day" → "JST Athlete 2x" etc.
+        prog_short = (
+            prog_full
+            .replace(" - 2 Sessions Per Day", " 2x")
+            .replace(" - 1 Session Per Day", " 1x")
+            or "—"
+        )
         summary_rows.append({
             "Name": nm,
-            "Age": str(data_by_name.get(nm, {}).get("Age", "")).strip() or "—",
-            "Tier": str(data_by_name.get(nm, {}).get("Tier", "")).strip() or "—",
+            "Programme": prog_short,
             "Last Logged": last.isoformat() if last else "Never",
             "Days Since": days if days is not None else "—",
             "Trend": trend_label,

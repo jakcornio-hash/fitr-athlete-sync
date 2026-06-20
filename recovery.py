@@ -22,6 +22,7 @@ RECOVERY_COLS = {
     "bodyweight": "Bodyweight",
     "niggles": "Niggles/Injuries",
     "availability": "Availability this week",
+    "programme": config.RECOVERY_PROGRAMME_COL,
 }
 
 
