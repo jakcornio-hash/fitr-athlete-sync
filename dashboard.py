@@ -160,6 +160,90 @@ def _numeric(s):
 
 # ── Pages ─────────────────────────────────────────────────────────────────────
 
+def page_self_assess():
+    """Public-facing athlete self-assessment — shown when ?mode=self_assess&id=JST_ID."""
+    jst_id = (st.query_params.get("id") or "").strip()
+    if not jst_id:
+        st.error("No athlete ID in URL. Ask your coach for your personal link.")
+        return
+
+    sheets = get_sheets()
+    try:
+        data_records = sheets.read_records(config.TAB_DATA)
+    except Exception:
+        st.error("Unable to load. Please try again later.")
+        return
+
+    athlete_name = None
+    for rec in data_records:
+        rid = str(rec.get("Athlete ID", "")).strip()
+        if rid and rid == jst_id:
+            athlete_name = str(rec.get("Full Name", "")).strip()
+            break
+
+    if not athlete_name:
+        st.error("Link not recognised — ask your coach for a new one.")
+        return
+
+    st.title("JST Compete — Athlete Self-Assessment")
+    st.markdown(
+        f"Hi **{athlete_name}** — this takes about 4 minutes. "
+        "Pick the option that feels most true, most of the time."
+    )
+    st.divider()
+
+    questions = arch_mod.FORCED_CHOICE.get("questions", [])
+
+    with st.form("self_assess_form", clear_on_submit=True):
+        answers = []
+        for i, q in enumerate(questions):
+            st.markdown(f"**{i + 1}. {q['q_athlete']}**")
+            opts = q.get("options", [])
+            choice = st.radio(
+                label=f"q_{i}",
+                options=list(range(len(opts))),
+                format_func=lambda idx, o=opts: o[idx]["athlete"],
+                label_visibility="collapsed",
+                key=f"self_q{i}",
+            )
+            answers.append(choice)
+
+        if st.form_submit_button("Submit", type="primary"):
+            result = arch_mod.score_forced_choice(answers)
+            row = {
+                "Athlete Name": athlete_name,
+                "Assessor": "Athlete (Self)",
+                "Instrument": "forced_choice",
+                "Version": str(arch_mod.FORCED_CHOICE.get("version", 1)),
+                "Taken At": TODAY.isoformat(),
+                "Primary Archetype": result.get("primary", ""),
+                "Profile JSON": json.dumps(result),
+                "Raw Answers JSON": json.dumps(answers),
+                "Notes": "",
+            }
+            sheets.write_archetype_assessment(row)
+
+            primary_id = result.get("primary", "")
+            arch = arch_mod.get_archetype(primary_id)
+            st.success("Submitted — thank you!")
+            if arch:
+                st.markdown(f"## Your archetype: **{arch['name']}**")
+                st.markdown(f"*{arch['athlete']['tagline']}*")
+                st.divider()
+                wc, tc = st.columns(2)
+                with wc:
+                    st.markdown("**What works for you:**")
+                    for w in arch["athlete"].get("works", []):
+                        st.markdown(f"- {w}")
+                with tc:
+                    st.markdown("**What tends to trip you up:**")
+                    for t in arch["athlete"].get("trips", []):
+                        st.markdown(f"- {t}")
+                tell = arch["athlete"].get("tell_coach", "")
+                if tell:
+                    st.info(f"💡 **Tell your coach:** {tell}")
+
+
 def page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_wins):
     flagged = [e for e in engagement_results if e["flag"]]
     concerns = [
@@ -255,6 +339,22 @@ def _parse_notes_timeline(notes_str):
     return entries
 
 
+def _profile_completeness(name, profile, archetype_by_name, has_logged, has_recovery):
+    """Return (done, total, [(label, bool)]) for the onboarding checklist."""
+    checks = [
+        ("Email",                bool(str(profile.get("Email", "")).strip())),
+        ("Age",                  bool(str(profile.get("Age", "")).strip())),
+        ("North Star Goal",      bool(str(profile.get("North Star Goal", "")).strip())),
+        ("Communication Style",  bool(str(profile.get("Communication Style", "")).strip())),
+        ("Programme assigned",   bool(str(profile.get("Programme", "")).strip())),
+        ("Archetype assessed",   bool((archetype_by_name or {}).get(name))),
+        ("Has logged results",   has_logged),
+        ("Recovery survey",      has_recovery),
+    ]
+    done = sum(1 for _, v in checks if v)
+    return done, len(checks), checks
+
+
 def _archetype_assessment_form(name):
     """Inline forced-choice assessment — coach voice, saves to Sheets on submit."""
     questions = arch_mod.FORCED_CHOICE.get("questions", [])
@@ -295,8 +395,8 @@ def _archetype_assessment_form(name):
             st.cache_data.clear()
 
 
-def _archetype_panel(name, archetype_by_name):
-    """Display archetype profile and offer inline assessment form."""
+def _archetype_panel(name, archetype_by_name, profile=None):
+    """Display archetype profile, inline assessment form, and self-assessment link."""
     st.markdown("**🧠 Conscious Coaching Archetype**")
     assessment = (archetype_by_name or {}).get(name)
 
@@ -348,6 +448,15 @@ def _archetype_panel(name, archetype_by_name):
     label = "📊 Update Assessment" if assessment else "📊 Run First Assessment"
     with st.expander(label, expanded=not assessment):
         _archetype_assessment_form(name)
+
+    jst_id = str((profile or {}).get("Athlete ID", "")).strip()
+    if jst_id:
+        with st.expander("🔗 Share Self-Assessment Link with Athlete"):
+            st.caption(
+                "The athlete fills this in themselves — answers go directly to your dashboard. "
+                "Paste your dashboard URL before the query string below."
+            )
+            st.code(f"?mode=self_assess&id={jst_id}", language=None)
 
 
 def _athlete_profile_panel(name, data_by_name, pr_records, trend_results,
@@ -442,6 +551,17 @@ def _athlete_profile_panel(name, data_by_name, pr_records, trend_results,
         else:
             st.markdown("**🟢 Injury Status:** —")
 
+    # ── Profile completeness ──────────────────────────────────────────────────
+    has_logged = any(str(r.get("Athlete Name", "")).strip() == name for r in pr_records)
+    has_recovery = bool(rec_by_name.get(name))
+    done, total, checks = _profile_completeness(name, profile, archetype_by_name, has_logged, has_recovery)
+    if done < total:
+        with st.expander(f"⚠️ Profile {done}/{total} complete — tap to see what's missing", expanded=False):
+            for lbl, ok in checks:
+                st.markdown(f"{'✅' if ok else '❌'} {lbl}")
+    else:
+        st.success(f"✅ Profile complete ({done}/{total})")
+
     st.divider()
 
     # ── Benchmark snapshots ───────────────────────────────────────────────────
@@ -484,22 +604,44 @@ def _athlete_profile_panel(name, data_by_name, pr_records, trend_results,
         st.divider()
 
     # ── Archetype ─────────────────────────────────────────────────────────────
-    _archetype_panel(name, archetype_by_name)
+    _archetype_panel(name, archetype_by_name, profile=profile)
     st.divider()
 
     # ── Coaching notes timeline ───────────────────────────────────────────────
     notes_raw = str(profile.get("Coaching Notes", "")).strip()
     timeline = _parse_notes_timeline(notes_raw)
+    st.markdown("**📝 Coaching Notes**")
     if timeline:
-        st.markdown("**📝 Coaching Notes**")
         kind_icons = {"chat": "💬", "result": "🏆", "recovery": "💤"}
         for entry in timeline:
             icon = kind_icons.get(entry["kind"], "📌")
             with st.expander(f"{icon} {entry['date']} — {entry['kind']}", expanded=False):
                 st.write(entry["text"])
     else:
-        st.markdown("**📝 Coaching Notes**")
         st.caption("No notes yet.")
+
+    with st.expander("✏️ Add Note"):
+        with st.form(f"note_form_{name}", clear_on_submit=True):
+            note_text = st.text_area(
+                "Note", key=f"note_text_{name}",
+                placeholder="e.g. Discussed competition prep — feeling strong about the next block",
+            )
+            note_kind = st.selectbox(
+                "Type", ["note", "chat", "result", "recovery"],
+                key=f"note_kind_{name}",
+            )
+            if st.form_submit_button("Save Note"):
+                if note_text.strip():
+                    line = f"[{TODAY.isoformat()} — {note_kind}] {note_text.strip()}"
+                    current = str(profile.get("Coaching Notes", "")).strip()
+                    new_notes = (current + "\n" + line).strip() if current else line
+                    get_sheets().batch_update_by_name(
+                        config.TAB_DATA, "Full Name", {name: {"Coaching Notes": new_notes}}
+                    )
+                    st.success("Note saved.")
+                    st.cache_data.clear()
+                else:
+                    st.warning("Note is empty.")
 
 
 def page_athletes(pr_records, athletes, trend_results, engagement_results,
@@ -547,16 +689,21 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
             arch_def = arch_mod.get_archetype(aid)
             arch_primary = arch_def.get("name", aid.replace("_", " ").title()) if arch_def else aid.replace("_", " ").title()
         prog_full = str(data_by_name.get(nm, {}).get("Programme", "")).strip()
-        # Shorten "JST Athlete - 2 Sessions Per Day" → "JST Athlete 2x" etc.
         prog_short = (
             prog_full
             .replace(" - 2 Sessions Per Day", " 2x")
             .replace(" - 1 Session Per Day", " 1x")
             or "—"
         )
+        has_logged_nm = nm in last_logged
+        has_rec_nm = bool(rec_by_name.get(nm))
+        done_nm, total_nm, _ = _profile_completeness(
+            nm, data_by_name.get(nm, {}), archetype_by_name, has_logged_nm, has_rec_nm
+        )
         summary_rows.append({
             "Name": nm,
             "Programme": prog_short,
+            "Profile": f"{done_nm}/{total_nm}",
             "Last Logged": last.isoformat() if last else "Never",
             "Days Since": days if days is not None else "—",
             "Trend": trend_label,
@@ -685,6 +832,65 @@ def page_recovery(rec_by_name):
     styled = styled.applymap(lambda v: _colour(v, "Motivation"), subset=["Motivation"])
 
     st.dataframe(styled, use_container_width=True, hide_index=True)
+
+
+def page_programmes(athletes, pr_records, trend_results, data_records):
+    from collections import defaultdict
+
+    data_by_name = {str(r.get("Full Name", "")).strip(): r for r in (data_records or [])}
+
+    last_logged = {}
+    for r in pr_records:
+        nm = str(r.get("Athlete Name", "")).strip()
+        d = _parse_date(str(r.get("Date", "")))
+        if nm and d and (nm not in last_logged or d > last_logged[nm]):
+            last_logged[nm] = d
+
+    by_prog = defaultdict(list)
+    for a in athletes:
+        prog = str(data_by_name.get(a["name"], {}).get("Programme", "")).strip()
+        by_prog[prog or "— Unassigned —"].append(a["name"])
+
+    rows = []
+    for prog, names in sorted(by_prog.items(), key=lambda x: (x[0] == "— Unassigned —", x[0])):
+        count = len(names)
+        active = sum(1 for nm in names if nm in last_logged and (TODAY - last_logged[nm]).days < 28)
+        days_list = [(TODAY - last_logged[nm]).days for nm in names if nm in last_logged]
+        avg_days = round(sum(days_list) / len(days_list)) if days_list else None
+        declining = sum(
+            1 for nm in names
+            for s in trend_results.get(nm, [])
+            if s["trend"] == "declining"
+        )
+        rows.append({
+            "Programme": prog,
+            "Athletes": count,
+            "Active (28d)": f"{active}/{count} ({round(active / count * 100)}%)" if count else "—",
+            "Avg Days Since Log": avg_days if avg_days is not None else "never",
+            "Declining Trends": declining or "—",
+        })
+
+    st.subheader("Programme Breakdown")
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    assigned = [(p, len(n)) for p, n in by_prog.items() if p != "— Unassigned —"]
+    if assigned:
+        chart_df = pd.DataFrame(assigned, columns=["Programme", "Athletes"])
+        chart = (
+            alt.Chart(chart_df)
+            .mark_bar(color="#1f77b4")
+            .encode(
+                x=alt.X("Athletes:Q", title="Athletes"),
+                y=alt.Y("Programme:N", sort="-x", title=""),
+                tooltip=["Programme:N", "Athletes:Q"],
+            )
+            .properties(height=max(200, len(assigned) * 38))
+        )
+        st.altair_chart(chart, use_container_width=True)
+
+    unassigned = by_prog.get("— Unassigned —", [])
+    if unassigned:
+        st.markdown(f"**{len(unassigned)} not yet assigned:**  " + ", ".join(sorted(unassigned)))
 
 
 def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins):
@@ -821,6 +1027,10 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    if st.query_params.get("mode") == "self_assess":
+        page_self_assess()
+        return
+
     st.title("🏋️ JST Compete — Coaching Dashboard")
     st.caption(f"Data refreshes every 15 minutes · Last loaded: {dt.datetime.now().strftime('%H:%M')}")
 
@@ -853,7 +1063,7 @@ def main():
             _seen_milestones.add((_nm, _bn))
             milestones.append((_nm, _bn, _val))
 
-    tabs = st.tabs(["📋 Outreach List", "🚨 Alerts", "👥 Athletes", "📈 Trends", "💤 Recovery"])
+    tabs = st.tabs(["📋 Outreach List", "🚨 Alerts", "👥 Athletes", "📊 Programmes", "📈 Trends", "💤 Recovery"])
 
     with tabs[0]:
         page_outreach(engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins)
@@ -862,8 +1072,10 @@ def main():
     with tabs[2]:
         page_athletes(pr_records, athletes, trend_results, engagement_results, rec_by_name, data_records, archetype_by_name=archetype_by_name)
     with tabs[3]:
-        page_trends(pr_records, athletes)
+        page_programmes(athletes, pr_records, trend_results, data_records)
     with tabs[4]:
+        page_trends(pr_records, athletes)
+    with tabs[5]:
         page_recovery(rec_by_name)
 
 
