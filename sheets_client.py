@@ -12,10 +12,22 @@ import config
 class SheetsClient:
     def __init__(self, service_account_info=None, sheet_id=None):
         if service_account_info:
-            self.gc = gspread.service_account_from_dict(service_account_info)
+            # Ensure private_key has real newlines (Streamlit secrets may escape them)
+            info = dict(service_account_info)
+            if "private_key" in info:
+                info["private_key"] = info["private_key"].replace("\\n", "\n")
+            self.gc = gspread.service_account_from_dict(info)
         else:
             self.gc = gspread.service_account(filename=config.GOOGLE_SERVICE_ACCOUNT_FILE)
-        self.sh = self.gc.open_by_key(sheet_id or config.SHEET_ID)
+        sid = sheet_id or config.SHEET_ID
+        try:
+            self.sh = self.gc.open_by_key(sid)
+        except gspread.exceptions.APIError as e:
+            raise RuntimeError(
+                f"gspread open_by_key failed for sheet_id={sid!r}. "
+                f"Response status: {getattr(e.response, 'status_code', '?')}. "
+                f"Body snippet: {str(e)[:300]}"
+            ) from e
 
     def worksheet(self, title):
         return self.sh.worksheet(title)
