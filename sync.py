@@ -219,12 +219,13 @@ def update_athlete_profiles(sheets, athletes, fitr_profiles_by_id):
     return len(updates)
 
 
-# ------------------------------------------- competition dates from Typeform
+# ------------------------------------------- competition calendar from Typeform
 def sync_competition_from_typeform(sheets, email_by_name):
-    """Update _DATA competition fields from a dedicated competition Typeform.
+    """Sync competition Typeform responses into the Competitions tab.
 
-    Only updates athletes whose Typeform answer is more recent than any existing
-    Competition Date in _DATA (latest response wins).
+    Each Typeform submission represents ONE competition per athlete. Writes a new
+    row per submission, deduplicating by (athlete_name, competition_name, date).
+    Uses the new A/B/C form fields; falls back gracefully if they are absent.
     """
     if not config.COMP_FORM_SHEET_ID:
         return 0
@@ -236,22 +237,65 @@ def sync_competition_from_typeform(sheets, email_by_name):
         print(f"  ! comp form read failed: {e}")
         return 0
 
-    latest_by_name = {}
+    # Load existing Competitions tab for dedupe
+    existing = sheets.load_competitions()
+    seen_keys = set()
+    for r in existing:
+        key = (
+            str(r.get("Athlete Name", "")).strip().lower(),
+            str(r.get("Competition Name", "")).strip().lower(),
+            str(r.get("Date", "")).strip(),
+        )
+        seen_keys.add(key)
+
+    added = 0
     for row in rows:
+        # Resolve athlete from email or full name field
         email = str(row.get(config.COMP_FORM_EMAIL_COL, "")).strip().lower()
         nm = email_to_name.get(email)
         if not nm:
+            # Try matching via the full name field directly
+            raw_name = str(row.get(config.COMP_FORM_FULL_NAME_COL, "")).strip()
+            for athlete_name in email_to_name.values():
+                if athlete_name.lower() == raw_name.lower():
+                    nm = athlete_name
+                    break
+        if not nm:
             continue
-        comp_name = str(row.get(config.COMP_FORM_NAME_COL, "")).strip()
-        comp_date = str(row.get(config.COMP_FORM_DATE_COL, "")).strip()
-        if comp_name or comp_date:
-            # later rows overwrite earlier ones (Typeform appends newest last)
-            latest_by_name[nm] = {"Next Competition": comp_name, "Competition Date": comp_date}
 
-    if not latest_by_name:
-        return 0
-    sheets.batch_update_by_name(config.TAB_DATA, "Full Name", latest_by_name)
-    return len(latest_by_name)
+        comp_name = str(row.get(config.COMP_FORM_COMP_NAME_COL, "")).strip()
+        comp_date = str(row.get(config.COMP_FORM_DATE_COL, "")).strip()
+        if not comp_name or not comp_date:
+            continue
+
+        # Parse type from the dropdown answer (e.g. "🥇 A — Primary goal...")
+        raw_type = str(row.get(config.COMP_FORM_TYPE_COL, "")).strip()
+        if "🥈" in raw_type or raw_type.upper().startswith("B"):
+            comp_type = "B"
+        elif "🥉" in raw_type or raw_type.upper().startswith("C"):
+            comp_type = "C"
+        else:
+            comp_type = "A"
+
+        notes = str(row.get(config.COMP_FORM_NOTES_COL, "")).strip()
+        synced_at = str(row.get("Submitted At", TODAY.isoformat())).strip()
+
+        key = (nm.lower(), comp_name.lower(), comp_date)
+        if key in seen_keys:
+            continue
+
+        sheets.save_competition({
+            "Athlete Name": nm,
+            "Competition Name": comp_name,
+            "Date": comp_date,
+            "Type": comp_type,
+            "Notes": notes,
+            "Synced At": synced_at,
+        })
+        seen_keys.add(key)
+        added += 1
+
+    return added
 
 
 # ------------------------------------------------------- programme from survey

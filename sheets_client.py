@@ -130,6 +130,25 @@ class SheetsClient:
         if not config.DRY_RUN:
             ws.append_rows([row], value_input_option="USER_ENTERED")
 
+    # ---------------------------------------------------------- competitions
+    TAB_COMPETITIONS = config.TAB_COMPETITIONS
+    _COMP_HEADERS = ["Athlete Name", "Competition Name", "Date", "Type", "Notes", "Synced At"]
+
+    def load_competitions(self):
+        """Return all rows from Competitions tab, or [] if not yet created."""
+        try:
+            ws = self.sh.worksheet(self.TAB_COMPETITIONS)
+            return ws.get_all_records()
+        except gspread.WorksheetNotFound:
+            return []
+
+    def save_competition(self, row_dict):
+        """Append one competition row. Creates tab with headers if needed."""
+        ws = self.get_or_create(self.TAB_COMPETITIONS, self._COMP_HEADERS)
+        row = [str(row_dict.get(h, "")) for h in self._COMP_HEADERS]
+        if not config.DRY_RUN:
+            ws.append_rows([row], value_input_option="USER_ENTERED")
+
     def read_external_records(self, sheet_id, tab_title):
         """Read all records from a different Google Sheet by ID."""
         sh = self.gc.open_by_key(sheet_id)

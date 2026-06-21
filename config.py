@@ -51,15 +51,20 @@ SMTP_FROM = _get("SMTP_FROM", "")
 SMTP_PASSWORD = _get("SMTP_PASSWORD", "")
 SMTP_TO = _get("SMTP_TO", "")
 
-# Competition update Typeform (one-time form athletes fill in per competition)
+# Competition planner Typeform — athletes submit once per competition
 # Set COMP_FORM_SHEET_ID to the Google Sheet ID of the Typeform responses sheet.
 COMP_FORM_SHEET_ID = _get("COMP_FORM_SHEET_ID", "")
 COMP_FORM_TAB = _get("COMP_FORM_TAB", "Sheet1")
-# These must match the Typeform question text exactly (becomes the column header)
+# Column headers — must match Typeform question text exactly
 COMP_FORM_FULL_NAME_COL = "Your full name"
 COMP_FORM_EMAIL_COL = "Email address"
-COMP_FORM_NAME_COL = "What is your next competition?"
+COMP_FORM_COMP_NAME_COL = "What is the name of this competition?"
 COMP_FORM_DATE_COL = "What is the competition date? (DD/MM/YYYY)"
+COMP_FORM_TYPE_COL = "What type of competition is this?"
+COMP_FORM_NOTES_COL = "Any notes for your coach about this competition? (optional)"
+
+# Competitions tab in the main athlete sheet
+TAB_COMPETITIONS = "Competitions"
 
 # Recovery survey (Typeform sheet — separate from main athlete sheet)
 RECOVERY_SHEET_ID = _get("RECOVERY_SHEET_ID", "")
@@ -67,6 +72,9 @@ RECOVERY_TAB = "New form"
 # Column header in the Typeform response sheet for the programme question.
 # Must match the question text exactly as it appears in the Google Sheet.
 RECOVERY_PROGRAMME_COL = "Which programme are you currently following?"
+
+# Athlete competitive tier labels (shown in profile dropdown and Athletes table)
+JST_TIERS = ["Open", "Quarterfinals", "Semifinals", "Games"]
 
 # JST Athlete programme tracks (used in dashboard dropdown and sync validation)
 JST_TRACKS = [

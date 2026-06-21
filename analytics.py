@@ -267,130 +267,291 @@ def recovery_alerts(recovery_by_name):
 
 # ── Competition prep ──────────────────────────────────────────────────────────
 
-def comp_phase(days_out):
+def comp_phase(days_out, comp_type="A"):
     """Classify a competition into a prep phase.
 
     Returns (phase_label, action_or_None).
     action is only set during transition windows where the coach needs to act.
 
-    Phase windows:
-      post_comp:     <0 days (up to 14 days after)  → check-in
-      peak_2w:       0–14 days                       → on programme, no action
-      switch_2w:     14–22 days                      → switch to 2-week prep
-      peak_10w:      22–70 days                      → on programme, no action
-      switch_10w:    70–77 days                      → switch to 10-week prep
-      notify_switch: 77–91 days (≈12 weeks)          → warn athlete switch is coming
-      approaching:   91–112 days (≈13–16 weeks)      → plan peak timing
-      normal:        >112 days
+    comp_type:
+      A — Primary goal. Full taper. 10-week + 2-week peak programmes.
+      B — Secondary race. Light taper (race week only). No programme switch.
+      C — Training day. No taper, no disruption to training block.
     """
-    if days_out < -14:
+    ct = str(comp_type).upper() if comp_type else "A"
+
+    if ct == "C":
+        if days_out < -7:
+            return None, None
+        elif days_out < 0:
+            return "Post-Competition", "Post-comp check-in — how did it go?"
+        elif days_out <= 7:
+            return "C — Race Week", None
+        elif days_out <= 21:
+            return "C — Coming Up", None
         return None, None
-    elif days_out < 0:
-        return "Post-Competition", "Post-comp check-in — how did it go?"
-    elif days_out <= 14:
-        return "2-Week Peak Prep", None
-    elif days_out <= 22:
-        return "Switch → 2-Week Prep", "Switch to 2-week peak programme now"
-    elif days_out <= 70:
-        return "10-Week Prep", None
-    elif days_out <= 77:
-        return "Switch → 10-Week Prep", "Switch to 10-week peak programme now"
-    elif days_out <= 91:
-        return "Pre-Peak", "Notify: switching to 10-week prep in ~2 weeks"
-    elif days_out <= 112:
-        return "Approaching", "Competition approaching — confirm peak timing"
-    else:
-        return "Normal Training", None
+
+    elif ct == "B":
+        if days_out < -7:
+            return None, None
+        elif days_out < 0:
+            return "Post-Competition", "Post-comp check-in — how did it go?"
+        elif days_out <= 7:
+            return "B — Race Week", "Minor taper this week — reduce volume by ~20%"
+        elif days_out <= 14:
+            return "B — Final Prep", None
+        elif days_out <= 21:
+            return "B — Approaching", "B-race in 3 weeks — keep training as planned, heads-up to athlete"
+        return None, None
+
+    else:  # A competition — full taper phases
+        if days_out < -14:
+            return None, None
+        elif days_out < 0:
+            return "Post-Competition", "Post-comp check-in — how did it go?"
+        elif days_out <= 14:
+            return "2-Week Peak Prep", None
+        elif days_out <= 22:
+            return "Switch → 2-Week Prep", "Switch to 2-week peak programme now"
+        elif days_out <= 70:
+            return "10-Week Prep", None
+        elif days_out <= 77:
+            return "Switch → 10-Week Prep", "Switch to 10-week peak programme now"
+        elif days_out <= 91:
+            return "Pre-Peak", "Notify: switching to 10-week prep in ~2 weeks"
+        elif days_out <= 112:
+            return "Approaching", "Competition approaching — confirm peak timing"
+        else:
+            return "Normal Training", None
 
 
-def comp_message(name, comp_label, days_out):
-    """Return a ready-to-send coaching message appropriate for this phase."""
+def comp_message(name, comp_label, days_out, comp_type="A"):
+    """Return a ready-to-send coaching message appropriate for this phase and type."""
     first = name.split()[0]
     weeks = round(abs(days_out) / 7)
     label = comp_label or "your competition"
+    ct = str(comp_type).upper() if comp_type else "A"
 
-    if days_out < 0:
-        return (
-            f"Hi {first}, how did {label} go? "
-            f"Brilliant effort — take a few days to recover properly and then "
-            f"let's sit down and plan what's next. You've earned the rest."
-        )
-    elif days_out <= 14:
-        return (
-            f"Hi {first}, {label} is {days_out} day{'s' if days_out != 1 else ''} away. "
-            f"You're in the final peak block — everything has been building to this. "
-            f"Trust the process, stay sharp, and we'll have you firing on the day."
-        )
-    elif days_out <= 22:
-        return (
-            f"Hi {first}, 3 weeks out from {label} — time to switch to the "
-            f"2-week peak programme. This block is about sharpening everything up "
-            f"right before competition day. Stay focused and trust your training."
-        )
-    elif days_out <= 77:
-        return (
-            f"Hi {first}, you're {weeks} weeks out from {label} and deep into "
-            f"the 10-week competition prep block. Keep the quality high — "
-            f"we've planned this so you peak exactly when it counts."
-        )
-    elif days_out <= 91:
-        return (
-            f"Hi {first}, {label} is {weeks} weeks away. "
-            f"In about 2 weeks I'll be switching you onto the 10-week peak competition "
-            f"prep programme — keep training hard until then, we're building momentum."
-        )
-    else:
-        return (
-            f"Hi {first}, great to see you've got {label} in the calendar — "
-            f"{weeks} weeks away. Plenty of time to build something special. "
-            f"Stay consistent and we'll plan your peak timing as we get closer."
-        )
+    if ct == "C":
+        if days_out < 0:
+            return (
+                f"Hi {first}, how did {label} go? Good benchmark — "
+                f"let's use that data to inform your training going forward."
+            )
+        elif days_out <= 7:
+            return (
+                f"Hi {first}, {label} is this week — race it as a training stimulus, "
+                f"no taper. Great chance to test your fitness under race conditions."
+            )
+        else:
+            return (
+                f"Hi {first}, {label} is coming up in {weeks} week{'s' if weeks != 1 else ''} — "
+                f"no changes to your training, just treat it as a hard training day."
+            )
+
+    elif ct == "B":
+        if days_out < 0:
+            return (
+                f"Hi {first}, how did {label} go? Great practice run — "
+                f"take a day or two to recover and then back into your main training block."
+            )
+        elif days_out <= 7:
+            return (
+                f"Hi {first}, {label} is this week — I've trimmed the volume slightly "
+                f"so you go in feeling fresh. Race hard and enjoy it."
+            )
+        else:
+            return (
+                f"Hi {first}, {label} is {weeks} week{'s' if weeks != 1 else ''} away — "
+                f"we'll keep your main training running as planned. "
+                f"Think of it as a race-pace effort within your training block."
+            )
+
+    else:  # A competition
+        if days_out < 0:
+            return (
+                f"Hi {first}, how did {label} go? "
+                f"Brilliant effort — take a few days to recover properly and then "
+                f"let's sit down and plan what's next. You've earned the rest."
+            )
+        elif days_out <= 14:
+            return (
+                f"Hi {first}, {label} is {days_out} day{'s' if days_out != 1 else ''} away. "
+                f"You're in the final peak block — everything has been building to this. "
+                f"Trust the process, stay sharp, and we'll have you firing on the day."
+            )
+        elif days_out <= 22:
+            return (
+                f"Hi {first}, 3 weeks out from {label} — time to switch to the "
+                f"2-week peak programme. This block is about sharpening everything up "
+                f"right before competition day. Stay focused and trust your training."
+            )
+        elif days_out <= 77:
+            return (
+                f"Hi {first}, you're {weeks} weeks out from {label} and deep into "
+                f"the 10-week competition prep block. Keep the quality high — "
+                f"we've planned this so you peak exactly when it counts."
+            )
+        elif days_out <= 91:
+            return (
+                f"Hi {first}, {label} is {weeks} weeks away. "
+                f"In about 2 weeks I'll be switching you onto the 10-week peak competition "
+                f"prep programme — keep training hard until then, we're building momentum."
+            )
+        else:
+            return (
+                f"Hi {first}, great to see you've got {label} in the calendar — "
+                f"{weeks} weeks away. Plenty of time to build something special. "
+                f"Stay consistent and we'll plan your peak timing as we get closer."
+            )
 
 
-def comp_schedule(athletes, data_records, today=None):
-    """Return all athletes with a competition date, sorted soonest first.
+def comp_schedule(athletes=None, data_records=None, competition_rows=None, today=None):
+    """Return athletes with competitions, sorted soonest first.
 
-    Each entry: {name, comp_name, comp_date, days_out, weeks_out,
+    Each entry: {name, comp_name, comp_date, comp_type, days_out, weeks_out,
                  phase, action, message_template}
-    Entries with no parseable date or competitions >14 days past are excluded.
+
+    Two data sources (use competition_rows when available):
+      competition_rows — from the Competitions tab (multiple per athlete, has Type column)
+      data_records + athletes — legacy fallback (_DATA Next Competition / Competition Date)
     """
     if today is None:
         today = dt.date.today()
 
-    data_by_name = {}
-    for r in (data_records or []):
-        nm = str(r.get("Full Name", "")).strip()
-        if nm:
-            data_by_name[nm] = r
+    entries = []  # [(name, comp_name, comp_date, comp_type)]
+
+    if competition_rows is not None:
+        for row in competition_rows:
+            name = str(row.get("Athlete Name", "")).strip()
+            if not name:
+                continue
+            comp_name = str(row.get("Competition Name", "")).strip()
+            comp_date_str = str(row.get("Date", "")).strip()
+            raw_type = str(row.get("Type", "")).strip().upper()
+            comp_type = raw_type if raw_type in ("A", "B", "C") else "A"
+            comp_date = _parse_date(comp_date_str)
+            if comp_date:
+                entries.append((name, comp_name, comp_date, comp_type))
+    else:
+        # Legacy: one competition per athlete from _DATA
+        data_by_name = {}
+        for r in (data_records or []):
+            nm = str(r.get("Full Name", "")).strip()
+            if nm:
+                data_by_name[nm] = r
+        for a in (athletes or []):
+            profile = data_by_name.get(a["name"], {})
+            comp_date_str = str(profile.get("Competition Date", "")).strip()
+            comp_name = str(profile.get("Next Competition", "")).strip()
+            if not comp_date_str:
+                continue
+            comp_date = _parse_date(comp_date_str)
+            if comp_date:
+                entries.append((a["name"], comp_name, comp_date, "A"))
 
     results = []
-    for a in athletes:
-        profile = data_by_name.get(a["name"], {})
-        comp_date_str = str(profile.get("Competition Date", "")).strip()
-        comp_name = str(profile.get("Next Competition", "")).strip()
-        if not comp_date_str:
-            continue
-        comp_date = _parse_date(comp_date_str)
-        if not comp_date:
-            continue
-
+    for name, comp_name, comp_date, comp_type in entries:
         days_out = (comp_date - today).days
-        phase, action = comp_phase(days_out)
+        phase, action = comp_phase(days_out, comp_type=comp_type)
         if phase is None:
             continue
-
         results.append({
-            "name": a["name"],
+            "name": name,
             "comp_name": comp_name or "Competition",
             "comp_date": comp_date,
+            "comp_type": comp_type,
             "days_out": days_out,
             "weeks_out": round(days_out / 7, 1) if days_out >= 0 else None,
             "phase": phase,
             "action": action,
-            "message_template": comp_message(a["name"], comp_name, days_out),
+            "message_template": comp_message(name, comp_name, days_out, comp_type=comp_type),
         })
 
     results.sort(key=lambda x: x["days_out"])
+    return results
+
+
+def programme_peer_comparison(name, programme, pr_records, data_records):
+    """Compare one athlete's key benchmarks against others on the same programme.
+
+    Returns a list of dicts:
+      {benchmark, athlete_value, peer_median, peer_count, percentile, direction}
+
+    Only benchmarks where the athlete has a value AND at least 2 peers also have
+    values are included. direction is 'above' / 'below' / 'at' median.
+    """
+    if not programme or not name:
+        return []
+
+    # Build programme -> [names] map from _DATA
+    prog_members = set()
+    for r in (data_records or []):
+        nm = str(r.get("Full Name", "")).strip()
+        prog = str(r.get("Programme", "")).strip()
+        if nm and prog == programme and nm != name:
+            prog_members.add(nm)
+
+    if not prog_members:
+        return []
+
+    # Get latest value per (athlete, benchmark) from PR log
+    latest = {}  # {(nm, bench): value}
+    for r in (pr_records or []):
+        nm = str(r.get("Athlete Name", "")).strip()
+        bench = str(r.get("Benchmark Name", "")).strip()
+        date_str = str(r.get("Date", "")).strip()
+        val_str = str(r.get("Value", "")).strip()
+        if not nm or not bench:
+            continue
+        v = _parse_numeric(val_str)
+        d = _parse_date(date_str)
+        if v is None or d is None:
+            continue
+        key = (nm, bench)
+        if key not in latest or d > latest[key][0]:
+            latest[key] = (d, v)
+
+    # Collect athlete's benchmarks
+    athlete_benches = {
+        bench: v
+        for (nm, bench), (_, v) in latest.items()
+        if nm == name
+    }
+    if not athlete_benches:
+        return []
+
+    results = []
+    for bench, athlete_val in athlete_benches.items():
+        peer_vals = [
+            v for nm in prog_members
+            if (v := (latest.get((nm, bench)) or (None, None))[1]) is not None
+        ]
+        if len(peer_vals) < 2:
+            continue
+        peer_vals_sorted = sorted(peer_vals)
+        median = statistics.median(peer_vals_sorted)
+        n = len(peer_vals_sorted)
+        rank = sum(1 for v in peer_vals_sorted if v <= athlete_val)
+        pct = round(rank / (n + 1) * 100)  # +1 to include the athlete
+
+        if athlete_val > median * 1.02:
+            direction = "above"
+        elif athlete_val < median * 0.98:
+            direction = "below"
+        else:
+            direction = "at"
+
+        results.append({
+            "benchmark": bench,
+            "athlete_value": athlete_val,
+            "peer_median": round(median, 1),
+            "peer_count": n,
+            "percentile": pct,
+            "direction": direction,
+        })
+
+    results.sort(key=lambda x: -abs(x["percentile"] - 50))  # most divergent first
     return results
 
 

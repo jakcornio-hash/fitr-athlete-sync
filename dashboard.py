@@ -16,6 +16,7 @@ import pandas as pd
 import analytics
 import archetypes as arch_mod
 import config
+import message_templates as msg_tmpl
 import recovery as rec_mod
 
 _CHAT_DATE_RE = re.compile(r'\[(\d{4}-\d{2}-\d{2}) — chat\]')
@@ -41,10 +42,21 @@ _RECOVERY_SHEET_ID = "1hSBGVWppOfzI1GUO-ZK74tgLbSye8apDpLn3b2QDoys"
 def get_sheets():
     """Return SheetsClient, using Streamlit secrets on Cloud or .env locally."""
     from sheets_client import SheetsClient
-    if "gcp_service_account" in st.secrets:
-        sa = dict(st.secrets["gcp_service_account"])
-        config.SHEET_ID = config.SHEET_ID or _SHEET_ID
-        config.RECOVERY_SHEET_ID = config.RECOVERY_SHEET_ID or _RECOVERY_SHEET_ID
+    # Support both key names: GOOGLE_SERVICE_ACCOUNT (our template) and
+    # gcp_service_account (Streamlit's built-in gspread shorthand)
+    sa_key = next(
+        (k for k in ("GOOGLE_SERVICE_ACCOUNT", "gcp_service_account") if k in st.secrets),
+        None,
+    )
+    if sa_key:
+        sa = dict(st.secrets[sa_key])
+        # Pull Sheet IDs from secrets if not already set via env
+        if not config.SHEET_ID and "SHEET_ID" in st.secrets:
+            config.SHEET_ID = st.secrets["SHEET_ID"]
+        if not config.RECOVERY_SHEET_ID and "RECOVERY_SHEET_ID" in st.secrets:
+            config.RECOVERY_SHEET_ID = st.secrets["RECOVERY_SHEET_ID"]
+        if not config.COMP_FORM_SHEET_ID and "COMP_FORM_SHEET_ID" in st.secrets:
+            config.COMP_FORM_SHEET_ID = st.secrets["COMP_FORM_SHEET_ID"]
         return SheetsClient(service_account_info=sa)
     return SheetsClient()  # local dev — uses .env + service_account.json
 
@@ -92,10 +104,16 @@ def load_all():
     except Exception:
         pass
 
-    return pr_records, athletes, rec_latest, data_records, archetype_rows
+    competition_rows = []
+    try:
+        competition_rows = sheets.load_competitions()
+    except Exception:
+        pass
+
+    return pr_records, athletes, rec_latest, data_records, archetype_rows, competition_rows
 
 
-def run_analytics(pr_records, athletes, rec_latest, data_records=None):  # noqa: too-many-locals
+def run_analytics(pr_records, athletes, rec_latest, data_records=None, competition_rows=None):  # noqa: too-many-locals
     trend_results = analytics.trend_analysis(pr_records)
 
     # Parse most recent chat date per athlete from Coaching Notes in _DATA
@@ -131,7 +149,12 @@ def run_analytics(pr_records, athletes, rec_latest, data_records=None):  # noqa:
         if em.lower() in email_to_name
     }
     rec_alert_rows = analytics.recovery_alerts(rec_by_name)
-    comp_results = analytics.comp_schedule(athletes, data_records)
+
+    # Use the Competitions tab if available; fall back to _DATA columns
+    if competition_rows:
+        comp_results = analytics.comp_schedule(competition_rows=competition_rows)
+    else:
+        comp_results = analytics.comp_schedule(athletes=athletes, data_records=data_records)
 
     return trend_results, engagement_results, consistency_wins, rec_alert_rows, rec_by_name, comp_results
 
@@ -461,7 +484,8 @@ def _archetype_panel(name, archetype_by_name, profile=None):
 
 
 def _athlete_profile_panel(name, data_by_name, pr_records, trend_results,
-                           engagement_results, rec_by_name, archetype_by_name=None):
+                           engagement_results, rec_by_name, archetype_by_name=None,
+                           competition_rows=None, data_records=None):
     """Render the full profile panel for one athlete."""
     profile = data_by_name.get(name, {})
 
@@ -518,21 +542,42 @@ def _athlete_profile_panel(name, data_by_name, pr_records, trend_results,
             st.markdown(f"- **{label}:** {val}")
 
         st.markdown("")
-        st.markdown("**Programme**")
-        current_prog = str(profile.get("Programme", "")).strip()
-        prog_options = ["— not set —"] + config.JST_TRACKS
-        prog_idx = prog_options.index(current_prog) if current_prog in prog_options else 0
-        sel_prog = st.selectbox(
-            "Programme", prog_options, index=prog_idx,
-            label_visibility="collapsed", key=f"prog_sel_{name}",
-        )
-        new_prog = "" if sel_prog == "— not set —" else sel_prog
-        if st.button("Save Programme", key=f"prog_save_{name}", type="secondary"):
-            get_sheets().batch_update_by_name(
-                config.TAB_DATA, "Full Name", {name: {"Programme": new_prog}}
+
+        # Tier + Programme on one row
+        ta, tb = st.columns(2)
+        with ta:
+            st.markdown("**Tier**")
+            current_tier = str(profile.get("Tier", "")).strip()
+            tier_opts = ["— not set —"] + config.JST_TIERS
+            tier_idx = tier_opts.index(current_tier) if current_tier in tier_opts else 0
+            sel_tier = st.selectbox(
+                "Tier", tier_opts, index=tier_idx,
+                label_visibility="collapsed", key=f"tier_sel_{name}",
             )
-            st.success(f"Saved: {new_prog or '(cleared)'}")
-            st.cache_data.clear()
+            if st.button("Save Tier", key=f"tier_save_{name}", type="secondary"):
+                new_tier = "" if sel_tier == "— not set —" else sel_tier
+                get_sheets().batch_update_by_name(
+                    config.TAB_DATA, "Full Name", {name: {"Tier": new_tier}}
+                )
+                st.success(f"Tier: {new_tier or '(cleared)'}")
+                st.cache_data.clear()
+
+        with tb:
+            st.markdown("**Programme**")
+            current_prog = str(profile.get("Programme", "")).strip()
+            prog_options = ["— not set —"] + config.JST_TRACKS
+            prog_idx = prog_options.index(current_prog) if current_prog in prog_options else 0
+            sel_prog = st.selectbox(
+                "Programme", prog_options, index=prog_idx,
+                label_visibility="collapsed", key=f"prog_sel_{name}",
+            )
+            new_prog = "" if sel_prog == "— not set —" else sel_prog
+            if st.button("Save Programme", key=f"prog_save_{name}", type="secondary"):
+                get_sheets().batch_update_by_name(
+                    config.TAB_DATA, "Full Name", {name: {"Programme": new_prog}}
+                )
+                st.success(f"Saved: {new_prog or '(cleared)'}")
+                st.cache_data.clear()
 
         st.markdown("")
         inj_status = str(profile.get("Injury Status", "")).strip()
@@ -558,47 +603,144 @@ def _athlete_profile_panel(name, data_by_name, pr_records, trend_results,
 
     st.divider()
 
-    # ── Competition prep ──────────────────────────────────────────────────────
-    comp_name = str(profile.get("Next Competition", "")).strip()
-    comp_date_str = str(profile.get("Competition Date", "")).strip()
-    comp_date = _parse_date(comp_date_str) if comp_date_str else None
+    # ── Competition calendar ───────────────────────────────────────────────────
+    st.markdown("**🏁 Competition Calendar**")
 
-    st.markdown("**🏁 Competition Prep**")
-    if comp_date:
-        days_out = (comp_date - TODAY).days
-        phase, action = analytics.comp_phase(days_out)
-        emoji = _PHASE_EMOJI.get(phase, "⚪")
+    # Filter this athlete's competitions from the Competitions tab
+    athlete_comps = []
+    if competition_rows:
+        for cr in competition_rows:
+            if str(cr.get("Athlete Name", "")).strip() == name:
+                cd = _parse_date(str(cr.get("Date", "")).strip())
+                if cd:
+                    athlete_comps.append({
+                        "comp_name": str(cr.get("Competition Name", "")).strip() or "Competition",
+                        "comp_date": cd,
+                        "comp_type": str(cr.get("Type", "A")).strip().upper() or "A",
+                        "notes": str(cr.get("Notes", "")).strip(),
+                    })
+        athlete_comps.sort(key=lambda x: x["comp_date"])
 
-        cc1, cc2, cc3 = st.columns(3)
-        if days_out >= 0:
-            w, d = divmod(days_out, 7)
-            cc1.metric(comp_name or "Competition", f"{w}w {d}d")
-        else:
-            cc1.metric(comp_name or "Competition", f"{abs(days_out)}d ago")
-        cc2.markdown(f"**Phase**  \n{emoji} {phase}")
-        if action:
-            cc3.markdown(f"**Action**  \n⚡ {action}")
+    if athlete_comps:
+        comp_rows_display = []
+        for c in athlete_comps:
+            days_out = (c["comp_date"] - TODAY).days
+            phase, _ = analytics.comp_phase(days_out, comp_type=c["comp_type"])
+            if days_out >= 0:
+                w, d = divmod(days_out, 7)
+                time_str = f"{w}w {d}d" if w else f"{d}d"
+            else:
+                time_str = f"{abs(days_out)}d ago"
+            comp_rows_display.append({
+                "Type": _COMP_TYPE_LABEL.get(c["comp_type"], c["comp_type"]),
+                "Competition": c["comp_name"],
+                "Date": c["comp_date"].strftime("%d %b %Y"),
+                "Time Out": time_str,
+                "Phase": f"{_PHASE_EMOJI.get(phase, chr(9898))} {phase}" if phase else "—",
+            })
+        st.dataframe(pd.DataFrame(comp_rows_display), use_container_width=True, hide_index=True)
 
-        msg = analytics.comp_message(name, comp_name, days_out)
-        with st.expander("📨 Message Template — click to copy"):
-            st.code(msg, language=None)
+        # Show full coaching panel for the nearest upcoming A competition
+        next_a = next(
+            (c for c in athlete_comps
+             if c["comp_type"] == "A" and (c["comp_date"] - TODAY).days >= -14),
+            None
+        )
+        if next_a:
+            days_out = (next_a["comp_date"] - TODAY).days
+            phase, action = analytics.comp_phase(days_out, comp_type="A")
+            emoji = _PHASE_EMOJI.get(phase, chr(9898))
+            cc1, cc2, cc3 = st.columns(3)
+            if days_out >= 0:
+                w, d = divmod(days_out, 7)
+                cc1.metric(next_a["comp_name"], f"{w}w {d}d", help="Next A competition")
+            else:
+                cc1.metric(next_a["comp_name"], f"{abs(days_out)}d ago")
+            cc2.markdown(f"**Phase**  \n{emoji} {phase}")
+            if action:
+                cc3.markdown(f"**Action**  \n⚡ {action}")
+            msg = analytics.comp_message(name, next_a["comp_name"], days_out, comp_type="A")
+            with st.expander("\U0001f4e8 Message Template — click to copy"):
+                st.code(msg, language=None)
     else:
-        st.caption("No competition date set.")
+        # Fall back to legacy _DATA comp fields if no Competitions tab entries
+        comp_name = str(profile.get("Next Competition", "")).strip()
+        comp_date_str = str(profile.get("Competition Date", "")).strip()
+        comp_date = _parse_date(comp_date_str) if comp_date_str else None
+        if comp_date:
+            days_out = (comp_date - TODAY).days
+            phase, action = analytics.comp_phase(days_out)
+            emoji = _PHASE_EMOJI.get(phase, chr(9898))
+            cc1, cc2, cc3 = st.columns(3)
+            if days_out >= 0:
+                w, d = divmod(days_out, 7)
+                cc1.metric(comp_name or "Competition", f"{w}w {d}d")
+            else:
+                cc1.metric(comp_name or "Competition", f"{abs(days_out)}d ago")
+            cc2.markdown(f"**Phase**  \n{emoji} {phase}")
+            if action:
+                cc3.markdown(f"**Action**  \n⚡ {action}")
+            msg = analytics.comp_message(name, comp_name, days_out)
+            with st.expander("\U0001f4e8 Message Template — click to copy"):
+                st.code(msg, language=None)
+        else:
+            st.caption("No competitions planned. Use the form below to add one.")
 
-    with st.expander("✏️ Update Competition Details"):
-        with st.form(f"comp_form_{name}", clear_on_submit=False):
-            new_comp_name = st.text_input("Competition Name", value=comp_name, key=f"comp_name_{name}")
+    # A/B/C guidance
+    with st.expander("ℹ️ What are A, B, and C competitions?"):
+        st.markdown("""
+**\U0001f947 A Competition — Primary goal event**
+Everything points to this. You run a full peak block: 10-week prep followed by a 2-week final peak. Training is structured around peaking for this date. Athletes should have 1–3 per year maximum.
+
+**\U0001f948 B Competition — Secondary race**
+Athletes race hard and get a real result, but training doesn't change around it. It's a test of current fitness within the existing training phase — great for benchmarking and race-day practice. Minor volume reduction in race week only.
+
+**\U0001f949 C Competition — Training day**
+Show up and compete, but treat it like a hard training session. No taper, no disruption to the programme. Good for staying sharp, building race experience, or breaking up a long training block.
+
+*The A/B/C system comes from periodization theory — it's how elite endurance and CrossFit coaches structure a competitive year so athletes peak when it matters most.*
+        """)
+
+    # Add competition form
+    with st.expander("➕ Add Competition"):
+        with st.form(f"add_comp_form_{name}", clear_on_submit=True):
+            new_comp_name = st.text_input("Competition Name", key=f"add_comp_name_{name}",
+                                          placeholder="e.g. CrossFit Open 2027")
             new_comp_date = st.text_input(
-                "Competition Date (DD/MM/YYYY or YYYY-MM-DD)",
-                value=comp_date_str, key=f"comp_date_{name}",
+                "Competition Date (DD/MM/YYYY)", key=f"add_comp_date_{name}",
+                placeholder="e.g. 15/01/2027",
             )
-            if st.form_submit_button("Save Competition"):
-                get_sheets().batch_update_by_name(
-                    config.TAB_DATA, "Full Name",
-                    {name: {"Next Competition": new_comp_name, "Competition Date": new_comp_date}},
-                )
-                st.success("Competition details saved.")
-                st.cache_data.clear()
+            comp_type_choice = st.radio(
+                "Competition Type",
+                options=["A", "B", "C"],
+                format_func=lambda t: {
+                    "A": "\U0001f947 A — Primary goal. Full taper and peak programme.",
+                    "B": "\U0001f948 B — Secondary race. Race hard, no programme change.",
+                    "C": "\U0001f949 C — Training day. Compete, no taper.",
+                }[t],
+                horizontal=False,
+                key=f"add_comp_type_{name}",
+            )
+            new_comp_notes = st.text_input("Notes (optional)", key=f"add_comp_notes_{name}",
+                                           placeholder="e.g. Targeting podium / team event")
+            if st.form_submit_button("Add to Competition Calendar", type="primary"):
+                if new_comp_name.strip() and new_comp_date.strip():
+                    parsed = _parse_date(new_comp_date.strip())
+                    if parsed:
+                        get_sheets().save_competition({
+                            "Athlete Name": name,
+                            "Competition Name": new_comp_name.strip(),
+                            "Date": new_comp_date.strip(),
+                            "Type": comp_type_choice,
+                            "Notes": new_comp_notes.strip(),
+                            "Synced At": TODAY.isoformat(),
+                        })
+                        st.success(f"Added {new_comp_name.strip()} ({comp_type_choice}) — {parsed.strftime('%d %b %Y')}")
+                        st.cache_data.clear()
+                    else:
+                        st.error("Could not parse the date — use DD/MM/YYYY format.")
+                else:
+                    st.warning("Competition name and date are required.")
 
     st.divider()
 
@@ -681,9 +823,98 @@ def _athlete_profile_panel(name, data_by_name, pr_records, trend_results,
                 else:
                     st.warning("Note is empty.")
 
+    st.divider()
+
+    # ── Programme peer comparison ─────────────────────────────────────────────
+    programme = str(profile.get("Programme", "")).strip()
+    if programme:
+        peer_data = analytics.programme_peer_comparison(name, programme, pr_records, data_records or list(data_by_name.values()))
+
+        if peer_data:
+            st.markdown("**📊 Programme Peer Comparison**")
+            st.caption(f"vs others on {programme}")
+            _dir_icons = {"above": "🟢", "below": "🔴", "at": "⚪"}
+            for p in peer_data[:6]:
+                icon = _dir_icons.get(p["direction"], "⚪")
+                short_bench = (
+                    p["benchmark"]
+                    .replace(" (kg)", "")
+                    .replace(" (mm:ss)", "")
+                    .replace("1RM ", "")
+                )
+                pct_txt = f"{p['percentile']}th percentile"
+                peer_txt = f"median {p['peer_median']}"
+                st.markdown(
+                    f"{icon} **{short_bench}:** {p['athlete_value']} "
+                    f"({pct_txt}, {peer_txt}, n={p['peer_count']})"
+                )
+
+    st.divider()
+
+    # ── Journey timeline ───────────────────────────────────────────────────────
+    with st.expander("📅 Full Journey Timeline", expanded=False):
+        events = []
+
+        # PR log entries
+        for r in pr_records:
+            if str(r.get("Athlete Name", "")).strip() != name:
+                continue
+            d = _parse_date(str(r.get("Date", "")))
+            bench = str(r.get("Benchmark Name", "")).strip()
+            val = str(r.get("Value", "")).strip()
+            note = str(r.get("Note", "")).strip()
+            if d and bench:
+                label = f"{bench}: {val}"
+                if note:
+                    label += f" — \"{note}\""
+                events.append({"date": d.isoformat(), "icon": "🏆", "kind": "result", "text": label})
+
+        # Coaching notes (already parsed above)
+        for entry in timeline:
+            events.append({
+                "date": entry["date"],
+                "icon": {"chat": "💬", "result": "🏆", "recovery": "💤"}.get(entry["kind"], "📌"),
+                "kind": entry["kind"],
+                "text": entry["text"],
+            })
+
+        # Competition entries
+        if competition_rows:
+            for cr in competition_rows:
+                if str(cr.get("Athlete Name", "")).strip() != name:
+                    continue
+                cd = _parse_date(str(cr.get("Date", "")).strip())
+                if cd:
+                    ct = str(cr.get("Type", "A")).strip()
+                    badge = _COMP_TYPE_LABEL.get(ct, ct)
+                    events.append({
+                        "date": cd.isoformat(),
+                        "icon": badge[:2],
+                        "kind": "competition",
+                        "text": f"{str(cr.get('Competition Name', '')).strip()} ({ct}-race)",
+                    })
+
+        if not events:
+            st.caption("No events recorded yet.")
+        else:
+            events.sort(key=lambda x: x["date"], reverse=True)
+            current_month = None
+            for ev in events:
+                try:
+                    month = ev["date"][:7]  # YYYY-MM
+                    month_label = dt.datetime.strptime(month, "%Y-%m").strftime("%B %Y")
+                except (ValueError, TypeError):
+                    month_label = ev["date"][:7]
+                    month = month_label
+                if month != current_month:
+                    st.markdown(f"**{month_label}**")
+                    current_month = month
+                st.markdown(f"&nbsp;&nbsp;{ev['icon']} `{ev['date'][5:]}` &nbsp; {ev['text']}")
+
 
 def page_athletes(pr_records, athletes, trend_results, engagement_results,
-                  rec_by_name, data_records=None, archetype_by_name=None):
+                  rec_by_name, data_records=None, archetype_by_name=None,
+                  competition_rows=None):
     # Build per-name lookup from _DATA
     data_by_name = {}
     for rec in (data_records or []):
@@ -750,7 +981,40 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
             "Logging": "📝 Nudge" if nudge else ("✅ Active" if (days is not None and days < 28) else "⚠️ Inactive"),
         })
 
-    df = pd.DataFrame(summary_rows)
+    # ── Filters ───────────────────────────────────────────────────────────────
+    all_programmes = sorted({r["Programme"] for r in summary_rows})
+    all_tiers = sorted(filter(None, {
+        str(data_by_name.get(a["name"], {}).get("Tier", "")).strip()
+        for a in athletes
+    }))
+    all_archetypes = sorted(filter(None, {r["Archetype"] for r in summary_rows if r["Archetype"] != "—"}))
+    all_statuses = sorted({r["Logging"] for r in summary_rows})
+
+    fc1, fc2, fc3, fc4 = st.columns(4)
+    f_prog = fc1.multiselect("Programme", all_programmes, placeholder="All")
+    f_tier = fc2.multiselect("Tier", all_tiers, placeholder="All")
+    f_arch = fc3.multiselect("Archetype", all_archetypes, placeholder="All")
+    f_status = fc4.multiselect("Status", all_statuses, placeholder="All")
+
+    filtered_rows = summary_rows
+    if f_prog:
+        filtered_rows = [r for r in filtered_rows if r["Programme"] in f_prog]
+    if f_tier:
+        filtered_rows = [
+            r for r in filtered_rows
+            if str(data_by_name.get(r["Name"], {}).get("Tier", "")).strip() in f_tier
+        ]
+    if f_arch:
+        filtered_rows = [r for r in filtered_rows if r["Archetype"] in f_arch]
+    if f_status:
+        filtered_rows = [r for r in filtered_rows if r["Logging"] in f_status]
+
+    total = len(summary_rows)
+    shown = len(filtered_rows)
+    if shown < total:
+        st.caption(f"Showing {shown} of {total} athletes")
+
+    df = pd.DataFrame(filtered_rows)
 
     st.caption("Click a row to open the full athlete profile.")
     event = st.dataframe(
@@ -765,6 +1029,7 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
         _athlete_profile_panel(
             selected_name, data_by_name, pr_records, trend_results,
             engagement_results, rec_by_name, archetype_by_name=archetype_by_name,
+            competition_rows=competition_rows, data_records=data_records,
         )
     else:
         st.caption("No athlete selected.")
@@ -873,6 +1138,7 @@ def page_recovery(rec_by_name):
 
 
 _PHASE_EMOJI = {
+    # A competition phases
     "Post-Competition":      "🟣",
     "2-Week Peak Prep":      "🔴",
     "Switch → 2-Week Prep":  "🚨",
@@ -881,18 +1147,35 @@ _PHASE_EMOJI = {
     "Pre-Peak":              "🟡",
     "Approaching":           "🟢",
     "Normal Training":       "⚪",
+    # B competition phases
+    "B — Race Week":         "🥈",
+    "B — Final Prep":        "🥈",
+    "B — Approaching":       "🥈",
+    # C competition phases
+    "C — Race Week":         "🥉",
+    "C — Coming Up":         "🥉",
 }
 
+_COMP_TYPE_LABEL = {"A": "🥇 A", "B": "🥈 B", "C": "🥉 C"}
 
-def page_competitions(comp_results, athletes, data_records):
+
+def page_competitions(comp_results, athletes, data_records, competition_rows=None):
     data_by_name = {str(r.get("Full Name", "")).strip(): r for r in (data_records or [])}
     all_names = {a["name"] for a in athletes}
 
     if comp_results:
         st.subheader("Upcoming & Recent Competitions")
+
+        # Sort: A first within each type, then soonest
+        a_comps = [c for c in comp_results if c.get("comp_type") == "A"]
+        b_comps = [c for c in comp_results if c.get("comp_type") == "B"]
+        c_comps = [c for c in comp_results if c.get("comp_type") == "C"]
+
         rows = []
         for c in comp_results:
-            emoji = _PHASE_EMOJI.get(c["phase"], "⚪")
+            ct = c.get("comp_type", "A")
+            emoji = _PHASE_EMOJI.get(c["phase"], chr(9898))
+            type_badge = _COMP_TYPE_LABEL.get(ct, ct)
             if c["days_out"] >= 0:
                 w, d = divmod(c["days_out"], 7)
                 time_str = f"{w}w {d}d" if w else f"{d}d"
@@ -901,6 +1184,7 @@ def page_competitions(comp_results, athletes, data_records):
             prog = str(data_by_name.get(c["name"], {}).get("Programme", "")).strip()
             prog_short = prog.replace(" - 2 Sessions Per Day", " 2x").replace(" - 1 Session Per Day", " 1x")
             rows.append({
+                "Type": type_badge,
                 "": emoji,
                 "Athlete": c["name"],
                 "Competition": c["comp_name"],
@@ -911,14 +1195,24 @@ def page_competitions(comp_results, athletes, data_records):
                 "Programme": prog_short or "—",
             })
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        # Summary counts
+        if a_comps or b_comps or c_comps:
+            mc1, mc2, mc3 = st.columns(3)
+            mc1.metric("A-Race Competitions", len(a_comps))
+            mc2.metric("B-Race Competitions", len(b_comps))
+            mc3.metric("C-Race / Training Days", len(c_comps))
         st.divider()
 
-    # Actionable panel: athletes at transition points
+    # Actionable panel: A-competition transitions (only A comps require programme switches)
     action_items = [c for c in comp_results if c["action"]]
-    if action_items:
-        st.subheader("⚡ Actions Required Now")
-        for c in action_items:
-            emoji = _PHASE_EMOJI.get(c["phase"], "⚡")
+    a_actions = [c for c in action_items if c.get("comp_type") == "A"]
+    bc_actions = [c for c in action_items if c.get("comp_type") in ("B", "C")]
+
+    if a_actions:
+        st.subheader("⚡ A-Race: Actions Required Now")
+        for c in a_actions:
+            emoji = _PHASE_EMOJI.get(c["phase"], chr(9889))
             with st.expander(f"{emoji} {c['name']} — {c['action']}", expanded=True):
                 col1, col2 = st.columns([1, 2])
                 with col1:
@@ -928,13 +1222,92 @@ def page_competitions(comp_results, athletes, data_records):
                 with col2:
                     st.markdown("**Ready-to-send message:**")
                     st.code(c["message_template"], language=None)
+
+    if bc_actions:
+        st.subheader("B/C Race Reminders")
+        for c in bc_actions:
+            ct = c.get("comp_type", "B")
+            badge = _COMP_TYPE_LABEL.get(ct, ct)
+            emoji = _PHASE_EMOJI.get(c["phase"], chr(9898))
+            with st.expander(f"{badge} {emoji} {c['name']} — {c['action']}", expanded=False):
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    st.metric(c["comp_name"] or "Competition", c["comp_date"].strftime("%d %b %Y"))
+                    w, d = divmod(max(c["days_out"], 0), 7)
+                    st.caption(f"{w}w {d}d out — {c['phase']}")
+                with col2:
+                    st.code(c["message_template"], language=None)
+
+    if action_items:
         st.divider()
 
-    # Athletes without a competition date
+    # Annual competition calendar
+    if competition_rows:
+        st.subheader("📅 Annual Competition Calendar")
+        cal_rows = []
+        for row in competition_rows:
+            name = str(row.get("Athlete Name", "")).strip()
+            comp_name = str(row.get("Competition Name", "")).strip()
+            raw_date = str(row.get("Date", "")).strip()
+            comp_type = str(row.get("Type", "A")).strip() or "A"
+            d = _parse_date(raw_date)
+            if d and name:
+                cal_rows.append({
+                    "Athlete": name,
+                    "Competition": comp_name or "Unnamed",
+                    "Date": d,
+                    "Type": comp_type,
+                })
+        if cal_rows:
+            cal_df = pd.DataFrame(cal_rows)
+            cal_df["Date"] = pd.to_datetime(cal_df["Date"])
+            # Sort athletes by earliest upcoming comp
+            athlete_order = (
+                cal_df[cal_df["Date"] >= pd.Timestamp(TODAY)]
+                .groupby("Athlete")["Date"]
+                .min()
+                .sort_values()
+                .index.tolist()
+            )
+            remaining = [a for a in sorted(cal_df["Athlete"].unique()) if a not in athlete_order]
+            athlete_order = athlete_order + remaining
+
+            color_scale = alt.Scale(
+                domain=["A", "B", "C"],
+                range=["#FFD700", "#C0C0C0", "#CD7F32"],
+            )
+            today_rule = (
+                alt.Chart(pd.DataFrame({"today": [pd.Timestamp(TODAY)]}))
+                .mark_rule(color="red", strokeDash=[4, 4], strokeWidth=1.5)
+                .encode(x=alt.X("today:T"))
+            )
+            points = (
+                alt.Chart(cal_df)
+                .mark_point(size=120, filled=True, opacity=0.85)
+                .encode(
+                    x=alt.X("Date:T", title="Date", axis=alt.Axis(format="%b %Y")),
+                    y=alt.Y("Athlete:N", sort=athlete_order, title=""),
+                    color=alt.Color("Type:N", scale=color_scale, legend=alt.Legend(title="Type")),
+                    shape=alt.Shape(
+                        "Type:N",
+                        scale=alt.Scale(domain=["A", "B", "C"], range=["triangle-up", "circle", "square"]),
+                    ),
+                    tooltip=["Athlete:N", "Competition:N", "Date:T", "Type:N"],
+                )
+            )
+            chart = (today_rule + points).properties(
+                height=max(200, len(athlete_order) * 30),
+            ).interactive()
+            st.altair_chart(chart, use_container_width=True)
+            st.caption("🔴 dashed line = today  |  🥇 A-race  🥈 B-race  🥉 C-race")
+        st.divider()
+
+    # Athletes without any competition planned
     with_comp = {c["name"] for c in comp_results}
     no_comp = sorted(all_names - with_comp)
     if no_comp:
-        with st.expander(f"{len(no_comp)} athletes without a competition date"):
+        with st.expander(f"{len(no_comp)} athletes with no competitions planned"):
+            st.caption("Share your competition planner Typeform link so they can add their races.")
             st.write(", ".join(no_comp))
 
 
@@ -997,7 +1370,8 @@ def page_programmes(athletes, pr_records, trend_results, data_records):
         st.markdown(f"**{len(unassigned)} not yet assigned:**  " + ", ".join(sorted(unassigned)))
 
 
-def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins, comp_results=None):
+def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
+                  consistency_wins, comp_results=None, archetype_by_name=None):
     """Prioritised list of every athlete who needs contact this week."""
     rows = []
 
@@ -1009,6 +1383,8 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
             "Reason": alert[1],
             "Action": "Recovery check-in",
             "_order": 0,
+            "_reason_type": "recovery_flag",
+            "_ctx": {"issue": alert[1]},
         })
 
     # 2. Milestones — quick win to celebrate
@@ -1023,6 +1399,8 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
             "Reason": reason,
             "Action": "Congratulate",
             "_order": 1,
+            "_reason_type": "celebrate",
+            "_ctx": {"result": reason},
         })
 
     # 3. Consistency streaks — acknowledge
@@ -1033,6 +1411,8 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
             "Reason": f"{weeks} consecutive weeks logging",
             "Action": "Acknowledge streak",
             "_order": 2,
+            "_reason_type": "consistency",
+            "_ctx": {"weeks": weeks},
         })
 
     # 4. Long-term dropout (45+ days) — urgent re-engage
@@ -1049,6 +1429,8 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
                 "Reason": reason,
                 "Action": "Re-engagement message",
                 "_order": 3,
+                "_reason_type": "never_logged" if never else "re_engage",
+                "_ctx": {} if never else {"days": days},
             })
 
     # 5. Performance concerns
@@ -1066,6 +1448,8 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
                     "Reason": f"{s['benchmark']}: {', '.join(parts)}",
                     "Action": "Performance check-in",
                     "_order": 4,
+                    "_reason_type": "performance_concern",
+                    "_ctx": {"bench": s["benchmark"]},
                 })
 
     # 6. Standard inactive (28-44 days)
@@ -1080,6 +1464,8 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
                 "Reason": f"{days} days inactive (last: {e['last_logged']})",
                 "Action": "Check-in message",
                 "_order": 5,
+                "_reason_type": "re_engage",
+                "_ctx": {"days": days},
             })
 
     # 7. Competition prep — phase transitions
@@ -1087,22 +1473,33 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
         if not c["action"]:
             continue
         phase = c["phase"]
-        if phase == "Post-Competition":
-            priority, order = "🟣 Post-Comp", 0
-        elif "Switch" in phase:
-            priority, order = "🚨 Programme Switch", 1
-        elif phase == "Pre-Peak":
-            priority, order = "🏁 Comp Prep", 2
-        else:
-            priority, order = "🏁 Comp Prep", 3
+        ct = c.get("comp_type", "A")
         w, d = divmod(max(c["days_out"], 0), 7)
         time_str = f"{abs(c['days_out'])}d ago" if c["days_out"] < 0 else f"{w}w {d}d out"
+        badge = _COMP_TYPE_LABEL.get(ct, ct)
+        if ct == "A":
+            if phase == "Post-Competition":
+                priority, order = "🟣 Post-Comp", 0
+            elif "Switch" in phase:
+                priority, order = "🚨 Programme Switch", 1
+            elif phase == "Pre-Peak":
+                priority, order = "🏁 Comp Prep", 2
+            else:
+                priority, order = "🏁 Comp Prep", 3
+        else:
+            if phase == "Post-Competition":
+                priority, order = "🟣 Post-Comp", 0
+            else:
+                priority, order = "🏁 Comp Prep", 3
         rows.append({
             "Priority": priority,
             "Athlete": c["name"],
-            "Reason": f"{c['comp_name']} — {time_str}",
+            "Reason": f"{badge} {c['comp_name']} — {time_str}",
             "Action": c["action"],
             "_order": order,
+            "_reason_type": "post_comp" if phase == "Post-Competition" else None,
+            "_ctx": {"comp": c["comp_name"]},
+            "_comp_msg": c["message_template"],  # use pre-built comp message
         })
 
     # 8. In contact but not logging — monthly nudge
@@ -1121,37 +1518,122 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
             "Reason": reason,
             "Action": "Ask them to record their results",
             "_order": 6,
+            "_reason_type": "nudge_to_log",
+            "_ctx": {},
         })
 
     rows.sort(key=lambda x: x["_order"])
-    for r in rows:
-        del r["_order"]
 
     if not rows:
         st.success("Nothing to action this week — all athletes on track.")
         return
 
+    # ── Summary table ────────────────────────────────────────────────────────
+    display_cols = ["Priority", "Athlete", "Reason", "Action"]
+    df = pd.DataFrame([{k: r[k] for k in display_cols} for r in rows])
+
     st.caption(f"{len(rows)} athletes to contact this week")
-    df = pd.DataFrame(rows)
 
     def _row_colour(row):
         colours = {
-            "🔴 Contact Today":   "background-color: #ffe5e5",
-            "🏆 Celebrate":       "background-color: #fff8e1",
-            "✅ Positive":        "background-color: #e8f5e9",
-            "⚠️ Re-engage":       "background-color: #fff3e0",
-            "⚠️ Check In":        "background-color: #fff3e0",
-            "📉 Performance":     "background-color: #fce4ec",
-            "🟣 Post-Comp":       "background-color: #f3e5f5",
-            "🚨 Programme Switch":"background-color: #fff3e0",
-            "🏁 Comp Prep":       "background-color: #e8eaf6",
-            "📝 Remind to Log":   "background-color: #e3f2fd",
+            "🔴 Contact Today":    "background-color: #ffe5e5",
+            "🏆 Celebrate":        "background-color: #fff8e1",
+            "✅ Positive":         "background-color: #e8f5e9",
+            "⚠️ Re-engage":        "background-color: #fff3e0",
+            "⚠️ Check In":         "background-color: #fff3e0",
+            "📉 Performance":      "background-color: #fce4ec",
+            "🟣 Post-Comp":        "background-color: #f3e5f5",
+            "🚨 Programme Switch": "background-color: #fff3e0",
+            "🏁 Comp Prep":        "background-color: #e8eaf6",
+            "📝 Remind to Log":    "background-color: #e3f2fd",
         }
         colour = colours.get(row["Priority"], "")
         return [colour] * len(row)
 
     styled = df.style.apply(_row_colour, axis=1)
-    st.dataframe(styled, use_container_width=True, hide_index=True, height=600)
+    st.dataframe(styled, use_container_width=True, hide_index=True, height=500)
+
+    # ── Bulk export ───────────────────────────────────────────────────────────
+    st.divider()
+    def _build_export(rows, archetype_by_name):
+        import io
+        buf = io.StringIO()
+        buf.write(f"# JST Compete — Outreach List\n")
+        buf.write(f"Generated: {dt.datetime.now().strftime('%d %b %Y %H:%M')}\n")
+        buf.write(f"{len(rows)} athletes to contact\n\n---\n\n")
+        for r in rows:
+            name = r["Athlete"]
+            arch_row = (archetype_by_name or {}).get(name)
+            arch_id = str(arch_row.get("Primary Archetype", "")).strip() if arch_row else None
+            reason_type = r.get("_reason_type")
+            ctx = r.get("_ctx", {})
+            comp_msg = r.get("_comp_msg")
+            if comp_msg and not reason_type:
+                msg = comp_msg
+            elif reason_type:
+                msg = msg_tmpl.generate_message(name, reason_type, ctx, arch_id)
+            else:
+                msg = ""
+            buf.write(f"## {name}\n")
+            buf.write(f"**Priority:** {r['Priority']}  \n")
+            buf.write(f"**Reason:** {r['Reason']}  \n")
+            buf.write(f"**Action:** {r['Action']}  \n")
+            if msg:
+                buf.write(f"\n**Message:**\n\n> {msg}\n")
+            buf.write("\n---\n\n")
+        return buf.getvalue()
+
+    export_md = _build_export(rows, archetype_by_name)
+    st.download_button(
+        label="📥 Export Outreach List",
+        data=export_md,
+        file_name=f"outreach_{dt.datetime.now().strftime('%Y%m%d')}.md",
+        mime="text/markdown",
+        help="Download all outreach items with archetype-aware messages as Markdown",
+    )
+
+    # ── Archetype-aware message generator ────────────────────────────────────
+    st.divider()
+    st.subheader("📨 Generate Message")
+    st.caption(
+        "Select any athlete from the outreach list — get a ready-to-send message "
+        "personalised to their archetype and the reason for contact."
+    )
+
+    athlete_options = sorted(set(r["Athlete"] for r in rows))
+    sel = st.selectbox("Athlete", ["— select —"] + athlete_options, key="outreach_msg_sel")
+
+    if sel and sel != "— select —":
+        arch_row = (archetype_by_name or {}).get(sel)
+        arch_id = str(arch_row.get("Primary Archetype", "")).strip() if arch_row else None
+        arch_def = arch_mod.get_archetype(arch_id) if arch_id else None
+        arch_name = arch_def.get("name", arch_id.replace("_", " ").title()) if arch_def else None
+
+        if arch_name:
+            cluster = msg_tmpl.archetype_cluster(arch_id)
+            st.caption(f"Archetype: **{arch_name}** · Communication cluster: *{cluster}*")
+        else:
+            st.caption("No archetype assessed yet — showing generic message.")
+
+        athlete_rows = [r for r in rows if r["Athlete"] == sel]
+        for r in athlete_rows:
+            reason_type = r.get("_reason_type")
+            ctx = r.get("_ctx", {})
+            comp_msg = r.get("_comp_msg")
+
+            with st.expander(f"{r['Priority']} — {r['Reason']}", expanded=True):
+                if comp_msg and not reason_type:
+                    # Competition phase message — already fully built by analytics
+                    st.code(comp_msg, language=None)
+                elif reason_type:
+                    msg = msg_tmpl.generate_message(sel, reason_type, ctx, arch_id)
+                    st.code(msg, language=None)
+                    if arch_name:
+                        coach_hints = (arch_def.get("coach", {}).get("coach_toward", []))[:2]
+                        if coach_hints:
+                            st.caption("Coaching cues for this archetype: " + " · ".join(coach_hints))
+                else:
+                    st.caption("No message template for this item.")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -1165,9 +1647,9 @@ def main():
     st.caption(f"Data refreshes every 15 minutes · Last loaded: {dt.datetime.now().strftime('%H:%M')}")
 
     with st.spinner("Loading..."):
-        pr_records, athletes, rec_latest, data_records, archetype_rows = load_all()
+        pr_records, athletes, rec_latest, data_records, archetype_rows, competition_rows = load_all()
         trend_results, engagement_results, consistency_wins, rec_alert_rows, rec_by_name, comp_results = run_analytics(
-            pr_records, athletes, rec_latest, data_records
+            pr_records, athletes, rec_latest, data_records, competition_rows=competition_rows
         )
         # Build per-athlete archetype lookup: name -> latest assessment row
         archetype_by_name = {}
@@ -1196,13 +1678,13 @@ def main():
     tabs = st.tabs(["📋 Outreach List", "🚨 Alerts", "👥 Athletes", "🏁 Competitions", "📊 Programmes", "📈 Trends", "💤 Recovery"])
 
     with tabs[0]:
-        page_outreach(engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins, comp_results)
+        page_outreach(engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins, comp_results, archetype_by_name=archetype_by_name)
     with tabs[1]:
         page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_wins)
     with tabs[2]:
-        page_athletes(pr_records, athletes, trend_results, engagement_results, rec_by_name, data_records, archetype_by_name=archetype_by_name)
+        page_athletes(pr_records, athletes, trend_results, engagement_results, rec_by_name, data_records, archetype_by_name=archetype_by_name, competition_rows=competition_rows)
     with tabs[3]:
-        page_competitions(comp_results, athletes, data_records)
+        page_competitions(comp_results, athletes, data_records, competition_rows=competition_rows)
     with tabs[4]:
         page_programmes(athletes, pr_records, trend_results, data_records)
     with tabs[5]:
