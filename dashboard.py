@@ -8,6 +8,7 @@ import datetime as dt
 import json
 import os
 import re
+import urllib.parse
 
 import streamlit as st
 import altair as alt
@@ -1410,6 +1411,18 @@ def page_programmes(athletes, pr_records, trend_results, data_records):
         st.markdown(f"**{len(unassigned)} not yet assigned:**  " + ", ".join(sorted(unassigned)))
 
 
+def _outreach_send_buttons(msg):
+    """Render email and WhatsApp send links below an outreach message."""
+    encoded = urllib.parse.quote(msg)
+    c1, c2, _ = st.columns([1, 1, 5])
+    with c1:
+        st.link_button(
+            "✉️ Email", f"mailto:?subject={urllib.parse.quote('Training Update')}&body={encoded}",
+        )
+    with c2:
+        st.link_button("💬 WhatsApp", f"https://wa.me/?text={encoded}")
+
+
 def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
                   consistency_wins, comp_results=None, archetype_by_name=None):
     """Prioritised list of every athlete who needs contact this week."""
@@ -1683,9 +1696,11 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
                 if comp_msg and not reason_type:
                     # Competition phase message — already fully built by analytics
                     st.code(comp_msg, language=None)
+                    _outreach_send_buttons(comp_msg)
                 elif reason_type:
                     msg = msg_tmpl.generate_message(sel, reason_type, ctx, arch_id)
                     st.code(msg, language=None)
+                    _outreach_send_buttons(msg)
                     if arch_name:
                         coach_hints = (arch_def.get("coach", {}).get("coach_toward", []))[:2]
                         if coach_hints:
