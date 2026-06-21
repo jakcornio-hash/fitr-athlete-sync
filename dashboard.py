@@ -50,14 +50,16 @@ def get_sheets():
     )
     if sa_key:
         sa = dict(st.secrets[sa_key])
-        # Pull Sheet IDs from secrets if not already set via env
-        if not config.SHEET_ID and "SHEET_ID" in st.secrets:
-            config.SHEET_ID = st.secrets["SHEET_ID"]
-        if not config.RECOVERY_SHEET_ID and "RECOVERY_SHEET_ID" in st.secrets:
-            config.RECOVERY_SHEET_ID = st.secrets["RECOVERY_SHEET_ID"]
-        if not config.COMP_FORM_SHEET_ID and "COMP_FORM_SHEET_ID" in st.secrets:
-            config.COMP_FORM_SHEET_ID = st.secrets["COMP_FORM_SHEET_ID"]
-        return SheetsClient(service_account_info=sa)
+        # Read IDs directly from secrets — don't rely on config module variable
+        sheet_id = str(st.secrets.get("SHEET_ID", "") or config.SHEET_ID).strip()
+        # Also propagate to config for other modules that read it
+        if sheet_id:
+            config.SHEET_ID = sheet_id
+        if not config.RECOVERY_SHEET_ID:
+            config.RECOVERY_SHEET_ID = str(st.secrets.get("RECOVERY_SHEET_ID", "")).strip()
+        if not config.COMP_FORM_SHEET_ID:
+            config.COMP_FORM_SHEET_ID = str(st.secrets.get("COMP_FORM_SHEET_ID", "")).strip()
+        return SheetsClient(service_account_info=sa, sheet_id=sheet_id)
     return SheetsClient()  # local dev — uses .env + service_account.json
 
 

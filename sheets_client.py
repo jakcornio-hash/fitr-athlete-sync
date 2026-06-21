@@ -5,25 +5,17 @@ Writes go through the official Sheets API — no browser, no UI typing.
 Share the target sheet with the service account's email (Editor) first.
 """
 import gspread
-from google.oauth2.service_account import Credentials
 
 import config
 
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-
 
 class SheetsClient:
-    def __init__(self, service_account_info=None):
+    def __init__(self, service_account_info=None, sheet_id=None):
         if service_account_info:
-            creds = Credentials.from_service_account_info(
-                service_account_info, scopes=SCOPES
-            )
+            self.gc = gspread.service_account_from_dict(service_account_info)
         else:
-            creds = Credentials.from_service_account_file(
-                config.GOOGLE_SERVICE_ACCOUNT_FILE, scopes=SCOPES
-            )
-        self.gc = gspread.authorize(creds)
-        self.sh = self.gc.open_by_key(config.SHEET_ID)
+            self.gc = gspread.service_account(filename=config.GOOGLE_SERVICE_ACCOUNT_FILE)
+        self.sh = self.gc.open_by_key(sheet_id or config.SHEET_ID)
 
     def worksheet(self, title):
         return self.sh.worksheet(title)
