@@ -1815,12 +1815,12 @@ def page_squad(athletes, engagement_results, rec_by_name,
                 with st.expander("✏️ Quick note"):
                     with st.form(f"sq_note_{i}_{j}", clear_on_submit=True):
                         note_text = st.text_area(
-                            "", key=f"sq_nt_{nm}", height=68,
+                            "Note", label_visibility="collapsed", key=f"sq_nt_{i}_{j}", height=68,
                             placeholder="Quick coaching note…",
                         )
                         note_kind = st.selectbox(
                             "Type", ["note", "chat", "result", "recovery"],
-                            key=f"sq_nk_{nm}",
+                            key=f"sq_nk_{i}_{j}",
                         )
                         if st.form_submit_button("Save", type="primary"):
                             if note_text.strip():
