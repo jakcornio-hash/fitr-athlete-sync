@@ -1039,12 +1039,20 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
 
 def page_trends(pr_records, athletes):
     athlete_names = sorted({a["name"] for a in athletes})
-    selected = st.selectbox("Athlete", athlete_names)
+
+    col_sel, col_cmp = st.columns([2, 1])
+    selected = col_sel.selectbox("Athlete", athlete_names, key="trend_main")
+    compare_mode = col_cmp.checkbox("Compare with another athlete", key="trend_cmp_toggle")
+
+    selected_b = None
+    if compare_mode:
+        other_names = [n for n in athlete_names if n != selected]
+        if other_names:
+            selected_b = st.selectbox("Compare with", other_names, key="trend_b")
 
     if not selected:
         return
 
-    # Get benchmarks for this athlete
     athlete_records = [
         r for r in pr_records
         if str(r.get("Athlete Name", "")).strip() == selected
@@ -1057,40 +1065,70 @@ def page_trends(pr_records, athletes):
 
     selected_bench = st.selectbox("Benchmark", benchmarks)
 
-    bench_records = [
-        r for r in athlete_records
-        if str(r.get("Benchmark Name", "")).strip() == selected_bench
-    ]
+    def _get_points(name, bench):
+        pts = []
+        for r in pr_records:
+            if str(r.get("Athlete Name", "")).strip() != name:
+                continue
+            if str(r.get("Benchmark Name", "")).strip() != bench:
+                continue
+            d = _parse_date(str(r.get("Date", "")))
+            v = _numeric(str(r.get("Value", "")))
+            if d and v is not None:
+                pts.append({
+                    "Date": pd.Timestamp(d),
+                    "Value": v,
+                    "Label": str(r.get("Value", "")),
+                    "Athlete": name,
+                })
+        return pts
 
-    points = []
-    for r in bench_records:
-        d = _parse_date(str(r.get("Date", "")))
-        v = _numeric(str(r.get("Value", "")))
-        if d and v is not None:
-            points.append({"Date": pd.Timestamp(d), "Value": v, "Label": str(r.get("Value", ""))})
+    points_a = _get_points(selected, selected_bench)
 
-    if not points:
+    if not points_a:
         st.info("No numeric values found for this benchmark.")
         return
 
-    df = pd.DataFrame(points).sort_values("Date")
+    points_b = _get_points(selected_b, selected_bench) if selected_b else []
+    df_all = pd.DataFrame(points_a + points_b).sort_values("Date")
 
-    chart = (
-        alt.Chart(df)
-        .mark_line(point=True, color="#1f77b4")
-        .encode(
-            x=alt.X("Date:T", title="Date"),
-            y=alt.Y("Value:Q", title=selected_bench, scale=alt.Scale(zero=False)),
-            tooltip=["Date:T", "Label:N"],
+    if points_b:
+        chart = (
+            alt.Chart(df_all)
+            .mark_line(point=True)
+            .encode(
+                x=alt.X("Date:T", title="Date"),
+                y=alt.Y("Value:Q", title=selected_bench, scale=alt.Scale(zero=False)),
+                color=alt.Color("Athlete:N", legend=alt.Legend(title="Athlete")),
+                tooltip=["Date:T", "Athlete:N", "Label:N"],
+            )
+            .properties(height=350)
         )
-        .properties(height=350)
-    )
+    else:
+        chart = (
+            alt.Chart(df_all)
+            .mark_line(point=True, color="#1f77b4")
+            .encode(
+                x=alt.X("Date:T", title="Date"),
+                y=alt.Y("Value:Q", title=selected_bench, scale=alt.Scale(zero=False)),
+                tooltip=["Date:T", "Label:N"],
+            )
+            .properties(height=350)
+        )
     st.altair_chart(chart, use_container_width=True)
 
+    df_a = pd.DataFrame(points_a).sort_values("Date")
     col1, col2, col3 = st.columns(3)
-    col1.metric("Entries", len(df))
-    col2.metric("Best", df["Label"].iloc[df["Value"].argmax()])
-    col3.metric("Latest", df["Label"].iloc[-1])
+    col1.metric(f"{selected} — Entries", len(df_a))
+    col2.metric(f"{selected} — Best", df_a["Label"].iloc[df_a["Value"].argmax()])
+    col3.metric(f"{selected} — Latest", df_a["Label"].iloc[-1])
+
+    if points_b:
+        df_b = pd.DataFrame(points_b).sort_values("Date")
+        cb1, cb2, cb3 = st.columns(3)
+        cb1.metric(f"{selected_b} — Entries", len(df_b))
+        cb2.metric(f"{selected_b} — Best", df_b["Label"].iloc[df_b["Value"].argmax()])
+        cb3.metric(f"{selected_b} — Latest", df_b["Label"].iloc[-1])
 
 
 def page_recovery(rec_by_name):
@@ -1526,6 +1564,24 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
 
     rows.sort(key=lambda x: x["_order"])
 
+    # ── This week's wins board ────────────────────────────────────────────────
+    celebrate_rows = [r for r in rows if r["Priority"] == "🏆 Celebrate"]
+    streak_rows = [r for r in rows if r["Priority"] == "✅ Positive"]
+    if celebrate_rows or streak_rows:
+        n_pr = len(celebrate_rows)
+        n_st = len(streak_rows)
+        label = (
+            f"🏆 {n_pr} new result{'s' if n_pr != 1 else ''}"
+            + (f" · ✅ {n_st} streak{'s' if n_st != 1 else ''}" if streak_rows else "")
+        )
+        with st.expander(label, expanded=True):
+            for r in celebrate_rows:
+                st.markdown(f"🏆 **{r['Athlete']}** — {r['Reason']}")
+            if celebrate_rows and streak_rows:
+                st.divider()
+            for r in streak_rows:
+                st.markdown(f"✅ **{r['Athlete']}** — {r['Reason']}")
+
     if not rows:
         st.success("Nothing to action this week — all athletes on track.")
         return
@@ -1638,6 +1694,379 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
                     st.caption("No message template for this item.")
 
 
+def page_squad(athletes, engagement_results, rec_by_name,
+               data_records=None, archetype_by_name=None, pr_records=None):
+    """Card grid — every athlete at a glance, colour-coded by status."""
+
+    data_by_name = {}
+    for rec in (data_records or []):
+        nm = str(rec.get("Full Name", "")).strip()
+        if nm:
+            data_by_name[nm] = rec
+
+    last_logged = {}
+    for r in (pr_records or []):
+        nm = str(r.get("Athlete Name", "")).strip()
+        d = _parse_date(str(r.get("Date", "")))
+        if nm and d and (nm not in last_logged or d > last_logged[nm]):
+            last_logged[nm] = d
+
+    eng_map = {e["name"]: e for e in engagement_results}
+
+    def _card_status(name):
+        last = last_logged.get(name)
+        days = (TODAY - last).days if last else None
+        rec_row = rec_by_name.get(name)
+        rec_urgent = False
+        if rec_row:
+            try:
+                s = float(str(rec_row.get("Soreness", "")).strip() or 0)
+                st_ = float(str(rec_row.get("Stress", "")).strip() or 0)
+                rec_urgent = s >= 7 or st_ >= 7
+            except (ValueError, TypeError):
+                pass
+        if rec_urgent:
+            return "🔴", "Recovery alert"
+        e = eng_map.get(name, {})
+        if e.get("flag") and (days is None or days >= 45):
+            return "🔴", "Inactive 45+ days" if days else "Never logged"
+        if days is not None and days >= 28:
+            return "🟡", f"{days}d inactive"
+        if days is None:
+            return "🟡", "No results logged"
+        return "🟢", f"Active ({days}d ago)"
+
+    def _status_bucket(emoji):
+        return {"🟢": "🟢 Active", "🟡": "🟡 Check in"}.get(emoji, "🔴 Urgent")
+
+    # Filters
+    all_progs = sorted(filter(None, {
+        str(data_by_name.get(a["name"], {}).get("Programme", "")).strip() or None
+        for a in athletes
+    }))
+    fc1, fc2 = st.columns(2)
+    prog_filter = fc1.multiselect("Programme", all_progs, placeholder="All programmes", key="squad_prog_filter")
+    status_filter = fc2.multiselect(
+        "Status", ["🟢 Active", "🟡 Check in", "🔴 Urgent"],
+        placeholder="All statuses", key="squad_status_filter",
+    )
+
+    visible = []
+    for a in athletes:
+        nm = a["name"]
+        prog = str(data_by_name.get(nm, {}).get("Programme", "")).strip()
+        emoji, _ = _card_status(nm)
+        if prog_filter and prog not in prog_filter:
+            continue
+        if status_filter and _status_bucket(emoji) not in status_filter:
+            continue
+        visible.append(a)
+
+    if not visible:
+        st.info("No athletes match the current filters.")
+        return
+
+    total_urgent = sum(1 for a in athletes if _card_status(a["name"])[0] == "🔴")
+    total_check  = sum(1 for a in athletes if _card_status(a["name"])[0] == "🟡")
+    total_active = sum(1 for a in athletes if _card_status(a["name"])[0] == "🟢")
+    sm1, sm2, sm3 = st.columns(3)
+    sm1.metric("🔴 Urgent", total_urgent)
+    sm2.metric("🟡 Check in", total_check)
+    sm3.metric("🟢 Active", total_active)
+    st.divider()
+
+    cols_per_row = 3
+    for i in range(0, len(visible), cols_per_row):
+        batch = visible[i : i + cols_per_row]
+        cols = st.columns(cols_per_row)
+        for j, athlete in enumerate(batch):
+            with cols[j]:
+                nm = athlete["name"]
+                status_emoji, status_text = _card_status(nm)
+                profile = data_by_name.get(nm, {})
+                prog = str(profile.get("Programme", "")).strip()
+                last = last_logged.get(nm)
+                days = (TODAY - last).days if last else None
+                arch_row = (archetype_by_name or {}).get(nm)
+                arch_id = str(arch_row.get("Primary Archetype", "")).strip() if arch_row else None
+                arch_def = arch_mod.get_archetype(arch_id) if arch_id else None
+                arch_name = arch_def.get("name", "") if arch_def else ""
+                rec_row = rec_by_name.get(nm)
+
+                st.markdown(f"#### {status_emoji} {nm}")
+                if prog:
+                    st.caption(prog)
+                if days is not None:
+                    st.markdown(f"Last logged: **{last.strftime('%d %b')}** · {days}d ago")
+                else:
+                    st.markdown("Last logged: **Never**")
+                if arch_name:
+                    st.caption(f"🧠 {arch_name}")
+                if rec_row:
+                    try:
+                        s   = float(str(rec_row.get("Soreness", "")).strip() or 0)
+                        st_ = float(str(rec_row.get("Stress",   "")).strip() or 0)
+                        if s >= 5 or st_ >= 5:
+                            flag = "🔴" if (s >= 7 or st_ >= 7) else "🟡"
+                            st.caption(f"{flag} Soreness {s:.0f} · Stress {st_:.0f}/10")
+                    except (ValueError, TypeError):
+                        pass
+
+                with st.expander("✏️ Quick note"):
+                    with st.form(f"sq_note_{i}_{j}", clear_on_submit=True):
+                        note_text = st.text_area(
+                            "", key=f"sq_nt_{nm}", height=68,
+                            placeholder="Quick coaching note…",
+                        )
+                        note_kind = st.selectbox(
+                            "Type", ["note", "chat", "result", "recovery"],
+                            key=f"sq_nk_{nm}",
+                        )
+                        if st.form_submit_button("Save", type="primary"):
+                            if note_text.strip():
+                                line = f"[{TODAY.isoformat()} — {note_kind}] {note_text.strip()}"
+                                current = str(profile.get("Coaching Notes", "")).strip()
+                                new_notes = (current + "\n" + line).strip() if current else line
+                                get_sheets().batch_update_by_name(
+                                    config.TAB_DATA, "Full Name",
+                                    {nm: {"Coaching Notes": new_notes}},
+                                )
+                                st.success("Saved")
+                                st.cache_data.clear()
+                            else:
+                                st.warning("Empty note")
+                st.write("")
+
+
+def page_week_planner(engagement_results, rec_alert_rows, comp_results,
+                      consistency_wins, milestones, data_records=None):
+    """Prioritised coaching focus for this week with inline quick notes."""
+
+    data_by_name = {}
+    for rec in (data_records or []):
+        nm = str(rec.get("Full Name", "")).strip()
+        if nm:
+            data_by_name[nm] = rec
+
+    st.caption(f"Week of {TODAY.strftime('%d %b %Y')} · Refresh to update")
+
+    urgent = []
+    this_week = []
+    celebrate = []
+
+    for alert in rec_alert_rows:
+        urgent.append({"name": alert[0], "reason": alert[1], "note_kind": "recovery"})
+
+    for c in (comp_results or []):
+        if not c["action"]:
+            continue
+        ct = c.get("comp_type", "A")
+        badge = _COMP_TYPE_LABEL.get(ct, ct)
+        if ct == "A" and "Switch" in (c["phase"] or ""):
+            urgent.append({
+                "name": c["name"],
+                "reason": f"🚨 Programme switch — {c['comp_name']}",
+                "note_kind": "chat",
+            })
+        else:
+            this_week.append({
+                "name": c["name"],
+                "reason": f"Comp prep: {c['phase']} — {badge} {c['comp_name']}",
+                "note_kind": "chat",
+            })
+
+    for e in engagement_results:
+        if not e["flag"]:
+            continue
+        days = e["days_since"]
+        never = e["last_logged"] == "never"
+        if never or (days and days >= 45):
+            urgent.append({
+                "name": e["name"],
+                "reason": "Never logged" if never else f"{days}d inactive — re-engage",
+                "note_kind": "chat",
+            })
+        elif days and 28 <= days < 45:
+            this_week.append({
+                "name": e["name"],
+                "reason": f"{days}d inactive — check in",
+                "note_kind": "chat",
+            })
+
+    for name, weeks in consistency_wins:
+        celebrate.append({
+            "name": name,
+            "reason": f"{weeks} consecutive weeks logging",
+            "note_kind": "chat",
+        })
+
+    for m in milestones:
+        celebrate.append({
+            "name": m[0],
+            "reason": f"New result — {m[1]}: {m[2]}",
+            "note_kind": "result",
+        })
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("🔴 Do Today", len(urgent))
+    m2.metric("📋 This Week", len(this_week))
+    m3.metric("🏆 Celebrate", len(celebrate))
+    st.divider()
+
+    if not urgent and not this_week and not celebrate:
+        st.success("All clear this week — no coaching actions needed.")
+        return
+
+    def _render_group(title, items):
+        if not items:
+            return
+        st.subheader(title)
+        for idx, item in enumerate(items):
+            nm = item["name"]
+            profile = data_by_name.get(nm, {})
+            row_col, note_col = st.columns([3, 1])
+            row_col.markdown(f"**{nm}** · {item['reason']}")
+            with note_col:
+                with st.expander("✏️ Note"):
+                    with st.form(f"wk_{title[:4]}_{idx}_{nm}", clear_on_submit=True):
+                        note_text = st.text_area(
+                            "", key=f"wk_nt_{title[:4]}_{nm}_{idx}",
+                            height=64, placeholder="Quick note…",
+                        )
+                        if st.form_submit_button("Save"):
+                            if note_text.strip():
+                                kind = item["note_kind"]
+                                line = f"[{TODAY.isoformat()} — {kind}] {note_text.strip()}"
+                                current = str(profile.get("Coaching Notes", "")).strip()
+                                new_notes = (current + "\n" + line).strip() if current else line
+                                get_sheets().batch_update_by_name(
+                                    config.TAB_DATA, "Full Name",
+                                    {nm: {"Coaching Notes": new_notes}},
+                                )
+                                st.success("Saved")
+                                st.cache_data.clear()
+            st.divider()
+
+    _render_group("🔴 Do today", urgent)
+    _render_group("📋 This week", this_week)
+    _render_group("🏆 Celebrate", celebrate)
+
+
+def page_help():
+    """Coach guide — explains each tab and how to use the dashboard."""
+    st.markdown("## Dashboard Guide")
+    st.caption(
+        "A quick reference for coaches. "
+        "This dashboard pulls live data from Google Sheets every 15 minutes. "
+        "To force a reload: Streamlit menu (⋮) → Rerun."
+    )
+    st.divider()
+
+    tabs_info = [
+        ("📋 Outreach List", """
+Your daily starting point. Every athlete who needs contact appears here, sorted by urgency.
+
+- **🔴 Contact Today** — Recovery flags. Address these before anything else.
+- **🏆 Celebrate** — Athlete logged a new result this week. Send a quick win message.
+- **✅ Positive** — Consistency streak. Acknowledge the discipline.
+- **⚠️ Re-engage** — 45+ days without logging. Direct personal reach-out needed.
+- **📉 Performance** — A benchmark is declining or well below peak.
+- **⚠️ Check In** — 28–44 days without logging. Friendly nudge.
+- **🏁 Comp Prep** — Competition approaching or just passed. Phase-specific action required.
+- **📝 Remind to Log** — Athlete is in contact but not recording results.
+
+**Generate Message** at the bottom gives a ready-to-send, archetype-aware message for each athlete.
+Use **Export Outreach List** to download the full list with messages as Markdown.
+"""),
+        ("🚨 Alerts", """
+Aggregate view of all flags across the squad.
+
+- **Recovery Flags** — High soreness or stress on the latest survey.
+- **Engagement / Dropout Risk** — Who hasn't logged in 28+ days.
+- **Performance Concerns** — Benchmarks with a declining trend or a big drop from peak.
+- **Consistency Wins** — Positive streaks worth acknowledging.
+
+Use this tab to check the squad's health at a glance before planning your week.
+"""),
+        ("🃏 Squad", """
+Card grid showing every athlete's current status.
+
+- **🟢 Active** — Logged within the last 14 days, no recovery concerns.
+- **🟡 Check in** — 15–44 days since logging, or a recovery concern.
+- **🔴 Urgent** — 45+ days inactive, never logged, or high soreness/stress.
+
+Filter by Programme or Status to focus on a subset.
+The **Quick note** button on each card lets you log a coaching note without navigating away.
+"""),
+        ("👥 Athletes", """
+Full roster with filters. Click any row to open the athlete's profile panel.
+
+The profile shows: physical stats, programme, injuries, competitions, benchmark snapshots, recovery, archetype, and full coaching notes timeline.
+
+**Archetype Assessment** — Run the 10-question forced-choice instrument inside a profile.
+Share the **Self-Assessment Link** with the athlete so they can fill it in themselves.
+**Add Note** — Log a chat, result, or recovery entry directly to the athlete's profile.
+"""),
+        ("🗓️ Week Plan", """
+Your coaching week as a prioritised action list with inline note-taking.
+
+- **🔴 Do today** — Recovery flags and programme switches that can't wait.
+- **📋 This week** — Check-ins and comp prep reminders.
+- **🏆 Celebrate** — PRs and consistency wins to acknowledge.
+
+Each item has a quick note button so you can log a coaching interaction without switching tabs.
+"""),
+        ("🏁 Competitions", """
+All athlete competitions in one place.
+
+- **Upcoming & Recent** — Full squad comp schedule with phase and required action.
+- **A-Race Actions** — Expanded view of athletes needing a programme switch or taper.
+- **Annual Calendar** — Visual scatter plot of the whole competitive year.
+
+Add a competition inside any athlete's profile (Athletes → click athlete → Competition Calendar → Add Competition).
+
+**A / B / C competition types:**
+- 🥇 **A** — Primary goal. Full 10-week prep + 2-week peak. 1–3 per year max.
+- 🥈 **B** — Secondary race. Race hard, no programme change.
+- 🥉 **C** — Training day. Compete without taper.
+"""),
+        ("📊 Programmes", """
+Breakdown of athletes by programme track.
+
+Shows headcount, active rate (logged in the last 28 days), average days since logging, and declining trends per programme. Spot which tracks have low engagement or need attention.
+
+Assign or change an athlete's programme inside their profile in the Athletes tab.
+"""),
+        ("📈 Trends", """
+Progress chart for any athlete and benchmark.
+
+Select an athlete, then a benchmark, to see their results plotted over time.
+Tick **Compare with another athlete** to overlay a second athlete on the same chart — useful for peer benchmarking within a programme group.
+"""),
+        ("💤 Recovery", """
+Latest recovery survey responses for every athlete who has submitted one.
+
+**Soreness** and **Stress** cells are highlighted red (≥ 7/10) or amber (≥ 5/10). These athletes appear in the Alerts and Outreach tabs.
+
+Recovery surveys are collected via Typeform. The link is in your coach onboarding notes.
+"""),
+    ]
+
+    for tab_name, content in tabs_info:
+        with st.expander(tab_name, expanded=False):
+            st.markdown(content.strip())
+
+    st.divider()
+    st.markdown("### Quick tips")
+    st.markdown("""
+- **Coaching notes** are stored as `[YYYY-MM-DD — kind] text` entries in the Google Sheet *_DATA* tab → Coaching Notes column. You can edit them directly in the sheet.
+- **Self-assessment links** — Each athlete has a unique URL. Find it in their profile under Archetype → Share Self-Assessment Link.
+- **Archetype messaging** — Outreach messages are tailored to the athlete's communication cluster. Athletes without an archetype get a generic message.
+- **Adding competitions** — Athletes tab → click athlete → Competition Calendar → Add Competition.
+- **Refreshing data** — Streamlit menu (⋮, top right) → Rerun, or wait up to 15 minutes for the automatic cache refresh.
+    """)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -1677,22 +2106,32 @@ def main():
             _seen_milestones.add((_nm, _bn))
             milestones.append((_nm, _bn, _val))
 
-    tabs = st.tabs(["📋 Outreach List", "🚨 Alerts", "👥 Athletes", "🏁 Competitions", "📊 Programmes", "📈 Trends", "💤 Recovery"])
+    tabs = st.tabs([
+        "📋 Outreach List", "🚨 Alerts", "🃏 Squad", "👥 Athletes",
+        "🗓️ Week Plan", "🏁 Competitions", "📊 Programmes", "📈 Trends",
+        "💤 Recovery", "❓ Help",
+    ])
 
     with tabs[0]:
         page_outreach(engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins, comp_results, archetype_by_name=archetype_by_name)
     with tabs[1]:
         page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_wins)
     with tabs[2]:
-        page_athletes(pr_records, athletes, trend_results, engagement_results, rec_by_name, data_records, archetype_by_name=archetype_by_name, competition_rows=competition_rows)
+        page_squad(athletes, engagement_results, rec_by_name, data_records=data_records, archetype_by_name=archetype_by_name, pr_records=pr_records)
     with tabs[3]:
-        page_competitions(comp_results, athletes, data_records, competition_rows=competition_rows)
+        page_athletes(pr_records, athletes, trend_results, engagement_results, rec_by_name, data_records, archetype_by_name=archetype_by_name, competition_rows=competition_rows)
     with tabs[4]:
-        page_programmes(athletes, pr_records, trend_results, data_records)
+        page_week_planner(engagement_results, rec_alert_rows, comp_results, consistency_wins, milestones, data_records=data_records)
     with tabs[5]:
-        page_trends(pr_records, athletes)
+        page_competitions(comp_results, athletes, data_records, competition_rows=competition_rows)
     with tabs[6]:
+        page_programmes(athletes, pr_records, trend_results, data_records)
+    with tabs[7]:
+        page_trends(pr_records, athletes)
+    with tabs[8]:
         page_recovery(rec_by_name)
+    with tabs[9]:
+        page_help()
 
 
 if __name__ == "__main__":
