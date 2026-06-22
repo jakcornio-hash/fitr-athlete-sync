@@ -2272,6 +2272,11 @@ def main():
             _seen_milestones.add((_nm, _bn))
             milestones.append((_nm, _bn, _val))
 
+        # Reload analytics if this session started before the module was last updated
+        # (Streamlit hot-reload keeps old modules in sys.modules across dashboard.py reruns)
+        if not hasattr(analytics, "load_analysis"):
+            import importlib
+            importlib.reload(analytics)
         load_results = analytics.load_analysis(pr_records, rec_by_name=rec_by_name, data_records=data_records)
 
     tabs = st.tabs([
