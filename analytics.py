@@ -229,6 +229,137 @@ def consistency_check(pr_log_records, athletes, min_consecutive_weeks=4):
     return wins
 
 
+def load_analysis(pr_log_records, rec_by_name=None, data_records=None, weeks_back=12):
+    """
+    Training load proxy per athlete, derived from PR-log entry frequency.
+
+    ACWR (Acute : Chronic Workload Ratio):
+      acute   = entries logged in the last 7 days
+      chronic = average weekly entries over the preceding 28 days
+      acwr    = acute / chronic  (None when chronic < 0.1 — insufficient baseline)
+
+    Status bands:
+      green       0.8 – 1.3   sweet-spot
+      amber_high  1.3 – 1.5   load spike, monitor
+      red         > 1.5       danger zone
+      amber_low   0.5 – 0.8   under-loading
+      low         < 0.5       very low
+      insufficient             < 2 weeks of history in the 28-day window
+
+    Returns {athlete_name: {
+        "weeks":        [date, ...],    # Monday of each ISO week, oldest first
+        "weekly_loads": [int, ...],     # entries in that week (parallel with weeks)
+        "chronic_line": [float, ...],   # 4-week rolling avg at each week end (for chart)
+        "acute":        int,
+        "chronic":      float,
+        "acwr":         float | None,
+        "status":       str,
+        "programme":    str,
+        "expected_daily": int | None,   # 1 or 2, parsed from programme name
+        "soreness":     float | None,
+        "stress":       float | None,
+    }}
+    """
+    from collections import defaultdict
+
+    entries_by_athlete = defaultdict(list)
+    for rec in pr_log_records:
+        name = str(rec.get("Athlete Name", "")).strip()
+        d = _parse_date(str(rec.get("Date", "")))
+        if name and d:
+            entries_by_athlete[name].append(d)
+
+    data_by_name = {}
+    for rec in (data_records or []):
+        nm = str(rec.get("Full Name", "")).strip()
+        if nm:
+            data_by_name[nm] = rec
+
+    def _expected_daily(prog_str):
+        s = str(prog_str).lower()
+        if "2 session" in s:
+            return 2
+        if "1 session" in s:
+            return 1
+        return None
+
+    def _num(val):
+        try:
+            return float(str(val).strip())
+        except (ValueError, TypeError):
+            return None
+
+    current_monday = TODAY - dt.timedelta(days=TODAY.weekday())
+    week_starts = [current_monday - dt.timedelta(weeks=i) for i in range(weeks_back - 1, -1, -1)]
+
+    results = {}
+
+    for name, dates in entries_by_athlete.items():
+        # Acute: entries in last 7 days
+        acute = sum(1 for d in dates if d > TODAY - dt.timedelta(days=7))
+
+        # Chronic: avg entries per week over the 4 complete weeks before this one
+        chronic_counts = []
+        for w in range(1, 5):
+            wk_end = current_monday - dt.timedelta(weeks=w - 1)
+            wk_start = wk_end - dt.timedelta(weeks=1)
+            chronic_counts.append(sum(1 for d in dates if wk_start <= d < wk_end))
+        chronic = sum(chronic_counts) / 4.0
+
+        if chronic < 0.1:
+            acwr = None
+            status = "insufficient"
+        else:
+            acwr = round(acute / chronic, 2)
+            if acwr > 1.5:
+                status = "red"
+            elif acwr > 1.3:
+                status = "amber_high"
+            elif acwr >= 0.8:
+                status = "green"
+            elif acwr >= 0.5:
+                status = "amber_low"
+            else:
+                status = "low"
+
+        # Per-week entry counts for the chart window
+        weekly_loads = []
+        for ws in week_starts:
+            we = ws + dt.timedelta(weeks=1)
+            weekly_loads.append(sum(1 for d in dates if ws <= d < we))
+
+        # 4-week rolling chronic baseline per chart point
+        chronic_line = []
+        for ws in week_starts:
+            we = ws + dt.timedelta(weeks=1)
+            c_vals = []
+            for w in range(1, 5):
+                c_end = we - dt.timedelta(weeks=w - 1)
+                c_start = c_end - dt.timedelta(weeks=1)
+                c_vals.append(sum(1 for d in dates if c_start <= d < c_end))
+            chronic_line.append(round(sum(c_vals) / 4.0, 2))
+
+        rec_row = (rec_by_name or {}).get(name, {})
+        data_row = data_by_name.get(name, {})
+        prog = str(data_row.get("Programme", "")).strip()
+
+        results[name] = {
+            "weeks": week_starts,
+            "weekly_loads": weekly_loads,
+            "chronic_line": chronic_line,
+            "acute": acute,
+            "chronic": round(chronic, 2),
+            "acwr": acwr,
+            "status": status,
+            "programme": prog,
+            "expected_daily": _expected_daily(prog),
+            "soreness": _num(rec_row.get("Soreness")),
+            "stress": _num(rec_row.get("Stress")),
+        }
+
+    return results
+
+
 def recovery_alerts(recovery_by_name):
     """
     Flag athletes with concerning recovery survey scores.

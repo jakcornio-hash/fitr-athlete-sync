@@ -1352,7 +1352,7 @@ def page_competitions(comp_results, athletes, data_records, competition_rows=Non
             st.write(", ".join(no_comp))
 
 
-def page_programmes(athletes, pr_records, trend_results, data_records):
+def page_programmes(athletes, pr_records, trend_results, data_records, load_results=None):
     from collections import defaultdict
 
     data_by_name = {str(r.get("Full Name", "")).strip(): r for r in (data_records or [])}
@@ -1369,6 +1369,8 @@ def page_programmes(athletes, pr_records, trend_results, data_records):
         prog = str(data_by_name.get(a["name"], {}).get("Programme", "")).strip()
         by_prog[prog or "— Unassigned —"].append(a["name"])
 
+    load_by_name = load_results or {}
+
     rows = []
     for prog, names in sorted(by_prog.items(), key=lambda x: (x[0] == "— Unassigned —", x[0])):
         count = len(names)
@@ -1380,11 +1382,16 @@ def page_programmes(athletes, pr_records, trend_results, data_records):
             for s in trend_results.get(nm, [])
             if s["trend"] == "declining"
         )
+        acwr_vals = [load_by_name[nm]["acwr"] for nm in names if nm in load_by_name and load_by_name[nm]["acwr"] is not None]
+        avg_acwr = round(sum(acwr_vals) / len(acwr_vals), 2) if acwr_vals else None
+        spikes = sum(1 for nm in names if nm in load_by_name and load_by_name[nm]["status"] == "red")
         rows.append({
             "Programme": prog,
             "Athletes": count,
             "Active (28d)": f"{active}/{count} ({round(active / count * 100)}%)" if count else "—",
             "Avg Days Since Log": avg_days if avg_days is not None else "never",
+            "Avg ACWR": f"{avg_acwr:.2f}" if avg_acwr is not None else "—",
+            "🔴 Load Spikes": spikes or "—",
             "Declining Trends": declining or "—",
         })
 
@@ -1707,6 +1714,150 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
                             st.caption("Coaching cues for this archetype: " + " · ".join(coach_hints))
                 else:
                     st.caption("No message template for this item.")
+
+
+_LOAD_STATUS_BADGE = {
+    "red":        "🔴 Spike",
+    "amber_high": "🟡 High",
+    "green":      "🟢 OK",
+    "amber_low":  "🟡 Low",
+    "low":        "⚪ Very Low",
+    "insufficient": "—",
+}
+_LOAD_STATUS_COLOUR = {
+    "red":        "background-color: #fce4ec",
+    "amber_high": "background-color: #fff9c4",
+    "green":      "background-color: #e8f5e9",
+    "amber_low":  "background-color: #fff9c4",
+    "low":        "",
+    "insufficient": "",
+}
+
+
+def page_load(load_results):
+    """Training load (ACWR proxy) overview — squad summary, athlete detail, programme breakdown."""
+    from collections import defaultdict
+
+    if not load_results:
+        st.info("No PR log data yet — results will appear once athletes start logging.")
+        return
+
+    # ── Squad summary ─────────────────────────────────────────────────────────
+    st.subheader("Squad Load Overview")
+    st.caption(
+        "Load proxy = PR log entries per week. "
+        "ACWR = entries in last 7 days ÷ 4-week weekly average. "
+        "🟢 Sweet spot 0.8–1.3 · 🟡 Amber 1.3–1.5 or 0.5–0.8 · 🔴 Danger >1.5"
+    )
+
+    rows = []
+    for name, d in sorted(load_results.items()):
+        acwr_str = f"{d['acwr']:.2f}" if d["acwr"] is not None else "—"
+        prog = d["programme"]
+        prog_short = prog.replace("Sessions Per Day", "x/day").replace(" - ", " ") if prog else "—"
+        rows.append({
+            "Athlete": name,
+            "ACWR": acwr_str,
+            "Status": _LOAD_STATUS_BADGE[d["status"]],
+            "Acute (7d)": d["acute"],
+            "Chronic (avg/wk)": d["chronic"],
+            "Soreness": f"{d['soreness']:.0f}/10" if d["soreness"] is not None else "—",
+            "Stress": f"{d['stress']:.0f}/10" if d["stress"] is not None else "—",
+            "Programme": prog_short,
+            "_status": d["status"],
+        })
+
+    df_summary = pd.DataFrame(rows)
+
+    def _load_row_colour(row):
+        colour = _LOAD_STATUS_COLOUR.get(row["_status"], "")
+        return [colour] * len(row)
+
+    display_cols = [c for c in df_summary.columns if c != "_status"]
+    styled = df_summary[display_cols + ["_status"]].style.apply(_load_row_colour, axis=1)
+    st.dataframe(
+        df_summary[display_cols].style.apply(_load_row_colour, axis=1),
+        use_container_width=True, hide_index=True,
+    )
+
+    # ── Athlete drill-down ────────────────────────────────────────────────────
+    st.divider()
+    st.subheader("Athlete Load Detail")
+
+    sel = st.selectbox("Select athlete", ["— select —"] + sorted(load_results.keys()), key="load_athlete_sel")
+
+    if sel and sel != "— select —":
+        d = load_results[sel]
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("ACWR", f"{d['acwr']:.2f}" if d["acwr"] is not None else "—")
+        c2.metric("Acute (7d entries)", d["acute"])
+        c3.metric("Chronic (avg/wk)", f"{d['chronic']:.1f}")
+        c4.metric("Status", _LOAD_STATUS_BADGE[d["status"]])
+
+        chart_df = pd.DataFrame({
+            "Week": [w.strftime("%-d %b") for w in d["weeks"]],
+            "Entries": d["weekly_loads"],
+            "Chronic baseline": d["chronic_line"],
+        })
+
+        bars = (
+            alt.Chart(chart_df)
+            .mark_bar(color="#1f77b4", opacity=0.8)
+            .encode(
+                x=alt.X("Week:N", sort=None, title="Week of"),
+                y=alt.Y("Entries:Q", title="Entries logged"),
+                tooltip=["Week:N", "Entries:Q", alt.Tooltip("Chronic baseline:Q", format=".1f")],
+            )
+        )
+        baseline = (
+            alt.Chart(chart_df)
+            .mark_line(color="#ff7f0e", strokeWidth=2, strokeDash=[4, 2])
+            .encode(
+                x=alt.X("Week:N", sort=None),
+                y=alt.Y("Chronic baseline:Q", title=""),
+            )
+        )
+        st.altair_chart((bars + baseline).properties(height=280), use_container_width=True)
+        st.caption("🟠 dashed = 4-week rolling average (chronic baseline)")
+
+        hints = []
+        if d["soreness"] is not None:
+            hints.append(f"Soreness {d['soreness']:.0f}/10")
+        if d["stress"] is not None:
+            hints.append(f"Stress {d['stress']:.0f}/10")
+        if hints:
+            st.caption("Latest recovery survey: " + " · ".join(hints))
+
+        if d["programme"]:
+            exp = d["expected_daily"]
+            exp_str = f"  ({exp}x/day programme)" if exp else ""
+            st.caption(f"Programme: {d['programme']}{exp_str}")
+
+    # ── Load by programme ─────────────────────────────────────────────────────
+    st.divider()
+    st.subheader("Load by Programme")
+    st.caption("Useful for spotting whole tracks that are over or under-loading relative to each other.")
+
+    by_prog = defaultdict(list)
+    for name, d in load_results.items():
+        by_prog[d["programme"] or "— Unassigned —"].append(d)
+
+    prog_rows = []
+    for prog, group in sorted(by_prog.items()):
+        acwr_vals = [g["acwr"] for g in group if g["acwr"] is not None]
+        avg_acwr = round(sum(acwr_vals) / len(acwr_vals), 2) if acwr_vals else None
+        prog_short = prog.replace("Sessions Per Day", "x/day").replace(" - ", " ") if prog else prog
+        prog_rows.append({
+            "Programme": prog_short,
+            "Athletes": len(group),
+            "Avg ACWR": f"{avg_acwr:.2f}" if avg_acwr is not None else "—",
+            "🟢 OK": sum(1 for g in group if g["status"] == "green"),
+            "🟡 Amber": sum(1 for g in group if g["status"] in ("amber_high", "amber_low")),
+            "🔴 Spike": sum(1 for g in group if g["status"] == "red"),
+            "— No data": sum(1 for g in group if g["status"] == "insufficient"),
+        })
+    st.dataframe(pd.DataFrame(prog_rows), use_container_width=True, hide_index=True)
 
 
 def page_squad(athletes, engagement_results, rec_by_name,
@@ -2121,10 +2272,12 @@ def main():
             _seen_milestones.add((_nm, _bn))
             milestones.append((_nm, _bn, _val))
 
+        load_results = analytics.load_analysis(pr_records, rec_by_name=rec_by_name, data_records=data_records)
+
     tabs = st.tabs([
         "📋 Outreach List", "🚨 Alerts", "🃏 Squad", "👥 Athletes",
-        "🗓️ Week Plan", "🏁 Competitions", "📊 Programmes", "📈 Trends",
-        "💤 Recovery", "❓ Help",
+        "🗓️ Week Plan", "🏁 Competitions", "📊 Programmes", "🏋️ Load",
+        "📈 Trends", "💤 Recovery", "❓ Help",
     ])
 
     with tabs[0]:
@@ -2140,12 +2293,14 @@ def main():
     with tabs[5]:
         page_competitions(comp_results, athletes, data_records, competition_rows=competition_rows)
     with tabs[6]:
-        page_programmes(athletes, pr_records, trend_results, data_records)
+        page_programmes(athletes, pr_records, trend_results, data_records, load_results=load_results)
     with tabs[7]:
-        page_trends(pr_records, athletes)
+        page_load(load_results)
     with tabs[8]:
-        page_recovery(rec_by_name)
+        page_trends(pr_records, athletes)
     with tabs[9]:
+        page_recovery(rec_by_name)
+    with tabs[10]:
         page_help()
 
 
