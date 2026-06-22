@@ -47,11 +47,11 @@ def _prog_short(prog):
 
 
 def _programme_contact(prog):
-    """Infer who should make outreach: JST / JST Youth / Individual.
+    """Infer who should make outreach.
 
-    JST Athlete tracks → coaching team (Ed / head coach)
-    Anything containing 'youth' → JST Youth squad staff
-    Everything else (individual coach names, custom) → individual coach
+    JST Athlete tracks → 'JST' (Ed / head coach)
+    Anything containing 'youth' → 'JST Youth'
+    Everything else → the programme name itself (encodes the individual coach)
     """
     if not prog:
         return "—"
@@ -59,7 +59,7 @@ def _programme_contact(prog):
         return "JST"
     if "youth" in prog.lower():
         return "JST Youth"
-    return "Individual"
+    return prog
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
