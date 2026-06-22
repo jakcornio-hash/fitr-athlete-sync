@@ -433,6 +433,22 @@ def main():
     # ---- writes ----
     sheets.append_rows(config.TAB_PR_LOG, bench_rows + chal_rows)
 
+    # ---- per-coach Slack notifications ----
+    coach_channel_map = sheets.load_coaches()
+    if coach_channel_map and (bench_rows or chal_rows):
+        data_recs = sheets.read_records(config.TAB_DATA)
+        programme_by_name = {
+            str(r.get("Full Name", "")).strip(): str(r.get("Programme", "")).strip()
+            for r in data_recs
+            if str(r.get("Full Name", "")).strip()
+        }
+        notified = notifier.send_coach_notifications(
+            bench_rows, chal_rows, programme_by_name, coach_channel_map,
+        )
+        print(f"Coach Slack notifications sent: {notified}")
+    else:
+        print("Coach notifications: Coaches tab empty or no new rows")
+
     note_lines = {}
     for nm, line in bench_notes:
         note_lines[nm] = (note_lines.get(nm, "") + "\n" + line).strip()

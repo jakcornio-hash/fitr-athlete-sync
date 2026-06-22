@@ -2320,6 +2320,38 @@ Recovery surveys are collected via Typeform. The link is in your coach onboardin
 - **Refreshing data** — Streamlit menu (⋮, top right) → Rerun, or wait up to 15 minutes for the automatic cache refresh.
     """)
 
+    st.divider()
+    st.markdown("### Setting up coach Slack notifications")
+    st.markdown("""
+When an individual coach's athlete logs a result or challenge, the sync script can automatically notify that coach in Slack. Setup takes about 5 minutes:
+
+**1. Create a Slack app**
+- Go to [api.slack.com/apps](https://api.slack.com/apps) → Create New App → From scratch
+- Name it (e.g. *JST Compete*) and choose your Slack workspace
+- Under *OAuth & Permissions* → *Bot Token Scopes*, add `chat:write`
+- Click *Install to Workspace* and copy the **Bot User OAuth Token** (`xoxb-...`)
+
+**2. Add the token to Streamlit secrets**
+- In your Streamlit Cloud app → Settings → Secrets, add:
+  ```
+  SLACK_BOT_TOKEN = "xoxb-your-token-here"
+  ```
+
+**3. Create the Coaches tab in the Google Sheet**
+- Add a new tab named exactly **Coaches**
+- Add two columns: `Programme` and `Slack Channel`
+- One row per coach. The `Programme` value must match the athlete's Programme field exactly (e.g. *Peter Crudd individual programming*). The `Slack Channel` value should be the channel ID (right-click a channel in Slack → Copy link — the ID is the part starting with `C`)
+- JST Athlete tracks can also have a row here pointing to a general JST channel if you want those logged too
+
+**4. Invite the bot to each channel**
+- In each coach's Slack channel, type `/invite @JST Compete` (or whatever you named the bot)
+
+From the next sync onwards, each time an athlete logs a result, their coach gets a message like:
+> 🏋️ *Athlete Name* logged 1 new result:
+> 🏆 *Fran*: 6:42
+> _Peter Crudd individual programming_
+    """)
+
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 

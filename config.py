@@ -40,6 +40,7 @@ TAB_DATA = "_DATA"
 TAB_RECOVERY = "Recovery"
 TAB_SYNC_LOG = "Sync Log"
 TAB_COACH_ALERTS = "Coach Alerts"
+TAB_COACHES = "Coaches"  # programme → Slack channel mapping for per-coach notifications
 
 # Analytics thresholds (overridable via env)
 ENGAGEMENT_THRESHOLD_DAYS = int(_get("ENGAGEMENT_THRESHOLD_DAYS", "28"))
@@ -47,6 +48,9 @@ CHAT_LOOKBACK_DAYS = int(_get("CHAT_LOOKBACK_DAYS", "14"))
 
 # Notifications (Slack + email)
 SLACK_WEBHOOK_URL = _get("SLACK_WEBHOOK_URL", "")
+# Bot token for per-coach channel routing (xoxb-...). When set, sync.py will
+# send one Slack message per athlete to the channel mapped in the Coaches tab.
+SLACK_BOT_TOKEN = _get("SLACK_BOT_TOKEN", "")
 SMTP_FROM = _get("SMTP_FROM", "")
 SMTP_PASSWORD = _get("SMTP_PASSWORD", "")
 SMTP_TO = _get("SMTP_TO", "")

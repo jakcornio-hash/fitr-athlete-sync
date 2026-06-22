@@ -132,6 +132,78 @@ def send_slack(slack_text):
     urllib.request.urlopen(req, timeout=10, context=_SSL_CONTEXT)
 
 
+def send_slack_message(channel, text):
+    """Post to a specific Slack channel using the Bot API (chat.postMessage).
+
+    Requires SLACK_BOT_TOKEN (xoxb-...) in config/secrets.
+    The bot must be invited to the target channel first.
+    """
+    token = config.SLACK_BOT_TOKEN
+    if not token:
+        return
+    payload = json.dumps({"channel": channel, "text": text}).encode()
+    req = urllib.request.Request(
+        "https://slack.com/api/chat.postMessage",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+        },
+    )
+    urllib.request.urlopen(req, timeout=10, context=_SSL_CONTEXT)
+
+
+def send_coach_notifications(bench_rows, chal_rows, programme_by_name, coach_channel_map):
+    """Send one Slack message per athlete to the relevant coach's channel.
+
+    bench_rows / chal_rows: new PR log rows [date, name, email, bench, value, type, ...]
+    programme_by_name:  {athlete_name: programme_string}
+    coach_channel_map:  {programme_string: slack_channel_id}  — from the Coaches sheet tab
+
+    Only fires if SLACK_BOT_TOKEN is set and the athlete's programme has a
+    channel mapping. Silently skips athletes with no channel configured.
+    Returns count of messages sent.
+    """
+    if not config.SLACK_BOT_TOKEN:
+        return 0
+
+    from collections import defaultdict
+    entries_by_athlete = defaultdict(list)
+    for row in bench_rows:
+        name = row[1] if len(row) > 1 else ""
+        bench = row[3] if len(row) > 3 else ""
+        value = row[4] if len(row) > 4 else ""
+        if name:
+            entries_by_athlete[name].append((bench, value, "Benchmark"))
+    for row in chal_rows:
+        name = row[1] if len(row) > 1 else ""
+        bench = row[3] if len(row) > 3 else ""
+        value = row[4] if len(row) > 4 else ""
+        if name:
+            entries_by_athlete[name].append((bench, value, "Challenge"))
+
+    sent = 0
+    for athlete, entries in sorted(entries_by_athlete.items()):
+        prog = programme_by_name.get(athlete, "")
+        channel = coach_channel_map.get(prog)
+        if not channel:
+            continue
+        count = len(entries)
+        lines = [f"🏋️ *{athlete}* logged {count} new result{'s' if count > 1 else ''}:"]
+        for bench, value, kind in entries:
+            icon = "🏆" if kind == "Benchmark" else "🎯"
+            lines.append(f"  {icon} *{bench}*: {value}")
+        if prog:
+            lines.append(f"  _{prog}_")
+        try:
+            send_slack_message(channel, "\n".join(lines))
+            sent += 1
+        except Exception as e:
+            print(f"  ! Slack notify failed for {athlete} → {channel}: {e}")
+
+    return sent
+
+
 def send_email(subject, plain_text):
     if not config.SMTP_FROM or not config.SMTP_PASSWORD:
         print("  ! Email not configured (SMTP_FROM / SMTP_PASSWORD missing)")
