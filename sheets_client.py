@@ -157,15 +157,17 @@ class SheetsClient:
     def load_coaches(self):
         """Return {programme: slack_channel} from the Coaches tab, or {} if missing.
 
-        Expected columns: Programme | Slack Channel
-        The Slack Channel value should be a channel ID (C1234567890) or name (#channel).
+        Expected columns: Programme | Slack Channel | Active
+        Set Active to FALSE/NO/0/OFF to silence notifications for that coach.
         """
         try:
             rows = self.sh.worksheet(config.TAB_COACHES).get_all_records()
             return {
                 str(r.get("Programme", "")).strip(): str(r.get("Slack Channel", "")).strip()
                 for r in rows
-                if str(r.get("Programme", "")).strip() and str(r.get("Slack Channel", "")).strip()
+                if str(r.get("Programme", "")).strip()
+                and str(r.get("Slack Channel", "")).strip()
+                and str(r.get("Active", "TRUE")).strip().upper() not in ("FALSE", "NO", "0", "OFF")
             }
         except gspread.WorksheetNotFound:
             return {}
