@@ -15,6 +15,8 @@ def _get(name, default=None, required=False):
 # Google Sheet
 SHEET_ID = _get("SHEET_ID", "")
 GOOGLE_SERVICE_ACCOUNT_FILE = _get("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
+# CRM sheet used for bespoke athlete → coach mapping
+CRM_SHEET_ID = _get("CRM_SHEET_ID", "1LA58Pnvgte5HliXXTSvioB1RKnwGGWumkxsXasm7nSo")
 
 # Fitr
 FITR_BASE = "https://app.fitr.training"

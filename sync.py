@@ -377,6 +377,152 @@ def _idx_to_col(idx):
     return s
 
 
+# ------------------------------------------------------- auto-onboard helpers
+# Coach abbreviations used in CRM → Programme name used in the Coaches tab
+_CRM_COACH_MAP = {
+    "jamie w": "Jamie Warr",
+    "jamie h": "Jamie Harrop",
+    "dcon": "Dan Connolly",
+    "denis": "Denis Smith",
+    "ed": "Ed Cook",
+    "jak": "Jak Cornthwaite",
+    "louis": "Louis Towers",
+    "huw": "Huw Davis",
+    "pete": "Pete Crudge",
+}
+
+# CRM name → Fitr registered name where spellings differ
+_CRM_NAME_ALIASES = {
+    "alanis sky akin": "Alanis-Sky Akin",
+    "rachel ralston-smith": "Rachael Ralston-Smith",
+    "scott moore": "Scotty Moore",
+    "ben chipperfield": "Ben Chips",
+}
+
+
+def _load_crm_name_to_programme(sheets):
+    """Return {fitr_name_lower: (display_name, programme)} from CRM tabs."""
+    mapping = {}
+    for tab in ("Bespoke Athletes", "Junior + Youth"):
+        try:
+            rows = sheets.read_external_records(config.CRM_SHEET_ID, tab)
+        except Exception as exc:
+            print(f"  [auto-onboard] CRM tab {tab!r} unreadable: {exc}")
+            continue
+        for row in rows:
+            name = str(row.get("Athlete Name", "")).strip()
+            coach_raw = str(row.get("Coach", "")).strip().lower()
+            if not name or not coach_raw:
+                continue
+            programme = _CRM_COACH_MAP.get(coach_raw)
+            if not programme:
+                continue
+            fitr_name = _CRM_NAME_ALIASES.get(name.lower(), name)
+            mapping[fitr_name.lower()] = (fitr_name, programme)
+    return mapping
+
+
+def auto_onboard_new_athletes(sheets, rooms):
+    """Detect athletes present in Fitr chat rooms but missing from Benchmarks.
+
+    Cross-references each new opponent against the CRM. Exact name matches are
+    auto-added to Benchmarks and _DATA with the correct Programme. Returns the
+    count of athletes added.
+    """
+    if not config.CRM_SHEET_ID:
+        return 0
+
+    # Build set of Fitr IDs already in Benchmarks
+    bench_vals = sheets.read_values(config.TAB_BENCHMARKS)
+    if not bench_vals:
+        return 0
+    bench_header = bench_vals[0]
+    try:
+        bench_fitr_idx = bench_header.index("Fitr ID")
+    except ValueError:
+        return 0
+    existing_fitr_ids = set()
+    for r in bench_vals[1:]:
+        raw = r[bench_fitr_idx].strip() if bench_fitr_idx < len(r) else ""
+        if raw.isdigit():
+            existing_fitr_ids.add(int(raw))
+
+    # Find chat room opponents whose Fitr ID isn't in Benchmarks yet
+    new_opponents = {}  # {fitr_id: full_name}
+    for room in rooms:
+        opp = room.get("opponent") or {}
+        raw_id = opp.get("id")
+        name = (opp.get("full_name") or "").strip()
+        if not raw_id or not name:
+            continue
+        try:
+            fid = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if fid not in existing_fitr_ids:
+            new_opponents[fid] = name
+
+    if not new_opponents:
+        return 0
+
+    print(f"  [auto-onboard] {len(new_opponents)} new chat-room opponents found")
+
+    # Cross-reference against CRM for exact name matches
+    crm_map = _load_crm_name_to_programme(sheets)
+    to_onboard = []
+    unmatched = []
+    for fid, name in new_opponents.items():
+        entry = crm_map.get(name.lower())
+        if entry:
+            _, programme = entry
+            to_onboard.append((name, fid, programme))
+        else:
+            unmatched.append(name)
+
+    if unmatched:
+        print(f"  [auto-onboard] No CRM match (manual review needed): "
+              f"{', '.join(sorted(unmatched))}")
+
+    if not to_onboard:
+        return 0
+
+    # Add to Benchmarks: [JST ID (blank), Name, Fitr ID]
+    sheets.append_rows(config.TAB_BENCHMARKS,
+                       [[" ", name, str(fid)] for name, fid, _ in to_onboard])
+
+    # Add to _DATA
+    data_vals = sheets.read_values(config.TAB_DATA)
+    if data_vals:
+        data_header = data_vals[0]
+        try:
+            d_name_idx = data_header.index("Full Name")
+            d_prog_idx = data_header.index("Programme")
+        except ValueError:
+            d_name_idx = d_prog_idx = None
+
+        if d_name_idx is not None:
+            data_names_lower = {
+                r[d_name_idx].strip().lower()
+                for r in data_vals[1:]
+                if d_name_idx < len(r) and r[d_name_idx].strip()
+            }
+            empty = [""] * len(data_header)
+            new_data_rows = []
+            for name, _, programme in to_onboard:
+                if name.lower() not in data_names_lower:
+                    row = list(empty)
+                    row[d_name_idx] = name
+                    row[d_prog_idx] = programme
+                    new_data_rows.append(row)
+            if new_data_rows:
+                sheets.append_rows(config.TAB_DATA, new_data_rows)
+
+    for name, fid, prog in to_onboard:
+        print(f"  [auto-onboard] Added {name!r} (Fitr ID {fid}) → {prog!r}")
+
+    return len(to_onboard)
+
+
 # --------------------------------------------------------------------- driver
 def main():
     if not config.SHEET_ID:
@@ -494,16 +640,22 @@ def main():
         rec_alert_rows, milestones, consistency_wins,
     )
 
+    # ---- auto-onboard new bespoke athletes from chat rooms ----
+    onboarded = auto_onboard_new_athletes(sheets, rooms)
+    if onboarded:
+        print(f"New bespoke athletes auto-onboarded: {onboarded}")
+
     # ---- sync log ----
     unknown = sorted({n for n in chat_notes} - valid_names)
     log_tab = sheets.get_or_create(
         config.TAB_SYNC_LOG,
         ["Run Date", "New PR Log rows", "Challenge scores added",
-         "Conversations summarised", "Recovery merged", "Notes updated", "Notes"],
+         "Conversations summarised", "Recovery merged", "Notes updated",
+         "Athletes auto-onboarded", "Notes"],
     )
     sheets.append_rows(config.TAB_SYNC_LOG, [[
         TODAY.isoformat(), len(bench_rows), len(chal_rows), len(chat_notes),
-        len(rec_notes), notes_written,
+        len(rec_notes), notes_written, onboarded,
         ("Unknown athletes seen: " + ", ".join(unknown)) if unknown else "ok",
     ]])
 

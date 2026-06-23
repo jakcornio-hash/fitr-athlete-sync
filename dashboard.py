@@ -1437,10 +1437,10 @@ def page_programmes(athletes, pr_records, trend_results, data_records, load_resu
             "Programme": prog,
             "Athletes": count,
             "Active (28d)": f"{active}/{count} ({round(active / count * 100)}%)" if count else "—",
-            "Avg Days Since Log": avg_days if avg_days is not None else "never",
+            "Avg Days Since Log": str(avg_days) if avg_days is not None else "never",
             "Avg ACWR": f"{avg_acwr:.2f}" if avg_acwr is not None else "—",
-            "🔴 Load Spikes": spikes or "—",
-            "Declining Trends": declining or "—",
+            "🔴 Load Spikes": str(spikes) if spikes else "—",
+            "Declining Trends": str(declining) if declining else "—",
         })
 
     st.subheader("Programme Breakdown")
@@ -1864,8 +1864,9 @@ def page_load(load_results):
     display_cols = [c for c in df_summary.columns if c != "_status"]
     styled = df_summary[display_cols + ["_status"]].style.apply(_load_row_colour, axis=1)
     st.dataframe(
-        df_summary[display_cols].style.apply(_load_row_colour, axis=1),
+        styled,
         use_container_width=True, hide_index=True,
+        column_config={"_status": None},
     )
 
     # ── Athlete drill-down ────────────────────────────────────────────────────
@@ -2184,8 +2185,9 @@ def page_week_planner(engagement_results, rec_alert_rows, comp_results,
                 with st.expander("✏️ Note"):
                     with st.form(f"wk_{title[:4]}_{idx}_{nm}", clear_on_submit=True):
                         note_text = st.text_area(
-                            "", key=f"wk_nt_{title[:4]}_{nm}_{idx}",
+                            "Notes", key=f"wk_nt_{title[:4]}_{nm}_{idx}",
                             height=64, placeholder="Quick note…",
+                            label_visibility="collapsed",
                         )
                         if st.form_submit_button("Save"):
                             if note_text.strip():
