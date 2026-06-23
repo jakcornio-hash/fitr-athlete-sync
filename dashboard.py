@@ -2208,6 +2208,223 @@ def page_week_planner(engagement_results, rec_alert_rows, comp_results,
     _render_group("🏆 Celebrate", celebrate)
 
 
+# ─────────────────────────────────────────────────────────── CRM integration
+def page_crm_onboarding():
+    """Athletes in CRM with Fitr IDs not yet syncing (Benchmarks pipeline)."""
+    st.markdown("## CRM Onboarding Pipeline")
+    st.caption("Athletes in the CRM who have Fitr IDs but aren't syncing yet")
+
+    try:
+        sheets = st.session_state.get("sheets_client")
+        if not sheets:
+            from sheets_client import SheetsClient
+            sheets = SheetsClient()
+
+        # Load CRM data
+        crm_athletes = {}
+        for tab in ("Bespoke Athletes", "Junior + Youth"):
+            try:
+                rows = sheets.read_external_records(config.CRM_SHEET_ID, tab)
+                for r in rows:
+                    name = (r.get("Athlete Name") or "").strip()
+                    coach = (r.get("Coach") or "").strip()
+                    if name and coach:
+                        crm_athletes[name.lower()] = (name, coach)
+            except Exception as e:
+                st.error(f"Error reading CRM tab {tab}: {e}")
+                return
+
+        # Load Benchmarks
+        bench_vals = sheets.read_values(config.TAB_BENCHMARKS)
+        if not bench_vals:
+            st.info("No Benchmarks yet")
+            return
+        bench_header = bench_vals[0]
+        bench_name_idx = bench_header.index("Name") if "Name" in bench_header else None
+        if not bench_name_idx:
+            st.error("Benchmarks tab missing 'Name' column")
+            return
+
+        bench_names_lower = {
+            r[bench_name_idx].strip().lower()
+            for r in bench_vals[1:]
+            if bench_name_idx < len(r) and r[bench_name_idx].strip()
+        }
+
+        # Find CRM athletes NOT in Benchmarks
+        pending = [
+            (display, coach)
+            for lower, (display, coach) in crm_athletes.items()
+            if lower not in bench_names_lower
+        ]
+        pending.sort(key=lambda x: x[1])  # Sort by coach
+
+        if not pending:
+            st.success("✓ All CRM athletes are syncing!")
+            return
+
+        st.warning(f"{len(pending)} athletes ready to onboard")
+
+        # Group by coach
+        by_coach = {}
+        for name, coach in pending:
+            if coach not in by_coach:
+                by_coach[coach] = []
+            by_coach[coach].append(name)
+
+        for coach in sorted(by_coach.keys()):
+            with st.expander(f"**{coach}** ({len(by_coach[coach])} pending)"):
+                for name in sorted(by_coach[coach]):
+                    st.text(f"• {name}")
+
+        st.info("💡 These athletes will be auto-onboarded when they appear in Fitr chat rooms.")
+
+    except Exception as e:
+        st.error(f"Error: {e}")
+
+
+def page_coach_rosters():
+    """Compare each coach's CRM roster vs. active syncing athletes."""
+    st.markdown("## Coach Rosters (CRM vs. Fitr)")
+    st.caption("Who each coach has in the CRM vs. who's actively syncing")
+
+    try:
+        sheets = st.session_state.get("sheets_client")
+        if not sheets:
+            from sheets_client import SheetsClient
+            sheets = SheetsClient()
+
+        # Load CRM
+        coach_roster = {}
+        for tab in ("Bespoke Athletes", "Junior + Youth"):
+            try:
+                rows = sheets.read_external_records(config.CRM_SHEET_ID, tab)
+                for r in rows:
+                    name = (r.get("Athlete Name") or "").strip()
+                    coach = (r.get("Coach") or "").strip().lower()
+                    if not name:
+                        continue
+                    coach_abbrev_map = {
+                        "jamie w": "Jamie Warr", "jamie h": "Jamie Harrop",
+                        "dcon": "Dan Connolly", "denis": "Denis Smith",
+                        "ed": "Ed Cook", "jak": "Jak Cornthwaite",
+                        "louis": "Louis Towers", "huw": "Huw Davis", "pete": "Pete Crudge",
+                    }
+                    full_coach = coach_abbrev_map.get(coach, coach)
+                    if full_coach not in coach_roster:
+                        coach_roster[full_coach] = []
+                    coach_roster[full_coach].append(name)
+            except Exception as e:
+                st.warning(f"Could not read CRM tab {tab}: {e}")
+
+        # Load syncing athletes
+        data_recs = sheets.read_records(config.TAB_DATA)
+        syncing_by_coach = {}
+        for r in data_recs:
+            name = (r.get("Full Name") or "").strip()
+            prog = (r.get("Programme") or "").strip()
+            if name and prog:
+                if prog not in syncing_by_coach:
+                    syncing_by_coach[prog] = []
+                syncing_by_coach[prog].append(name)
+
+        # Display comparison
+        all_coaches = sorted(set(coach_roster.keys()) | set(syncing_by_coach.keys()))
+
+        for coach in all_coaches:
+            crm_set = set(coach_roster.get(coach, []))
+            syncing_set = set(syncing_by_coach.get(coach, []))
+
+            crm_count = len(crm_set)
+            sync_count = len(syncing_set)
+            missing = crm_set - syncing_set
+            extra = syncing_set - crm_set
+
+            status = "✅" if not missing and not extra else "⚠️"
+            with st.expander(f"{status} **{coach}** — CRM: {crm_count} | Syncing: {sync_count}"):
+                if missing:
+                    st.error(f"In CRM but not syncing ({len(missing)}):")
+                    for n in sorted(missing):
+                        st.text(f"  • {n}")
+                if extra:
+                    st.warning(f"Syncing but not in CRM ({len(extra)}):")
+                    for n in sorted(extra):
+                        st.text(f"  • {n}")
+                if not missing and not extra:
+                    st.success("✓ Rosters match!")
+
+    except Exception as e:
+        st.error(f"Error: {e}")
+
+
+def page_crm_discrepancies():
+    """Flag athletes appearing in multiple places with mismatches."""
+    st.markdown("## CRM Discrepancies")
+    st.caption("Athletes appearing multiple times or with inconsistencies")
+
+    try:
+        sheets = st.session_state.get("sheets_client")
+        if not sheets:
+            from sheets_client import SheetsClient
+            sheets = SheetsClient()
+
+        # Load CRM (collect ALL occurrences)
+        crm_entries = []
+        for tab in ("Bespoke Athletes", "Junior + Youth"):
+            try:
+                rows = sheets.read_external_records(config.CRM_SHEET_ID, tab)
+                for r in rows:
+                    name = (r.get("Athlete Name") or "").strip()
+                    coach = (r.get("Coach") or "").strip()
+                    if name:
+                        crm_entries.append((name, coach, tab))
+            except Exception as e:
+                st.warning(f"Could not read CRM tab {tab}: {e}")
+
+        # Find duplicates (same athlete under different coaches)
+        from collections import Counter
+        name_counts = Counter(name for name, coach, tab in crm_entries)
+        duplicates = {n: name_counts[n] for n in name_counts if name_counts[n] > 1}
+
+        if duplicates:
+            st.error(f"Athletes appearing multiple times in CRM ({len(duplicates)}):")
+            for name in sorted(duplicates.keys()):
+                entries = [e for e in crm_entries if e[0] == name]
+                with st.expander(f"**{name}** ({len(entries)} entries)"):
+                    for n, coach, tab in entries:
+                        st.text(f"  • {coach} ({tab})")
+        else:
+            st.success("✓ No duplicate CRM entries")
+
+        # Load _DATA for programme validation
+        data_recs = sheets.read_records(config.TAB_DATA)
+        data_by_name = {r.get("Full Name", "").strip(): r for r in data_recs}
+
+        # Cross-check: CRM coach vs. _DATA Programme
+        mismatches = []
+        coach_abbrev_map = {
+            "jamie w": "Jamie Warr", "jamie h": "Jamie Harrop",
+            "dcon": "Dan Connolly", "denis": "Denis Smith",
+            "ed": "Ed Cook", "jak": "Jak Cornthwaite",
+            "louis": "Louis Towers", "huw": "Huw Davis", "pete": "Pete Crudge",
+        }
+        for name, coach, tab in crm_entries:
+            full_coach = coach_abbrev_map.get(coach.lower(), coach) if coach else ""
+            data_rec = data_by_name.get(name)
+            if data_rec:
+                data_prog = (data_rec.get("Programme") or "").strip()
+                if full_coach and data_prog and full_coach != data_prog:
+                    mismatches.append((name, full_coach, data_prog))
+
+        if mismatches:
+            st.warning(f"Coach assignment mismatches ({len(mismatches)}):")
+            for name, crm_coach, data_prog in sorted(mismatches):
+                st.text(f"  • {name}: CRM says {crm_coach!r}, _DATA says {data_prog!r}")
+
+    except Exception as e:
+        st.error(f"Error: {e}")
+
+
 def page_help():
     """Coach guide — explains each tab and how to use the dashboard."""
     st.markdown("## Dashboard Guide")
@@ -2404,7 +2621,7 @@ def main():
     tabs = st.tabs([
         "📋 Outreach List", "🚨 Alerts", "🃏 Squad", "👥 Athletes",
         "🗓️ Week Plan", "🏁 Competitions", "📊 Programmes", "🏋️ Load",
-        "📈 Trends", "💤 Recovery", "❓ Help",
+        "📈 Trends", "💤 Recovery", "🌐 CRM", "❓ Help",
     ])
 
     with tabs[0]:
@@ -2428,6 +2645,12 @@ def main():
     with tabs[9]:
         page_recovery(rec_by_name)
     with tabs[10]:
+        page_crm_onboarding()
+        st.divider()
+        page_coach_rosters()
+        st.divider()
+        page_crm_discrepancies()
+    with tabs[11]:
         page_help()
 
 
