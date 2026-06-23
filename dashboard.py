@@ -1219,9 +1219,9 @@ def page_recovery(rec_by_name):
             pass
         return ""
 
-    styled = df.style.applymap(lambda v: _colour(v, "Soreness"), subset=["Soreness"])
-    styled = styled.applymap(lambda v: _colour(v, "Stress"), subset=["Stress"])
-    styled = styled.applymap(lambda v: _colour(v, "Motivation"), subset=["Motivation"])
+    styled = df.style.map(lambda v: _colour(v, "Soreness"), subset=["Soreness"])
+    styled = styled.map(lambda v: _colour(v, "Stress"), subset=["Stress"])
+    styled = styled.map(lambda v: _colour(v, "Motivation"), subset=["Motivation"])
 
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
@@ -2522,6 +2522,17 @@ Latest recovery survey responses for every athlete who has submitted one.
 **Soreness** and **Stress** cells are highlighted red (≥ 7/10) or amber (≥ 5/10). These athletes appear in the Alerts and Outreach tabs.
 
 Recovery surveys are collected via Typeform. The link is in your coach onboarding notes.
+"""),
+        ("🌐 CRM", """
+Three views for managing the coach-athlete mapping between the CRM and Fitr.
+
+**Onboarding Pipeline** — Athletes in the CRM with Fitr IDs who aren't syncing yet (ready to add to Benchmarks). Once added, the sync will auto-detect them in chat rooms and pull their benchmark data.
+
+**Coach Rosters** — Each coach's CRM roster vs. who's actively syncing in Fitr. Highlights gaps (in CRM but no sync data) and surprises (syncing but not in CRM).
+
+**Discrepancies** — Athletes appearing multiple times in the CRM under different coaches, and mismatches between CRM coach assignment and the _DATA Programme field.
+
+**Note:** Fitr data (activity, results, engagement) is the single source of truth. The CRM is used purely for coach-athlete mapping and onboarding pipeline visibility.
 """),
     ]
 
