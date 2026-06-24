@@ -1,0 +1,52 @@
+name: Daily Fitr Sync
+
+on:
+  schedule:
+    # 06:00 UTC daily (07:00 BST / 06:00 GMT)
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    # Allow manual trigger from GitHub Actions tab
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write service account key
+        run: echo '${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}' > service_account.json
+
+      - name: Run sync
+        env:
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_FILE: service_account.json
+          CRM_SHEET_ID: ${{ secrets.CRM_SHEET_ID }}
+          FITR_EMAIL: ${{ secrets.FITR_EMAIL }}
+          FITR_PASSWORD: ${{ secrets.FITR_PASSWORD }}
+          FITR_ACCESS_TOKEN: ${{ secrets.FITR_ACCESS_TOKEN }}
+          FITR_CLIENT_ID: ${{ secrets.FITR_CLIENT_ID }}
+          FITR_CLIENT_SECRET: ${{ secrets.FITR_CLIENT_SECRET }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: claude-haiku-4-5-20251001
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          RECOVERY_SHEET_ID: ${{ secrets.RECOVERY_SHEET_ID }}
+          COMP_FORM_SHEET_ID: ${{ secrets.COMP_FORM_SHEET_ID }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_TO: ${{ secrets.SMTP_TO }}
+          LOOKBACK_DAYS: "7"
+          MAX_CHAT_SUMMARIES: "40"
+        run: python sync.py
