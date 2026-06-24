@@ -2209,167 +2209,261 @@ def page_week_planner(engagement_results, rec_alert_rows, comp_results,
 
 
 # ─────────────────────────────────────────────────────────── CRM integration
-def page_crm_onboarding():
-    """Athletes in CRM with Fitr IDs not yet syncing (Benchmarks pipeline)."""
-    st.markdown("## CRM Onboarding Pipeline")
-    st.caption("Athletes in the CRM who have Fitr IDs but aren't syncing yet")
 
+_COACH_ABBREV = {
+    "jamie w": "Jamie Warr", "jamie h": "Jamie Harrop",
+    "dcon": "Dan Connolly", "denis": "Denis Smith",
+    "ed": "Ed Cook", "jak": "Jak Cornthwaite",
+    "louis": "Louis Towers", "huw": "Huw Davis", "pete": "Pete Crudge",
+}
+
+
+@st.cache_data(ttl=600, show_spinner="Loading CRM data...")
+def load_crm_data():
+    """Load CRM athlete-coach map + sync log. Cached separately from main data."""
+    sheets = get_sheets()
+    crm_by_name = {}  # name_lower -> (display_name, full_coach)
+    for tab in ("Bespoke Athletes", "Junior + Youth"):
+        try:
+            rows = sheets.read_external_records(config.CRM_SHEET_ID, tab)
+            for r in rows:
+                name = (r.get("Athlete Name") or "").strip()
+                coach_raw = (r.get("Coach") or "").strip()
+                if name:
+                    full_coach = _COACH_ABBREV.get(coach_raw.lower(), coach_raw)
+                    crm_by_name[name.lower()] = (name, full_coach)
+        except Exception:
+            pass
+    sync_log = []
     try:
-        sheets = st.session_state.get("sheets_client")
-        if not sheets:
-            from sheets_client import SheetsClient
-            sheets = SheetsClient()
-
-        # Load CRM data
-        crm_athletes = {}
-        for tab in ("Bespoke Athletes", "Junior + Youth"):
-            try:
-                rows = sheets.read_external_records(config.CRM_SHEET_ID, tab)
-                for r in rows:
-                    name = (r.get("Athlete Name") or "").strip()
-                    coach = (r.get("Coach") or "").strip()
-                    if name and coach:
-                        crm_athletes[name.lower()] = (name, coach)
-            except Exception as e:
-                st.error(f"Error reading CRM tab {tab}: {e}")
-                return
-
-        # Load Benchmarks
-        bench_vals = sheets.read_values(config.TAB_BENCHMARKS)
-        if not bench_vals:
-            st.info("No Benchmarks yet")
-            return
-        bench_header = bench_vals[0]
-        bench_name_idx = bench_header.index("Name") if "Name" in bench_header else None
-        if not bench_name_idx:
-            st.error("Benchmarks tab missing 'Name' column")
-            return
-
-        bench_names_lower = {
-            r[bench_name_idx].strip().lower()
-            for r in bench_vals[1:]
-            if bench_name_idx < len(r) and r[bench_name_idx].strip()
-        }
-
-        # Find CRM athletes NOT in Benchmarks
-        pending = [
-            (display, coach)
-            for lower, (display, coach) in crm_athletes.items()
-            if lower not in bench_names_lower
-        ]
-        pending.sort(key=lambda x: x[1])  # Sort by coach
-
-        if not pending:
-            st.success("✓ All CRM athletes are syncing!")
-            return
-
-        st.warning(f"{len(pending)} athletes ready to onboard")
-
-        # Group by coach
-        by_coach = {}
-        for name, coach in pending:
-            if coach not in by_coach:
-                by_coach[coach] = []
-            by_coach[coach].append(name)
-
-        for coach in sorted(by_coach.keys()):
-            with st.expander(f"**{coach}** ({len(by_coach[coach])} pending)"):
-                for name in sorted(by_coach[coach]):
-                    st.text(f"• {name}")
-
-        st.info("💡 These athletes will be auto-onboarded when they appear in Fitr chat rooms.")
-
-    except Exception as e:
-        st.error(f"Error: {e}")
+        sync_log = sheets.read_records(config.TAB_SYNC_LOG)
+    except Exception:
+        pass
+    return crm_by_name, sync_log
 
 
-def page_coach_rosters():
-    """Compare each coach's CRM roster vs. active syncing athletes."""
-    st.markdown("## Coach Rosters (CRM vs. Fitr)")
-    st.caption("Who each coach has in the CRM vs. who's actively syncing")
+def page_crm(athletes, engagement_results, data_records):
+    """Unified CRM integration tab: lifecycle, pipeline, rosters, discrepancies, bulk actions."""
+    st.markdown("## CRM Integration")
 
+    crm_by_name, sync_log = load_crm_data()
+
+    # ── Sync status header ────────────────────────────────────────────────────
+    if sync_log:
+        last = sync_log[-1]
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Last Sync", str(last.get("Run Date", "—")))
+        c2.metric("New PR Results", str(last.get("New PR Log rows", 0)))
+        c3.metric("Conversations", str(last.get("Conversations summarised", 0)))
+        c4.metric("Auto-onboarded", str(last.get("Athletes auto-onboarded", 0)))
+        st.divider()
+
+    crm_tabs = st.tabs([
+        "🔄 Lifecycle", "🚀 Pipeline", "👥 Rosters", "⚠️ Discrepancies", "✏️ Bulk Reassign",
+    ])
+
+    with crm_tabs[0]:
+        _crm_lifecycle(athletes, engagement_results, data_records, crm_by_name)
+    with crm_tabs[1]:
+        _crm_pipeline(athletes, crm_by_name)
+    with crm_tabs[2]:
+        _crm_rosters(athletes, engagement_results, data_records, crm_by_name)
+    with crm_tabs[3]:
+        _crm_discrepancies(data_records, crm_by_name)
+    with crm_tabs[4]:
+        _crm_bulk_reassign(data_records)
+
+
+def _crm_lifecycle(athletes, engagement_results, data_records, crm_by_name):
+    """Full lifecycle table: CRM → Benchmarks → Fitr activity."""
+    st.markdown("### Athlete Lifecycle")
+    st.caption("Every bespoke athlete's journey — from CRM through to active training")
+
+    bench_names_lower = {a["name"].lower() for a in athletes}
+    eng_by_name = {e["name"].lower(): e for e in engagement_results}
+    data_by_name = {
+        (r.get("Full Name") or "").strip().lower(): r
+        for r in data_records
+        if (r.get("Full Name") or "").strip()
+    }
+
+    # Union of CRM names + bespoke athletes already syncing
+    bespoke_coaches = set(_COACH_ABBREV.values())
+    all_names = set(crm_by_name.keys())
+    for r in data_records:
+        name = (r.get("Full Name") or "").strip()
+        prog = (r.get("Programme") or "").strip()
+        if name and prog in bespoke_coaches:
+            all_names.add(name.lower())
+
+    rows = []
+    for name_lower in sorted(all_names):
+        crm_entry = crm_by_name.get(name_lower)
+        display_name = crm_entry[0] if crm_entry else name_lower.title()
+        crm_coach = crm_entry[1] if crm_entry else "—"
+
+        in_bench = name_lower in bench_names_lower
+        eng = eng_by_name.get(name_lower) or eng_by_name.get(display_name.lower())
+        data_rec = data_by_name.get(name_lower)
+        data_coach = (data_rec.get("Programme") or "").strip() if data_rec else "—"
+
+        last_logged = (eng or {}).get("last_logged", "never") if in_bench else "not syncing"
+        days = (eng or {}).get("days_since")
+
+        if not in_bench:
+            status = "⬜ Not syncing"
+        elif last_logged == "never":
+            status = "🆕 Onboarded"
+        elif days is None:
+            status = "🆕 Onboarded"
+        elif days <= 14:
+            status = "🟢 Active"
+        elif days <= 44:
+            status = "🟡 Check in"
+        else:
+            status = "🔴 Inactive"
+
+        rows.append({
+            "Athlete": display_name,
+            "CRM Coach": crm_coach,
+            "Fitr Programme": data_coach,
+            "Syncing": "✅" if in_bench else "❌",
+            "Last Logged": last_logged,
+            "Days Since": str(days) if days is not None else ("—" if in_bench else "—"),
+            "Status": status,
+        })
+
+    if not rows:
+        st.info("No bespoke athletes found.")
+        return
+
+    df = pd.DataFrame(rows)
+
+    # Filter controls
+    col_f, col_s = st.columns([2, 2])
+    with col_f:
+        coaches = ["All coaches"] + sorted({r["CRM Coach"] for r in rows if r["CRM Coach"] != "—"})
+        sel_coach = st.selectbox("Filter by coach", coaches, key="lc_coach_filter")
+    with col_s:
+        statuses = ["All statuses", "🟢 Active", "🟡 Check in", "🔴 Inactive", "🆕 Onboarded", "⬜ Not syncing"]
+        sel_status = st.selectbox("Filter by status", statuses, key="lc_status_filter")
+
+    if sel_coach != "All coaches":
+        df = df[df["CRM Coach"] == sel_coach]
+    if sel_status != "All statuses":
+        df = df[df["Status"] == sel_status]
+
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    # Summary counts
+    status_counts = pd.Series([r["Status"] for r in rows]).value_counts()
+    st.caption("  ·  ".join(f"{s}: {c}" for s, c in status_counts.items()))
+
+
+def _crm_pipeline(athletes, crm_by_name):
+    """Athletes in CRM not yet in Benchmarks."""
+    st.markdown("### Onboarding Pipeline")
+    st.caption("CRM athletes not yet syncing — will be auto-added when they appear in Fitr chat")
+
+    bench_names_lower = {a["name"].lower() for a in athletes}
+    pending = [
+        (display, coach)
+        for lower, (display, coach) in crm_by_name.items()
+        if lower not in bench_names_lower
+    ]
+    pending.sort(key=lambda x: x[1])
+
+    if not pending:
+        st.success("✓ All CRM athletes are syncing!")
+        return
+
+    st.warning(f"{len(pending)} athletes not yet syncing")
+
+    by_coach = {}
+    for name, coach in pending:
+        by_coach.setdefault(coach, []).append(name)
+
+    for coach in sorted(by_coach.keys()):
+        with st.expander(f"**{coach}** — {len(by_coach[coach])} pending"):
+            for name in sorted(by_coach[coach]):
+                st.text(f"• {name}")
+
+    st.info("💡 To add manually: run `python onboard_bespoke_athletes.py` with their Fitr IDs.")
+
+
+def _crm_rosters(athletes, engagement_results, data_records, crm_by_name):
+    """Per-coach CRM roster vs. active Fitr athletes, with engagement signal."""
+    st.markdown("### Coach Rosters")
+    st.caption("CRM roster vs. actively syncing athletes, with engagement status")
+
+    eng_by_name = {e["name"].lower(): e for e in engagement_results}
+    bench_names_lower = {a["name"].lower() for a in athletes}
+
+    syncing_by_coach = {}
+    for r in data_records:
+        name = (r.get("Full Name") or "").strip()
+        prog = (r.get("Programme") or "").strip()
+        if name and prog in set(_COACH_ABBREV.values()):
+            syncing_by_coach.setdefault(prog, []).append(name)
+
+    crm_by_coach = {}
+    for lower, (display, coach) in crm_by_name.items():
+        crm_by_coach.setdefault(coach, []).append(display)
+
+    all_coaches = sorted(set(crm_by_coach.keys()) | set(syncing_by_coach.keys()))
+
+    for coach in all_coaches:
+        crm_set = {n.lower() for n in crm_by_coach.get(coach, [])}
+        sync_set = {n.lower() for n in syncing_by_coach.get(coach, [])}
+        missing = crm_set - sync_set
+        extra = sync_set - crm_set
+        icon = "✅" if not missing and not extra else "⚠️"
+
+        with st.expander(
+            f"{icon} **{coach}** — CRM: {len(crm_set)} | Syncing: {len(sync_set)}"
+        ):
+            if missing:
+                st.error(f"In CRM but not syncing ({len(missing)}):")
+                for n in sorted(missing):
+                    st.text(f"  • {n}")
+            if extra:
+                st.warning(f"Syncing but not in CRM ({len(extra)}):")
+                for n in sorted(extra):
+                    st.text(f"  • {n}")
+
+            # Show engagement summary for syncing athletes
+            syncing_names = syncing_by_coach.get(coach, [])
+            if syncing_names:
+                active = sum(
+                    1 for n in syncing_names
+                    if (eng_by_name.get(n.lower()) or {}).get("days_since") is not None
+                    and (eng_by_name.get(n.lower()) or {}).get("days_since") <= 14
+                )
+                flagged = sum(
+                    1 for n in syncing_names
+                    if (eng_by_name.get(n.lower()) or {}).get("flag")
+                )
+                st.caption(
+                    f"Active (≤14d): {active}/{len(syncing_names)}   "
+                    f"Needs contact: {flagged}"
+                )
+
+            if not missing and not extra:
+                st.success("✓ Rosters match!")
+
+
+def _crm_discrepancies(data_records, crm_by_name):
+    """Flag CRM duplicates and coach assignment mismatches vs _DATA."""
+    st.markdown("### Discrepancies")
+    st.caption("CRM duplicates and coach assignment mismatches")
+
+    from collections import Counter
+    name_counts = Counter(lower for lower in crm_by_name.keys())
+    # CRM is already deduped by name_lower in load_crm_data, so show raw list approach
+    # Re-load raw to check for true name duplicates
     try:
-        sheets = st.session_state.get("sheets_client")
-        if not sheets:
-            from sheets_client import SheetsClient
-            sheets = SheetsClient()
-
-        # Load CRM
-        coach_roster = {}
-        for tab in ("Bespoke Athletes", "Junior + Youth"):
-            try:
-                rows = sheets.read_external_records(config.CRM_SHEET_ID, tab)
-                for r in rows:
-                    name = (r.get("Athlete Name") or "").strip()
-                    coach = (r.get("Coach") or "").strip().lower()
-                    if not name:
-                        continue
-                    coach_abbrev_map = {
-                        "jamie w": "Jamie Warr", "jamie h": "Jamie Harrop",
-                        "dcon": "Dan Connolly", "denis": "Denis Smith",
-                        "ed": "Ed Cook", "jak": "Jak Cornthwaite",
-                        "louis": "Louis Towers", "huw": "Huw Davis", "pete": "Pete Crudge",
-                    }
-                    full_coach = coach_abbrev_map.get(coach, coach)
-                    if full_coach not in coach_roster:
-                        coach_roster[full_coach] = []
-                    coach_roster[full_coach].append(name)
-            except Exception as e:
-                st.warning(f"Could not read CRM tab {tab}: {e}")
-
-        # Load syncing athletes
-        data_recs = sheets.read_records(config.TAB_DATA)
-        syncing_by_coach = {}
-        for r in data_recs:
-            name = (r.get("Full Name") or "").strip()
-            prog = (r.get("Programme") or "").strip()
-            if name and prog:
-                if prog not in syncing_by_coach:
-                    syncing_by_coach[prog] = []
-                syncing_by_coach[prog].append(name)
-
-        # Display comparison
-        all_coaches = sorted(set(coach_roster.keys()) | set(syncing_by_coach.keys()))
-
-        for coach in all_coaches:
-            crm_set = set(coach_roster.get(coach, []))
-            syncing_set = set(syncing_by_coach.get(coach, []))
-
-            crm_count = len(crm_set)
-            sync_count = len(syncing_set)
-            missing = crm_set - syncing_set
-            extra = syncing_set - crm_set
-
-            status = "✅" if not missing and not extra else "⚠️"
-            with st.expander(f"{status} **{coach}** — CRM: {crm_count} | Syncing: {sync_count}"):
-                if missing:
-                    st.error(f"In CRM but not syncing ({len(missing)}):")
-                    for n in sorted(missing):
-                        st.text(f"  • {n}")
-                if extra:
-                    st.warning(f"Syncing but not in CRM ({len(extra)}):")
-                    for n in sorted(extra):
-                        st.text(f"  • {n}")
-                if not missing and not extra:
-                    st.success("✓ Rosters match!")
-
-    except Exception as e:
-        st.error(f"Error: {e}")
-
-
-def page_crm_discrepancies():
-    """Flag athletes appearing in multiple places with mismatches."""
-    st.markdown("## CRM Discrepancies")
-    st.caption("Athletes appearing multiple times or with inconsistencies")
-
-    try:
-        sheets = st.session_state.get("sheets_client")
-        if not sheets:
-            from sheets_client import SheetsClient
-            sheets = SheetsClient()
-
-        # Load CRM (collect ALL occurrences)
-        crm_entries = []
+        sheets = get_sheets()
+        raw_entries = []
         for tab in ("Bespoke Athletes", "Junior + Youth"):
             try:
                 rows = sheets.read_external_records(config.CRM_SHEET_ID, tab)
@@ -2377,39 +2471,28 @@ def page_crm_discrepancies():
                     name = (r.get("Athlete Name") or "").strip()
                     coach = (r.get("Coach") or "").strip()
                     if name:
-                        crm_entries.append((name, coach, tab))
-            except Exception as e:
-                st.warning(f"Could not read CRM tab {tab}: {e}")
+                        raw_entries.append((name, coach, tab))
+            except Exception:
+                pass
 
-        # Find duplicates (same athlete under different coaches)
-        from collections import Counter
-        name_counts = Counter(name for name, coach, tab in crm_entries)
-        duplicates = {n: name_counts[n] for n in name_counts if name_counts[n] > 1}
+        raw_counts = Counter(n.lower() for n, c, t in raw_entries)
+        dups = {n: raw_counts[n] for n in raw_counts if raw_counts[n] > 1}
 
-        if duplicates:
-            st.error(f"Athletes appearing multiple times in CRM ({len(duplicates)}):")
-            for name in sorted(duplicates.keys()):
-                entries = [e for e in crm_entries if e[0] == name]
-                with st.expander(f"**{name}** ({len(entries)} entries)"):
+        if dups:
+            st.error(f"Athletes appearing multiple times in CRM ({len(dups)}):")
+            for name_lower in sorted(dups.keys()):
+                entries = [(n, c, t) for n, c, t in raw_entries if n.lower() == name_lower]
+                with st.expander(f"**{entries[0][0]}** ({len(entries)} entries)"):
                     for n, coach, tab in entries:
                         st.text(f"  • {coach} ({tab})")
         else:
             st.success("✓ No duplicate CRM entries")
 
-        # Load _DATA for programme validation
-        data_recs = sheets.read_records(config.TAB_DATA)
-        data_by_name = {r.get("Full Name", "").strip(): r for r in data_recs}
-
-        # Cross-check: CRM coach vs. _DATA Programme
+        # Coach assignment mismatches: CRM vs _DATA Programme
+        data_by_name = {(r.get("Full Name") or "").strip(): r for r in data_records}
         mismatches = []
-        coach_abbrev_map = {
-            "jamie w": "Jamie Warr", "jamie h": "Jamie Harrop",
-            "dcon": "Dan Connolly", "denis": "Denis Smith",
-            "ed": "Ed Cook", "jak": "Jak Cornthwaite",
-            "louis": "Louis Towers", "huw": "Huw Davis", "pete": "Pete Crudge",
-        }
-        for name, coach, tab in crm_entries:
-            full_coach = coach_abbrev_map.get(coach.lower(), coach) if coach else ""
+        for name, coach_raw, tab in raw_entries:
+            full_coach = _COACH_ABBREV.get(coach_raw.lower(), coach_raw)
             data_rec = data_by_name.get(name)
             if data_rec:
                 data_prog = (data_rec.get("Programme") or "").strip()
@@ -2418,11 +2501,65 @@ def page_crm_discrepancies():
 
         if mismatches:
             st.warning(f"Coach assignment mismatches ({len(mismatches)}):")
-            for name, crm_coach, data_prog in sorted(mismatches):
-                st.text(f"  • {name}: CRM says {crm_coach!r}, _DATA says {data_prog!r}")
+            rows_out = [
+                {"Athlete": n, "CRM Coach": crm, "_DATA Programme": data}
+                for n, crm, data in sorted(mismatches)
+            ]
+            st.dataframe(pd.DataFrame(rows_out), use_container_width=True, hide_index=True)
+        else:
+            st.success("✓ No coach assignment mismatches")
 
     except Exception as e:
         st.error(f"Error: {e}")
+
+
+def _crm_bulk_reassign(data_records):
+    """Bulk reassign Programme for multiple athletes at once."""
+    st.markdown("### Bulk Programme Reassignment")
+    st.caption("Move multiple athletes to a different coach or programme in one go")
+
+    all_coaches = sorted(_COACH_ABBREV.values())
+    all_progs = all_coaches + config.JST_TRACKS
+
+    # Build name→current programme map
+    data_by_name = {}
+    for r in data_records:
+        name = (r.get("Full Name") or "").strip()
+        prog = (r.get("Programme") or "").strip()
+        if name:
+            data_by_name[name] = prog
+
+    col_filter, col_new = st.columns([2, 2])
+    with col_filter:
+        filter_prog = st.selectbox(
+            "Show athletes currently in", ["All"] + all_progs,
+            key="bulk_filter_prog",
+        )
+    with col_new:
+        new_prog = st.selectbox(
+            "Reassign selected to", all_progs,
+            key="bulk_new_prog",
+        )
+
+    filtered = {
+        name: prog for name, prog in data_by_name.items()
+        if filter_prog == "All" or prog == filter_prog
+    }
+
+    selected = st.multiselect(
+        "Select athletes to reassign",
+        options=sorted(filtered.keys()),
+        format_func=lambda n: f"{n}  ({filtered.get(n, '—')})",
+        key="bulk_selected",
+    )
+
+    if selected:
+        st.info(f"Will move {len(selected)} athlete(s) → **{new_prog}**")
+        if st.button("Apply Reassignment", type="primary", key="bulk_apply"):
+            updates = {name: {"Programme": new_prog} for name in selected}
+            get_sheets().batch_update_by_name(config.TAB_DATA, "Full Name", updates)
+            st.success(f"✓ Updated {len(selected)} athletes → {new_prog}")
+            st.cache_data.clear()
 
 
 def page_help():
@@ -2524,15 +2661,19 @@ Latest recovery survey responses for every athlete who has submitted one.
 Recovery surveys are collected via Typeform. The link is in your coach onboarding notes.
 """),
         ("🌐 CRM", """
-Three views for managing the coach-athlete mapping between the CRM and Fitr.
+Five views for managing the coach-athlete mapping between the CRM and Fitr. Fitr is the single source of truth for athlete data; the CRM is used for coach-athlete mapping and onboarding.
 
-**Onboarding Pipeline** — Athletes in the CRM with Fitr IDs who aren't syncing yet (ready to add to Benchmarks). Once added, the sync will auto-detect them in chat rooms and pull their benchmark data.
+**🔄 Lifecycle** — Full status table for every bespoke athlete: CRM coach, whether they're syncing, last logged date, and engagement status. Filter by coach or status. This is your "are they still with us?" view.
 
-**Coach Rosters** — Each coach's CRM roster vs. who's actively syncing in Fitr. Highlights gaps (in CRM but no sync data) and surprises (syncing but not in CRM).
+**🚀 Pipeline** — CRM athletes not yet in Benchmarks (not yet syncing). These will be auto-added when they appear in Fitr chat rooms, or manually via `onboard_bespoke_athletes.py`.
 
-**Discrepancies** — Athletes appearing multiple times in the CRM under different coaches, and mismatches between CRM coach assignment and the _DATA Programme field.
+**👥 Rosters** — Per-coach comparison of CRM roster vs. actively syncing athletes. Flags gaps (in CRM but no Fitr data) and surprises (syncing but not in CRM), with an engagement summary per coach.
 
-**Note:** Fitr data (activity, results, engagement) is the single source of truth. The CRM is used purely for coach-athlete mapping and onboarding pipeline visibility.
+**⚠️ Discrepancies** — Duplicate CRM entries (same athlete under multiple coaches) and mismatches between CRM coach and the _DATA Programme field. Fix these by updating the CRM or running the backfill script.
+
+**✏️ Bulk Reassign** — Move multiple athletes to a different coach or programme in one action. Filter by current programme, select athletes, pick the new assignment, and click Apply.
+
+The **Sync Status** header at the top shows the last sync run date, new PR results pulled, conversations summarised, and any athletes auto-onboarded.
 """),
     ]
 
@@ -2656,11 +2797,7 @@ def main():
     with tabs[9]:
         page_recovery(rec_by_name)
     with tabs[10]:
-        page_crm_onboarding()
-        st.divider()
-        page_coach_rosters()
-        st.divider()
-        page_crm_discrepancies()
+        page_crm(athletes, engagement_results, data_records)
     with tabs[11]:
         page_help()
 
