@@ -337,7 +337,7 @@ def page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_w
                 "Programme": _prog_short(prog),
                 "Contact": _programme_contact(prog),
             })
-        st.dataframe(pd.DataFrame(rec_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rec_rows), width='stretch', hide_index=True)
         st.write("")
 
     if flagged:
@@ -355,7 +355,7 @@ def page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_w
                 "Contact": _programme_contact(prog),
             })
         df = pd.DataFrame(rows)
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(df, width='stretch', hide_index=True)
         st.write("")
 
     if concerns:
@@ -370,13 +370,13 @@ def page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_w
                 "Last Value": str(s["last_value"]),
                 "Last Date": s["last_date"].isoformat() if s["last_date"] else "",
             })
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
         st.write("")
 
     if consistency_wins:
         st.subheader("✅ Consistency Wins")
         df = pd.DataFrame(consistency_wins, columns=["Athlete", "Consecutive Weeks"])
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(df, width='stretch', hide_index=True)
 
     if not any([rec_alert_rows, flagged, concerns]):
         st.success("Nothing to flag this week — all athletes on track.")
@@ -689,7 +689,7 @@ def _athlete_profile_panel(name, data_by_name, pr_records, trend_results,
                 "Time Out": time_str,
                 "Phase": f"{_PHASE_EMOJI.get(phase, chr(9898))} {phase}" if phase else "—",
             })
-        st.dataframe(pd.DataFrame(comp_rows_display), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(comp_rows_display), width='stretch', hide_index=True)
 
         # Show full coaching panel for the nearest upcoming A competition
         next_a = next(
@@ -1020,9 +1020,11 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
         done_nm, total_nm, _ = _profile_completeness(
             nm, data_by_name.get(nm, {}), archetype_by_name, has_logged_nm, has_rec_nm
         )
+        risk = analytics.churn_risk_score(nm, engagement_results, trend_results, rec_by_name)
         summary_rows.append({
             "Name": nm,
             "Programme": prog_short,
+            "Risk": risk["label"],
             "Profile": f"{done_nm}/{total_nm}",
             "Last Logged": last.isoformat() if last else "Never",
             "Days Since": days if days is not None else "—",
@@ -1040,12 +1042,14 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
     }))
     all_archetypes = sorted(filter(None, {r["Archetype"] for r in summary_rows if r["Archetype"] != "—"}))
     all_statuses = sorted({r["Logging"] for r in summary_rows})
+    all_risks = ["🔴 Critical", "🟡 Elevated", "🟠 Moderate", "🟢 Low"]
 
-    fc1, fc2, fc3, fc4 = st.columns(4)
+    fc1, fc2, fc3, fc4, fc5 = st.columns(5)
     f_prog = fc1.multiselect("Programme", all_programmes, placeholder="All")
     f_tier = fc2.multiselect("Tier", all_tiers, placeholder="All")
     f_arch = fc3.multiselect("Archetype", all_archetypes, placeholder="All")
     f_status = fc4.multiselect("Status", all_statuses, placeholder="All")
+    f_risk = fc5.multiselect("Risk", all_risks, placeholder="All")
 
     filtered_rows = summary_rows
     if f_prog:
@@ -1059,6 +1063,8 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
         filtered_rows = [r for r in filtered_rows if r["Archetype"] in f_arch]
     if f_status:
         filtered_rows = [r for r in filtered_rows if r["Logging"] in f_status]
+    if f_risk:
+        filtered_rows = [r for r in filtered_rows if r["Risk"] in f_risk]
 
     total = len(summary_rows)
     shown = len(filtered_rows)
@@ -1069,7 +1075,7 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
 
     st.caption("Click a row to open the full athlete profile.")
     event = st.dataframe(
-        df, use_container_width=True, hide_index=True,
+        df, width='stretch', hide_index=True,
         on_select="rerun", selection_mode="single-row",
     )
 
@@ -1164,7 +1170,7 @@ def page_trends(pr_records, athletes):
             )
             .properties(height=350)
         )
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, width='stretch')
 
     df_a = pd.DataFrame(points_a).sort_values("Date")
     col1, col2, col3 = st.columns(3)
@@ -1223,7 +1229,7 @@ def page_recovery(rec_by_name):
     styled = styled.map(lambda v: _colour(v, "Stress"), subset=["Stress"])
     styled = styled.map(lambda v: _colour(v, "Motivation"), subset=["Motivation"])
 
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    st.dataframe(styled, width='stretch', hide_index=True)
 
 
 _PHASE_EMOJI = {
@@ -1283,7 +1289,7 @@ def page_competitions(comp_results, athletes, data_records, competition_rows=Non
                 "Action": c["action"] or "—",
                 "Programme": prog_short or "—",
             })
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
 
         # Summary counts
         if a_comps or b_comps or c_comps:
@@ -1387,7 +1393,7 @@ def page_competitions(comp_results, athletes, data_records, competition_rows=Non
             chart = (today_rule + points).properties(
                 height=max(200, len(athlete_order) * 30),
             ).interactive()
-            st.altair_chart(chart, use_container_width=True)
+            st.altair_chart(chart, width='stretch')
             st.caption("🔴 dashed line = today  |  🥇 A-race  🥈 B-race  🥉 C-race")
         st.divider()
 
@@ -1400,7 +1406,7 @@ def page_competitions(comp_results, athletes, data_records, competition_rows=Non
             st.write(", ".join(no_comp))
 
 
-def page_programmes(athletes, pr_records, trend_results, data_records, load_results=None):
+def page_programmes(athletes, pr_records, trend_results, data_records, load_results=None, engagement_results=None):
     from collections import defaultdict
 
     data_by_name = {str(r.get("Full Name", "")).strip(): r for r in (data_records or [])}
@@ -1444,7 +1450,7 @@ def page_programmes(athletes, pr_records, trend_results, data_records, load_resu
         })
 
     st.subheader("Programme Breakdown")
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
 
     assigned = [(p, len(n)) for p, n in by_prog.items() if p != "— Unassigned —"]
     if assigned:
@@ -1459,11 +1465,41 @@ def page_programmes(athletes, pr_records, trend_results, data_records, load_resu
             )
             .properties(height=max(200, len(assigned) * 38))
         )
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(chart, width='stretch')
 
     unassigned = by_prog.get("— Unassigned —", [])
     if unassigned:
         st.markdown(f"**{len(unassigned)} not yet assigned:**  " + ", ".join(sorted(unassigned)))
+
+    # ── Coach capacity view ───────────────────────────────────────────────────
+    st.divider()
+    st.subheader("Coach Capacity")
+    st.caption("Bespoke athlete load per coach — who has capacity and who's stretched")
+
+    bespoke_coaches = set(_COACH_ABBREV.values())
+    capacity_rows = analytics.coach_capacity(
+        athletes, pr_records, data_records,
+        engagement_results=(engagement_results or []),
+        bespoke_coaches=bespoke_coaches,
+    )
+    if capacity_rows:
+        cap_df = pd.DataFrame(capacity_rows)
+        st.dataframe(cap_df, width='stretch', hide_index=True)
+
+        # Bar chart of athletes per coach
+        cap_chart = (
+            alt.Chart(cap_df)
+            .mark_bar(color="#5c85d6")
+            .encode(
+                x=alt.X("Athletes:Q", title="Athletes"),
+                y=alt.Y("Coach:N", sort="-x", title=""),
+                tooltip=["Coach:N", "Athletes:Q", "Active (28d):Q", "Needs Attention:Q"],
+            )
+            .properties(height=max(160, len(capacity_rows) * 34))
+        )
+        st.altair_chart(cap_chart, width='stretch')
+    else:
+        st.info("No bespoke athletes assigned yet.")
 
 
 def _outreach_send_buttons(msg):
@@ -1709,7 +1745,7 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
         return [colour] * len(row)
 
     styled = df.style.apply(_row_colour, axis=1)
-    st.dataframe(styled, use_container_width=True, hide_index=True, height=500)
+    st.dataframe(styled, width='stretch', hide_index=True, height=500)
 
     # ── Bulk export ───────────────────────────────────────────────────────────
     st.divider()
@@ -1865,7 +1901,7 @@ def page_load(load_results):
     styled = df_summary[display_cols + ["_status"]].style.apply(_load_row_colour, axis=1)
     st.dataframe(
         styled,
-        use_container_width=True, hide_index=True,
+        width='stretch', hide_index=True,
         column_config={"_status": None},
     )
 
@@ -1907,7 +1943,7 @@ def page_load(load_results):
                 y=alt.Y("Chronic baseline:Q", title=""),
             )
         )
-        st.altair_chart((bars + baseline).properties(height=280), use_container_width=True)
+        st.altair_chart((bars + baseline).properties(height=280), width='stretch')
         st.caption("🟠 dashed = 4-week rolling average (chronic baseline)")
 
         hints = []
@@ -1946,7 +1982,7 @@ def page_load(load_results):
             "🔴 Spike": sum(1 for g in group if g["status"] == "red"),
             "— No data": sum(1 for g in group if g["status"] == "insufficient"),
         })
-    st.dataframe(pd.DataFrame(prog_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(prog_rows), width='stretch', hide_index=True)
 
 
 def page_squad(athletes, engagement_results, rec_by_name,
@@ -2353,7 +2389,7 @@ def _crm_lifecycle(athletes, engagement_results, data_records, crm_by_name):
     if sel_status != "All statuses":
         df = df[df["Status"] == sel_status]
 
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df, width='stretch', hide_index=True)
 
     # Summary counts
     status_counts = pd.Series([r["Status"] for r in rows]).value_counts()
@@ -2505,7 +2541,7 @@ def _crm_discrepancies(data_records, crm_by_name):
                 {"Athlete": n, "CRM Coach": crm, "_DATA Programme": data}
                 for n, crm, data in sorted(mismatches)
             ]
-            st.dataframe(pd.DataFrame(rows_out), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(rows_out), width='stretch', hide_index=True)
         else:
             st.success("✓ No coach assignment mismatches")
 
@@ -2613,6 +2649,8 @@ Full roster with filters. Click any row to open the athlete's profile panel.
 
 The profile shows: physical stats, programme, injuries, competitions, benchmark snapshots, recovery, archetype, and full coaching notes timeline.
 
+**Risk column** — Composite churn risk score (🔴 Critical / 🟡 Elevated / 🟠 Moderate / 🟢 Low) based on days since last log, declining trends, recovery flags, and time since last coach contact. Use the Risk filter to instantly surface your highest-risk athletes.
+
 **Archetype Assessment** — Run the 10-question forced-choice instrument inside a profile.
 Share the **Self-Assessment Link** with the athlete so they can fill it in themselves.
 **Add Note** — Log a chat, result, or recovery entry directly to the athlete's profile.
@@ -2643,7 +2681,9 @@ Add a competition inside any athlete's profile (Athletes → click athlete → C
         ("📊 Programmes", """
 Breakdown of athletes by programme track.
 
-Shows headcount, active rate (logged in the last 28 days), average days since logging, and declining trends per programme. Spot which tracks have low engagement or need attention.
+**Programme Breakdown** — Headcount, active rate (logged in the last 28 days), average days since logging, load spikes, and declining trends per track. Spot which tracks have low engagement or need attention.
+
+**Coach Capacity** — Bespoke athlete count, active athletes, average days since log, and number needing attention per coach. Use this to identify who's stretched and whether any coach has capacity for new clients.
 
 Assign or change an athlete's programme inside their profile in the Athletes tab.
 """),
@@ -2789,7 +2829,7 @@ def main():
     with tabs[5]:
         page_competitions(comp_results, athletes, data_records, competition_rows=competition_rows)
     with tabs[6]:
-        page_programmes(athletes, pr_records, trend_results, data_records, load_results=load_results)
+        page_programmes(athletes, pr_records, trend_results, data_records, load_results=load_results, engagement_results=engagement_results)
     with tabs[7]:
         page_load(load_results)
     with tabs[8]:

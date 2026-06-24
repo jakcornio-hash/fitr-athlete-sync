@@ -686,6 +686,156 @@ def programme_peer_comparison(name, programme, pr_records, data_records):
     return results
 
 
+def churn_risk_score(name, engagement_results, trend_results,
+                     rec_by_name=None, last_contact_by_name=None):
+    """Composite churn risk score 0–100 for a single athlete.
+
+    Factors (higher = more at risk):
+      - Days since last log (major signal)
+      - Declining benchmark trends
+      - High soreness/stress or low motivation in recovery survey
+      - No recent coach contact
+    Returns {"score": int, "label": str, "factors": [str]}
+    """
+    eng = next((e for e in engagement_results if e["name"] == name), None)
+    days = (eng or {}).get("days_since")
+    never = (eng or {}).get("last_logged") == "never"
+
+    score = 0
+    factors = []
+
+    # Days since log (0-60 points)
+    if never:
+        score += 60
+        factors.append("Never logged")
+    elif days is None:
+        score += 50
+        factors.append("No log data")
+    elif days >= 60:
+        score += 55
+        factors.append(f"{days}d since last log")
+    elif days >= 45:
+        score += 45
+        factors.append(f"{days}d since last log")
+    elif days >= 28:
+        score += 30
+        factors.append(f"{days}d since last log")
+    elif days >= 14:
+        score += 15
+        factors.append(f"{days}d since last log")
+    elif days >= 7:
+        score += 5
+
+    # Declining benchmark trends (0-15 points)
+    signals = trend_results.get(name, [])
+    n_declining = sum(1 for s in signals if s["trend"] == "declining")
+    n_below_peak = sum(1 for s in signals if s["peak_drop_flag"])
+    if n_declining:
+        pts = min(n_declining * 5, 15)
+        score += pts
+        factors.append(f"{n_declining} declining benchmark{'s' if n_declining > 1 else ''}")
+    elif n_below_peak:
+        score += min(n_below_peak * 3, 9)
+        factors.append(f"{n_below_peak} below peak")
+
+    # Recovery flags (0-15 points)
+    rec_row = (rec_by_name or {}).get(name)
+    if rec_row:
+        def _n(v):
+            try:
+                return float(str(v).strip())
+            except (ValueError, TypeError):
+                return None
+        s = _n(rec_row.get("Soreness"))
+        st_ = _n(rec_row.get("Stress"))
+        m = _n(rec_row.get("Motivation"))
+        if s is not None and s >= 7:
+            score += 8
+            factors.append(f"High soreness ({s:.0f}/10)")
+        if st_ is not None and st_ >= 7:
+            score += 8
+            factors.append(f"High stress ({st_:.0f}/10)")
+        if m is not None and m <= 3:
+            score += 8
+            factors.append(f"Low motivation ({m:.0f}/10)")
+        # Cap rec contribution at 15
+        score = min(score, (score - max(0, score - 100)))
+
+    # No coach contact (0-10 points)
+    last_contact = (last_contact_by_name or {}).get(name)
+    days_contact = (TODAY - last_contact).days if last_contact else None
+    if days_contact is None and (days is None or days >= 28):
+        score += 10
+        factors.append("No recent coach contact")
+    elif days_contact and days_contact >= 28:
+        score += 5
+
+    score = min(score, 100)
+
+    if score >= 60:
+        label = "🔴 Critical"
+    elif score >= 35:
+        label = "🟡 Elevated"
+    elif score >= 15:
+        label = "🟠 Moderate"
+    else:
+        label = "🟢 Low"
+
+    return {"score": score, "label": label, "factors": factors}
+
+
+def coach_capacity(athletes, pr_records, data_records, engagement_results, bespoke_coaches):
+    """Per-coach summary: athlete count, active count, avg days since log, flagged count.
+
+    bespoke_coaches: set of coach full-name strings (from _COACH_ABBREV values).
+    Returns list of dicts sorted by athlete count desc.
+    """
+    data_by_name = {}
+    for r in (data_records or []):
+        nm = str(r.get("Full Name", "")).strip()
+        if nm:
+            data_by_name[nm] = r
+
+    last_logged = {}
+    for r in (pr_records or []):
+        nm = str(r.get("Athlete Name", "")).strip()
+        d = _parse_date(str(r.get("Date", "")))
+        if nm and d and (nm not in last_logged or d > last_logged[nm]):
+            last_logged[nm] = d
+
+    eng_by_name = {e["name"]: e for e in (engagement_results or [])}
+
+    by_coach = {}
+    for a in athletes:
+        nm = a["name"]
+        prog = str(data_by_name.get(nm, {}).get("Programme", "")).strip()
+        if prog not in bespoke_coaches:
+            continue
+        coach = prog
+        by_coach.setdefault(coach, []).append(nm)
+
+    rows = []
+    for coach, names in sorted(by_coach.items()):
+        active = sum(
+            1 for nm in names
+            if nm in last_logged and (TODAY - last_logged[nm]).days < 28
+        )
+        days_list = [(TODAY - last_logged[nm]).days for nm in names if nm in last_logged]
+        avg_days = round(sum(days_list) / len(days_list)) if days_list else None
+        flagged = sum(1 for nm in names if (eng_by_name.get(nm) or {}).get("flag"))
+        rows.append({
+            "Coach": coach,
+            "Athletes": len(names),
+            "Active (28d)": active,
+            "Active %": f"{round(active / len(names) * 100)}%" if names else "—",
+            "Avg Days Since Log": str(avg_days) if avg_days is not None else "—",
+            "Needs Attention": flagged,
+        })
+
+    rows.sort(key=lambda x: -x["Athletes"])
+    return rows
+
+
 def build_coach_alerts_rows(engagement_results, trend_results,
                             recovery_by_name=None, milestones=None,
                             consistency_wins=None):

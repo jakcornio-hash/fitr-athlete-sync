@@ -581,13 +581,13 @@ def main():
 
     # ---- per-coach Slack notifications ----
     coach_channel_map = sheets.load_coaches()
+    data_recs = sheets.read_records(config.TAB_DATA)
+    programme_by_name = {
+        str(r.get("Full Name", "")).strip(): str(r.get("Programme", "")).strip()
+        for r in data_recs
+        if str(r.get("Full Name", "")).strip()
+    }
     if coach_channel_map and (bench_rows or chal_rows):
-        data_recs = sheets.read_records(config.TAB_DATA)
-        programme_by_name = {
-            str(r.get("Full Name", "")).strip(): str(r.get("Programme", "")).strip()
-            for r in data_recs
-            if str(r.get("Full Name", "")).strip()
-        }
         notified = notifier.send_coach_notifications(
             bench_rows, chal_rows, programme_by_name, coach_channel_map,
         )
@@ -639,6 +639,31 @@ def main():
         TODAY, engagement_results, trend_results,
         rec_alert_rows, milestones, consistency_wins,
     )
+
+    # ---- per-coach re-engagement alerts (inactive athletes) ----
+    if coach_channel_map:
+        reeng_sent = notifier.send_reengagement_alerts(
+            engagement_results, programme_by_name, coach_channel_map,
+        )
+        if reeng_sent:
+            print(f"Re-engagement alerts sent to {reeng_sent} coach channel(s)")
+
+        # ---- weekly coach squad summaries ----
+        from collections import defaultdict
+        athletes_by_coach = defaultdict(list)
+        for a in athletes:
+            prog = programme_by_name.get(a["name"], "")
+            if prog:
+                athletes_by_coach[prog].append(a["name"])
+        milestones_by_name = defaultdict(list)
+        for m in milestones:
+            milestones_by_name[m[0]].append((m[1], m[2]))
+        summaries_sent = notifier.send_weekly_coach_summary(
+            dict(athletes_by_coach), engagement_results, trend_results,
+            dict(milestones_by_name), coach_channel_map,
+        )
+        if summaries_sent:
+            print(f"Weekly squad summaries sent to {summaries_sent} coach channel(s)")
 
     # ---- auto-onboard new bespoke athletes from chat rooms ----
     onboarded = auto_onboard_new_athletes(sheets, rooms)

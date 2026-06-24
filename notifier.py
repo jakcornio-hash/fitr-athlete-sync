@@ -220,6 +220,123 @@ def send_email(subject, plain_text):
         s.send_message(msg)
 
 
+def send_reengagement_alerts(engagement_results, programme_by_name, coach_channel_map):
+    """Notify each coach in Slack about their athletes who haven't logged recently.
+
+    Sends one consolidated message per coach (not one per athlete) so it doesn't
+    flood channels. Only fires when SLACK_BOT_TOKEN is set and the programme has a
+    channel mapping. Returns count of coaches notified.
+    """
+    if not config.SLACK_BOT_TOKEN:
+        return 0
+
+    from collections import defaultdict
+    flagged = [e for e in engagement_results if e["flag"]]
+    if not flagged:
+        return 0
+
+    by_coach = defaultdict(list)
+    for e in flagged:
+        prog = programme_by_name.get(e["name"], "")
+        channel = coach_channel_map.get(prog)
+        if channel:
+            by_coach[channel].append(e)
+
+    sent = 0
+    for channel, athletes in by_coach.items():
+        lines = [f"⚠️ *{len(athletes)} athlete{'s' if len(athletes) > 1 else ''} need a check-in:*"]
+        for e in sorted(athletes, key=lambda x: -(x["days_since"] or 9999)):
+            if e["last_logged"] == "never":
+                detail = "never logged"
+            else:
+                detail = f"{e['days_since']}d inactive (last: {_fmt_date(e['last_logged'])})"
+            # Include a draft message the coach can copy
+            first = e["name"].split()[0]
+            draft = (
+                f"Hi {first}, just checking in — how's training going? "
+                f"Drop me your latest results when you get a chance."
+            )
+            lines.append(f"  • *{e['name']}* — {detail}")
+            lines.append(f"    _Draft:_ \"{draft}\"")
+        try:
+            send_slack_message(channel, "\n".join(lines))
+            sent += 1
+        except Exception as exc:
+            print(f"  ! Re-engagement Slack notify failed → {channel}: {exc}")
+
+    return sent
+
+
+def send_weekly_coach_summary(athletes_by_coach, engagement_results, trend_results,
+                               milestones_by_name, coach_channel_map):
+    """Send each coach a brief squad summary: who's active, who needs attention, any new PRs.
+
+    athletes_by_coach: {programme: [name, ...]}
+    milestones_by_name: {name: [(bench, value), ...]}
+    Returns count of coaches notified.
+    """
+    if not config.SLACK_BOT_TOKEN:
+        return 0
+
+    eng_by_name = {e["name"]: e for e in engagement_results}
+    sent = 0
+
+    for prog, names in sorted(athletes_by_coach.items()):
+        channel = coach_channel_map.get(prog)
+        if not channel or not names:
+            continue
+
+        active = [n for n in names if not (eng_by_name.get(n) or {}).get("flag")]
+        flagged = [n for n in names if (eng_by_name.get(n) or {}).get("flag")]
+
+        prs_this_week = []
+        for n in names:
+            for bench, val in (milestones_by_name.get(n) or []):
+                prs_this_week.append(f"*{n}* — {bench}: {val}")
+
+        concerns = []
+        for n in names:
+            signals = trend_results.get(n, [])
+            for s in signals:
+                if s["trend"] == "declining":
+                    concerns.append(
+                        f"*{n}* — {s['benchmark']} declining "
+                        f"({s['trend_pct']:+.1f}%/entry)"
+                    )
+
+        coach_name = prog.split()[0] if prog else "Coach"
+        lines = [f"*📋 {coach_name} — Weekly Squad Summary*", ""]
+        lines.append(f"Active this week: {len(active)}/{len(names)} athletes")
+
+        if prs_this_week:
+            lines.append("")
+            lines.append("🏆 *New results:*")
+            lines.extend(f"  • {p}" for p in prs_this_week[:5])
+            if len(prs_this_week) > 5:
+                lines.append(f"  _...and {len(prs_this_week) - 5} more_")
+
+        if flagged:
+            lines.append("")
+            lines.append(f"⚠️ *Needs contact ({len(flagged)}):*")
+            for n in sorted(flagged, key=lambda x: -(eng_by_name.get(x, {}).get("days_since") or 9999)):
+                e = eng_by_name.get(n, {})
+                detail = "never logged" if e.get("last_logged") == "never" else f"{e.get('days_since')}d inactive"
+                lines.append(f"  • *{n}* — {detail}")
+
+        if concerns:
+            lines.append("")
+            lines.append(f"📉 *Performance concerns ({len(concerns)}):*")
+            lines.extend(f"  • {c}" for c in concerns[:3])
+
+        try:
+            send_slack_message(channel, "\n".join(lines))
+            sent += 1
+        except Exception as exc:
+            print(f"  ! Weekly summary Slack notify failed → {prog}: {exc}")
+
+    return sent
+
+
 def send_digest(date, engagement_results, trend_results,
                 rec_alert_rows, milestones, consistency_wins):
     plain, slack_text = build_digest(
