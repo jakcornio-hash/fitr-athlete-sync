@@ -551,6 +551,13 @@ def main():
     chat_notes = collect_chat_summaries(rooms, valid_names, fitr)
     print(f"Conversations summarised: {len(chat_notes)}")
 
+    # Build room_id lookup for sending messages to athletes
+    room_id_by_name = {
+        (room.get("opponent") or {}).get("full_name", "").strip(): room["id"]
+        for room in rooms
+        if room.get("id") and (room.get("opponent") or {}).get("full_name", "").strip()
+    }
+
     fitr_profiles = profiles_from_rooms(rooms)
     profiles_updated = update_athlete_profiles(sheets, athletes, fitr_profiles)
     print(f"Athlete profiles updated: {profiles_updated}")
@@ -575,6 +582,32 @@ def main():
 
     comps_updated = sync_competition_from_typeform(sheets, email_by_name)
     print(f"Competition dates synced from Typeform: {comps_updated}")
+
+    # ---- auto-congratulations via Fitr chat ----
+    if bench_rows and not config.DRY_RUN:
+        congrats_sent = 0
+        for row in bench_rows:
+            if len(row) < 5:
+                continue
+            name = row[1]
+            bench = row[3]
+            value = row[4]
+            prev = row[6] if len(row) > 6 else ""
+            room_id = room_id_by_name.get(name)
+            if not room_id:
+                continue
+            first = name.split()[0]
+            if prev and prev not in ("", "first entry"):
+                msg = f"Nice work {first} 💪 {bench}: {value} (was {prev}). Keep pushing!"
+            else:
+                msg = f"Great first result {first} 💪 {bench}: {value}. Looking forward to tracking your progress!"
+            try:
+                fitr.send_chat_message(room_id, msg)
+                congrats_sent += 1
+                import time as _time; _time.sleep(0.5)
+            except FitrError as exc:
+                print(f"  ! Congrats message failed for {name}: {exc}")
+        print(f"Congratulations messages sent: {congrats_sent}")
 
     # ---- writes ----
     sheets.append_rows(config.TAB_PR_LOG, bench_rows + chal_rows)
@@ -670,17 +703,25 @@ def main():
     if onboarded:
         print(f"New bespoke athletes auto-onboarded: {onboarded}")
 
+    # ---- weekly athlete progress emails ----
+    competition_rows = sheets.load_competitions()
+    emails_sent = notifier.send_all_athlete_progress_emails(
+        bench_rows, consistency_wins, competition_rows, email_by_name,
+    )
+    if emails_sent:
+        print(f"Athlete weekly progress emails sent: {emails_sent}")
+
     # ---- sync log ----
     unknown = sorted({n for n in chat_notes} - valid_names)
     log_tab = sheets.get_or_create(
         config.TAB_SYNC_LOG,
-        ["Run Date", "New PR Log rows", "Challenge scores added",
+        ["Run Date", "Total Athletes", "New PR Log rows", "Challenge scores added",
          "Conversations summarised", "Recovery merged", "Notes updated",
-         "Athletes auto-onboarded", "Notes"],
+         "Athletes auto-onboarded", "Athlete Emails Sent", "Notes"],
     )
     sheets.append_rows(config.TAB_SYNC_LOG, [[
-        TODAY.isoformat(), len(bench_rows), len(chal_rows), len(chat_notes),
-        len(rec_notes), notes_written, onboarded,
+        TODAY.isoformat(), len(athletes), len(bench_rows), len(chal_rows), len(chat_notes),
+        len(rec_notes), notes_written, onboarded, emails_sent,
         ("Unknown athletes seen: " + ", ".join(unknown)) if unknown else "ok",
     ]])
 

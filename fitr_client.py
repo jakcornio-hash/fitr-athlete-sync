@@ -79,6 +79,20 @@ class FitrClient:
         return r.status_code == 200
 
     # --------------------------------------------------------------- requests
+    def _post(self, path, data, retries=2):
+        url = f"{self.base}{path}"
+        for attempt in range(retries):
+            r = self.session.post(
+                url, json=data, headers=self._headers(), timeout=30
+            )
+            if r.status_code in (200, 201):
+                return r.json() if r.text else {}
+            if r.status_code in (429, 500, 502, 503) and attempt < retries - 1:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            raise FitrError(f"POST {path} -> {r.status_code}: {r.text[:160]}")
+        return {}
+
     def _get(self, path, params=None, retries=3):
         url = f"{self.base}{path}"
         for attempt in range(retries):
@@ -210,6 +224,16 @@ class FitrClient:
             page += 1
             time.sleep(0.2)
         return out[:max_messages]
+
+    # --------------------------------------------------------- chat send
+    def send_chat_message(self, room_id, text):
+        """Send a text message to a chat room.
+
+        The Fitr chat write endpoint mirrors the read endpoint — POST to
+        /api/chat/messages with the room ID and text payload. This is an
+        undocumented endpoint so it may change without notice.
+        """
+        return self._post("/api/chat/messages", {"chat_room_id": room_id, "text": text})
 
     # --------------------------------------------------------------- clients
     def clients(self, max_pages=30):

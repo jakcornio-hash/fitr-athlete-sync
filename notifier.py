@@ -220,6 +220,122 @@ def send_email(subject, plain_text):
         s.send_message(msg)
 
 
+def _send_email_to(smtp_from, smtp_password, to_addr, subject, body):
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = smtp_from
+    msg["To"] = to_addr
+    msg.set_content(body)
+    with smtplib.SMTP("smtp.gmail.com", 587) as s:
+        s.ehlo()
+        s.starttls()
+        s.login(smtp_from, smtp_password)
+        s.send_message(msg)
+
+
+def _parse_date_email(s):
+    import datetime as dt_mod
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%b-%Y", "%d %b %Y"):
+        try:
+            return dt_mod.datetime.strptime(str(s).strip(), fmt).date()
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def _build_athlete_progress_email(name, new_prs, streak_weeks, next_comp):
+    first = name.split()[0]
+    lines = [
+        f"Hi {first},",
+        "",
+        "Here's your weekly training snapshot from JST Compete:",
+        "",
+    ]
+    if new_prs:
+        lines.append("🏆 New results this week:")
+        for bench, value in new_prs:
+            lines.append(f"  • {bench}: {value}")
+        lines.append("")
+    if streak_weeks and streak_weeks >= 4:
+        lines.append(f"✅ {streak_weeks} consecutive weeks logging — great discipline, keep it going!")
+        lines.append("")
+    if next_comp:
+        comp_name, days_out = next_comp
+        if days_out >= 0:
+            w, d = divmod(days_out, 7)
+            time_str = f"{w}w {d}d" if w else f"{d}d"
+            lines.append(f"🏁 Next competition: {comp_name} — {time_str} away. Stay sharp.")
+        else:
+            lines.append(f"🏁 {comp_name} was {abs(days_out)}d ago. Great effort — debrief coming soon.")
+        lines.append("")
+    lines.extend([
+        "Every result you log makes your coaching sharper. Keep it up.",
+        "",
+        "— JST Compete Coaching Team",
+    ])
+    return "\n".join(lines)
+
+
+def send_all_athlete_progress_emails(bench_rows, consistency_wins, competition_rows, email_by_name):
+    """Email each athlete who has news this week: new PRs, a streak milestone, or an upcoming comp.
+
+    bench_rows: new PR log rows [[date, name, ..., bench, value, ...], ...]
+    consistency_wins: [(name, consecutive_weeks), ...]
+    competition_rows: rows from Competitions tab [{Athlete Name, Competition Name, Date, ...}]
+    email_by_name: {athlete_name: email_address}
+    Returns count of emails sent.
+    """
+    if not config.SMTP_FROM or not config.SMTP_PASSWORD:
+        return 0
+
+    import datetime as dt_mod
+    today = dt_mod.date.today()
+
+    prs_by_name = {}
+    for row in bench_rows:
+        if len(row) < 5:
+            continue
+        name, bench, value = row[1], row[3], row[4]
+        if name:
+            prs_by_name.setdefault(name, []).append((bench, value))
+
+    streak_by_name = dict(consistency_wins)
+
+    comp_by_name = {}
+    for row in competition_rows:
+        name = str(row.get("Athlete Name", "")).strip()
+        comp_name = str(row.get("Competition Name", "")).strip()
+        comp_date = _parse_date_email(str(row.get("Date", "")).strip())
+        if not name or not comp_date:
+            continue
+        days_out = (comp_date - today).days
+        if -14 <= days_out <= 84:
+            existing = comp_by_name.get(name)
+            if existing is None or abs(days_out) < abs(existing[1]):
+                comp_by_name[name] = (comp_name, days_out)
+
+    all_names = set(email_by_name.keys()) | set(prs_by_name.keys())
+    sent = 0
+    for name in sorted(all_names):
+        email = email_by_name.get(name)
+        if not email:
+            continue
+        new_prs = prs_by_name.get(name, [])
+        streak = streak_by_name.get(name)
+        next_comp = comp_by_name.get(name)
+        if not new_prs and (not streak or streak < 4) and not next_comp:
+            continue
+        body = _build_athlete_progress_email(name, new_prs, streak, next_comp)
+        subject = "Your weekly training snapshot — JST Compete"
+        try:
+            _send_email_to(config.SMTP_FROM, config.SMTP_PASSWORD, email, subject, body)
+            sent += 1
+        except Exception as exc:
+            print(f"  ! Progress email failed for {name} ({email}): {exc}")
+
+    return sent
+
+
 def send_reengagement_alerts(engagement_results, programme_by_name, coach_channel_map):
     """Notify each coach in Slack about their athletes who haven't logged recently.
 

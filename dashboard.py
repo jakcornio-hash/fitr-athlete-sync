@@ -682,14 +682,48 @@ def _athlete_profile_panel(name, data_by_name, pr_records, trend_results,
                 time_str = f"{w}w {d}d" if w else f"{d}d"
             else:
                 time_str = f"{abs(days_out)}d ago"
+            result_val = ""
+            if competition_rows:
+                for cr in competition_rows:
+                    if (str(cr.get("Athlete Name", "")).strip() == name
+                            and str(cr.get("Competition Name", "")).strip() == c["comp_name"]):
+                        result_val = str(cr.get("Result", "")).strip()
+                        break
             comp_rows_display.append({
                 "Type": _COMP_TYPE_LABEL.get(c["comp_type"], c["comp_type"]),
                 "Competition": c["comp_name"],
                 "Date": c["comp_date"].strftime("%d %b %Y"),
                 "Time Out": time_str,
                 "Phase": f"{_PHASE_EMOJI.get(phase, chr(9898))} {phase}" if phase else "—",
+                "Result": result_val or "—",
             })
         st.dataframe(pd.DataFrame(comp_rows_display), width='stretch', hide_index=True)
+
+        # Log results for past competitions that don't have one yet
+        past_no_result = []
+        if competition_rows:
+            for cr in competition_rows:
+                if str(cr.get("Athlete Name", "")).strip() != name:
+                    continue
+                cd = _parse_date(str(cr.get("Date", "")).strip())
+                if cd and (TODAY - cd).days >= 0 and not str(cr.get("Result", "")).strip():
+                    past_no_result.append(str(cr.get("Competition Name", "")).strip())
+        if past_no_result:
+            with st.expander(f"📋 Log Result ({len(past_no_result)} competition{'s' if len(past_no_result) > 1 else ''} awaiting result)"):
+                for comp_nm in past_no_result:
+                    with st.form(f"result_form_{name}_{comp_nm}", clear_on_submit=True):
+                        st.markdown(f"**{comp_nm}**")
+                        result_input = st.text_input(
+                            "Result", key=f"result_input_{name}_{comp_nm}",
+                            placeholder="e.g. 3rd place, 145kg total, 98th percentile",
+                        )
+                        if st.form_submit_button("Save Result", type="primary"):
+                            if result_input.strip():
+                                get_sheets().update_competition_result(name, comp_nm, result_input.strip())
+                                st.success(f"Result saved for {comp_nm}")
+                                st.cache_data.clear()
+                            else:
+                                st.warning("Enter a result before saving.")
 
         # Show full coaching panel for the nearest upcoming A competition
         next_a = next(
@@ -1043,6 +1077,14 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
     all_archetypes = sorted(filter(None, {r["Archetype"] for r in summary_rows if r["Archetype"] != "—"}))
     all_statuses = sorted({r["Logging"] for r in summary_rows})
     all_risks = ["🔴 Critical", "🟡 Elevated", "🟠 Moderate", "🟢 Low"]
+    all_subscriptions = sorted(filter(None, {
+        str(data_by_name.get(a["name"], {}).get("Subscription Plan", "")).strip()
+        for a in athletes
+    }))
+    all_referrals = sorted(filter(None, {
+        str(data_by_name.get(a["name"], {}).get("Referral Source", "")).strip()
+        for a in athletes
+    }))
 
     fc1, fc2, fc3, fc4, fc5 = st.columns(5)
     f_prog = fc1.multiselect("Programme", all_programmes, placeholder="All")
@@ -1050,6 +1092,13 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
     f_arch = fc3.multiselect("Archetype", all_archetypes, placeholder="All")
     f_status = fc4.multiselect("Status", all_statuses, placeholder="All")
     f_risk = fc5.multiselect("Risk", all_risks, placeholder="All")
+
+    if all_subscriptions or all_referrals:
+        fr1, fr2, _ = st.columns([2, 2, 1])
+        f_sub = fr1.multiselect("Subscription", all_subscriptions, placeholder="All") if all_subscriptions else []
+        f_ref = fr2.multiselect("Referral Source", all_referrals, placeholder="All") if all_referrals else []
+    else:
+        f_sub, f_ref = [], []
 
     filtered_rows = summary_rows
     if f_prog:
@@ -1065,6 +1114,16 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
         filtered_rows = [r for r in filtered_rows if r["Logging"] in f_status]
     if f_risk:
         filtered_rows = [r for r in filtered_rows if r["Risk"] in f_risk]
+    if f_sub:
+        filtered_rows = [
+            r for r in filtered_rows
+            if str(data_by_name.get(r["Name"], {}).get("Subscription Plan", "")).strip() in f_sub
+        ]
+    if f_ref:
+        filtered_rows = [
+            r for r in filtered_rows
+            if str(data_by_name.get(r["Name"], {}).get("Referral Source", "")).strip() in f_ref
+        ]
 
     total = len(summary_rows)
     shown = len(filtered_rows)
@@ -1397,6 +1456,24 @@ def page_competitions(comp_results, athletes, data_records, competition_rows=Non
             st.caption("🔴 dashed line = today  |  🥇 A-race  🥈 B-race  🥉 C-race")
         st.divider()
 
+    # Past competitions needing results logged
+    if competition_rows:
+        needs_result = [
+            row for row in competition_rows
+            if str(row.get("Athlete Name", "")).strip() in all_names
+            and not str(row.get("Result", "")).strip()
+            and _parse_date(str(row.get("Date", "")).strip()) is not None
+            and (TODAY - _parse_date(str(row.get("Date", "")).strip())).days >= 0  # type: ignore[operator]
+        ]
+        if needs_result:
+            with st.expander(f"📋 {len(needs_result)} past competition{'s' if len(needs_result) > 1 else ''} awaiting results"):
+                for row in sorted(needs_result, key=lambda r: r.get("Date", ""), reverse=True):
+                    athlete_nm = str(row.get("Athlete Name", "")).strip()
+                    comp_nm = str(row.get("Competition Name", "")).strip()
+                    comp_dt = _parse_date(str(row.get("Date", "")).strip())
+                    st.caption(f"{athlete_nm} — {comp_nm} ({comp_dt.strftime('%d %b %Y') if comp_dt else '?'})")
+                st.info("Open an athlete's profile to log their result.")
+
     # Athletes without any competition planned
     with_comp = {c["name"] for c in comp_results}
     no_comp = sorted(all_names - with_comp)
@@ -1500,6 +1577,36 @@ def page_programmes(athletes, pr_records, trend_results, data_records, load_resu
         st.altair_chart(cap_chart, width='stretch')
     else:
         st.info("No bespoke athletes assigned yet.")
+
+    # ── Referral Source breakdown ─────────────────────────────────────────────
+    referral_counts = {}
+    for a in athletes:
+        ref = str(data_by_name.get(a["name"], {}).get("Referral Source", "")).strip()
+        if ref:
+            referral_counts[ref] = referral_counts.get(ref, 0) + 1
+    if referral_counts:
+        st.divider()
+        st.subheader("Referral Sources")
+        st.caption("How athletes found JST Compete — from the Athlete Data sheet")
+        ref_df = pd.DataFrame(
+            sorted(referral_counts.items(), key=lambda x: -x[1]),
+            columns=["Source", "Athletes"],
+        )
+        ref_chart = (
+            alt.Chart(ref_df)
+            .mark_bar(color="#2ca02c")
+            .encode(
+                x=alt.X("Athletes:Q", title="Athletes"),
+                y=alt.Y("Source:N", sort="-x", title=""),
+                tooltip=["Source:N", "Athletes:Q"],
+            )
+            .properties(height=max(160, len(referral_counts) * 34))
+        )
+        st.altair_chart(ref_chart, width='stretch')
+        total_with_ref = sum(referral_counts.values())
+        total_athletes = len(athletes)
+        if total_athletes:
+            st.caption(f"{total_with_ref} of {total_athletes} athletes have a referral source recorded ({round(total_with_ref / total_athletes * 100)}%).")
 
 
 def _outreach_send_buttons(msg):

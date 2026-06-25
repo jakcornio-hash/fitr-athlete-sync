@@ -50,3 +50,12 @@ jobs:
           LOOKBACK_DAYS: "7"
           MAX_CHAT_SUMMARIES: "40"
         run: python sync.py
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"text\":\"⚠️ *Fitr Sync Failed* — <$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID|View run>\"}"

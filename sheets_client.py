@@ -136,7 +136,7 @@ class SheetsClient:
 
     # ---------------------------------------------------------- competitions
     TAB_COMPETITIONS = config.TAB_COMPETITIONS
-    _COMP_HEADERS = ["Athlete Name", "Competition Name", "Date", "Type", "Notes", "Synced At"]
+    _COMP_HEADERS = ["Athlete Name", "Competition Name", "Date", "Type", "Notes", "Synced At", "Result"]
 
     def load_competitions(self):
         """Return all rows from Competitions tab, or [] if not yet created."""
@@ -152,6 +152,37 @@ class SheetsClient:
         row = [str(row_dict.get(h, "")) for h in self._COMP_HEADERS]
         if not config.DRY_RUN:
             ws.append_rows([row], value_input_option="USER_ENTERED")
+
+    def update_competition_result(self, athlete_name, comp_name, result_text):
+        """Write a result string to the first matching competition row.
+
+        Matches on (athlete_name, comp_name) case-insensitively.
+        Returns True if a row was found and updated.
+        """
+        if config.DRY_RUN:
+            print(f"[DRY_RUN] would update result for {athlete_name} — {comp_name}: {result_text!r}")
+            return True
+        try:
+            ws = self.sh.worksheet(self.TAB_COMPETITIONS)
+        except gspread.WorksheetNotFound:
+            return False
+        values = ws.get_all_values()
+        if not values:
+            return False
+        header = values[0]
+        try:
+            name_idx = header.index("Athlete Name")
+            comp_idx = header.index("Competition Name")
+            result_idx = header.index("Result")
+        except ValueError:
+            return False
+        for i, row in enumerate(values[1:], start=2):
+            row_name = (row[name_idx] if name_idx < len(row) else "").strip().lower()
+            row_comp = (row[comp_idx] if comp_idx < len(row) else "").strip().lower()
+            if row_name == athlete_name.strip().lower() and row_comp == comp_name.strip().lower():
+                ws.update_cell(i, result_idx + 1, result_text)
+                return True
+        return False
 
     # ------------------------------------------------------------ coaches / Slack
     def load_coaches(self):
