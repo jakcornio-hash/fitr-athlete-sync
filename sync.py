@@ -703,10 +703,60 @@ def main():
     if onboarded:
         print(f"New bespoke athletes auto-onboarded: {onboarded}")
 
+    # ---- athlete anniversaries via Fitr chat ----
+    _ANNIVERSARY_MILESTONES = {90: "3 months", 180: "6 months", 270: "9 months",
+                                365: "1 year", 730: "2 years"}
+    first_log_by_name = {}
+    for rec in pr_records:
+        nm = str(rec.get("Athlete Name", "")).strip()
+        d_str = str(rec.get("Date", "")).strip()
+        if nm and d_str:
+            try:
+                import datetime as _dt
+                d = _dt.datetime.strptime(d_str, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if nm not in first_log_by_name or d < first_log_by_name[nm]:
+                first_log_by_name[nm] = d
+    anniversaries_sent = 0
+    for a in athletes:
+        nm = a["name"]
+        first_log = first_log_by_name.get(nm)
+        if not first_log:
+            continue
+        days_training = (TODAY - first_log).days
+        milestone_label = _ANNIVERSARY_MILESTONES.get(days_training)
+        if not milestone_label:
+            continue
+        room_id = room_id_by_name.get(nm)
+        if not room_id or config.DRY_RUN:
+            continue
+        first = nm.split()[0]
+        msg = (
+            f"Happy {milestone_label} training anniversary {first}! 🎉 "
+            f"You've been logging consistently since {first_log.strftime('%d %b %Y')} — "
+            f"that dedication is what makes the difference. Keep going!"
+        )
+        try:
+            fitr.send_chat_message(room_id, msg)
+            anniversaries_sent += 1
+            import time as _time; _time.sleep(0.5)
+        except FitrError as exc:
+            print(f"  ! Anniversary message failed for {nm}: {exc}")
+    if anniversaries_sent:
+        print(f"Anniversary messages sent: {anniversaries_sent}")
+
     # ---- weekly athlete progress emails ----
+    archetype_rows = sheets.load_archetype_assessments()
+    archetype_by_name = {
+        str(r.get("Athlete Name", "")).strip(): r
+        for r in archetype_rows
+        if str(r.get("Athlete Name", "")).strip()
+    }
     competition_rows = sheets.load_competitions()
     emails_sent = notifier.send_all_athlete_progress_emails(
         bench_rows, consistency_wins, competition_rows, email_by_name,
+        archetype_by_name=archetype_by_name,
     )
     if emails_sent:
         print(f"Athlete weekly progress emails sent: {emails_sent}")

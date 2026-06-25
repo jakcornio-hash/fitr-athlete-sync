@@ -616,6 +616,30 @@ def _athlete_profile_panel(name, data_by_name, pr_records, trend_results,
         with tb:
             st.markdown("**Programme**")
             current_prog = str(profile.get("Programme", "")).strip()
+
+            # Programme switch wizard: suggest a programme based on comp proximity + archetype
+            _prog_suggestion = None
+            if competition_rows:
+                _athlete_comps_wiz = [
+                    cr for cr in competition_rows
+                    if str(cr.get("Athlete Name", "")).strip() == name
+                    and str(cr.get("Type", "")).strip().upper() == "A"
+                ]
+                for _cr in _athlete_comps_wiz:
+                    _cd = _parse_date(str(_cr.get("Date", "")))
+                    if _cd:
+                        _days_out = (_cd - TODAY).days
+                        if 15 <= _days_out <= 22:
+                            _prog_suggestion = ("Switch to 2-Week Peak Prep",
+                                                f"{_cr.get('Competition Name','')} is {_days_out}d away — time to peak.")
+                            break
+                        elif 70 <= _days_out <= 77:
+                            _prog_suggestion = ("Switch to 10-Week Competition Prep",
+                                                f"{_cr.get('Competition Name','')} is {round(_days_out/7)}w away — start your peak block.")
+                            break
+            if _prog_suggestion:
+                st.info(f"💡 **Suggested switch:** {_prog_suggestion[0]}  \n{_prog_suggestion[1]}")
+
             prog_options = ["— not set —"] + config.JST_TRACKS
             prog_idx = prog_options.index(current_prog) if current_prog in prog_options else 0
             sel_prog = st.selectbox(
@@ -1244,6 +1268,26 @@ def page_trends(pr_records, athletes):
         cb2.metric(f"{selected_b} — Best", df_b["Label"].iloc[df_b["Value"].argmax()])
         cb3.metric(f"{selected_b} — Latest", df_b["Label"].iloc[-1])
 
+    # ── PR Velocity ─────────────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("**📈 Improvement Rate (all benchmarks)**")
+    st.caption("% improvement per month, computed from all-time PR log data")
+    velocity_data = analytics.pr_velocity(pr_records)
+    vel_rows = velocity_data.get(selected, [])
+    if vel_rows:
+        vel_df = pd.DataFrame([{
+            "Benchmark": r["benchmark"],
+            "Rate (%/month)": r["rate_pct_per_month"],
+            "Direction": ("↑ " if r["direction"] == "improving"
+                          else "↓ " if r["direction"] == "declining" else "→ ") + r["direction"].title(),
+            "Entries": r["data_points"],
+            "From": r["first_date"].strftime("%b %Y"),
+            "To": r["last_date"].strftime("%b %Y"),
+        } for r in vel_rows])
+        st.dataframe(vel_df, width='stretch', hide_index=True)
+    else:
+        st.caption("Not enough data points yet (need at least 2 entries per benchmark).")
+
 
 def page_recovery(rec_by_name):
     if not rec_by_name:
@@ -1607,6 +1651,53 @@ def page_programmes(athletes, pr_records, trend_results, data_records, load_resu
         total_athletes = len(athletes)
         if total_athletes:
             st.caption(f"{total_with_ref} of {total_athletes} athletes have a referral source recorded ({round(total_with_ref / total_athletes * 100)}%).")
+
+        # Referral → engagement quality table
+        if engagement_results:
+            st.markdown("**Referral Source → Engagement Quality**")
+            st.caption("% of athletes from each source who are currently active (logged in last 14d)")
+            eng_by_name = {e["name"]: e for e in engagement_results}
+            ref_quality = {}
+            for a in athletes:
+                ref = str(data_by_name.get(a["name"], {}).get("Referral Source", "")).strip()
+                if not ref:
+                    continue
+                e = eng_by_name.get(a["name"], {})
+                days = e.get("days_since")
+                active = days is not None and days <= 14
+                ref_quality.setdefault(ref, {"total": 0, "active": 0})
+                ref_quality[ref]["total"] += 1
+                if active:
+                    ref_quality[ref]["active"] += 1
+            if ref_quality:
+                quality_df = pd.DataFrame([
+                    {
+                        "Source": ref,
+                        "Athletes": v["total"],
+                        "Active (14d)": v["active"],
+                        "Active %": f"{round(v['active'] / v['total'] * 100)}%" if v["total"] else "—",
+                    }
+                    for ref, v in sorted(ref_quality.items(), key=lambda x: -x[1]["total"])
+                ])
+                st.dataframe(quality_df, width='stretch', hide_index=True)
+
+    # ── Cohort retention ──────────────────────────────────────────────────────
+    cohort_rows = analytics.cohort_retention(pr_records, min_cohort_size=2)
+    if cohort_rows:
+        st.divider()
+        st.subheader("Cohort Retention")
+        st.caption("Grouped by month of first PR log entry — % who logged again within 30/60/90 days")
+        cohort_df = pd.DataFrame([
+            {
+                "Cohort": r["cohort"],
+                "Athletes": r["n"],
+                "30d %": f"{r['pct_30d']}%" if r["pct_30d"] is not None else "—",
+                "60d %": f"{r['pct_60d']}%" if r["pct_60d"] is not None else "—",
+                "90d %": f"{r['pct_90d']}%" if r["pct_90d"] is not None else "—",
+            }
+            for r in cohort_rows
+        ])
+        st.dataframe(cohort_df, width='stretch', hide_index=True)
 
 
 def _outreach_send_buttons(msg):
@@ -2399,6 +2490,27 @@ def page_crm(athletes, engagement_results, data_records):
         c2.metric("New PR Results", str(last.get("New PR Log rows", 0)))
         c3.metric("Conversations", str(last.get("Conversations summarised", 0)))
         c4.metric("Auto-onboarded", str(last.get("Athletes auto-onboarded", 0)))
+
+        # Athlete growth chart from sync log
+        growth_pts = [
+            {"Date": pd.Timestamp(str(r.get("Run Date", ""))), "Athletes": int(r["Total Athletes"])}
+            for r in sync_log
+            if r.get("Total Athletes") and str(r.get("Run Date", "")).strip()
+            and str(r["Total Athletes"]).strip().isdigit()
+        ]
+        if len(growth_pts) >= 2:
+            growth_df = pd.DataFrame(growth_pts).sort_values("Date")
+            growth_chart = (
+                alt.Chart(growth_df)
+                .mark_line(point=True, color="#1f77b4")
+                .encode(
+                    x=alt.X("Date:T", title="Sync Date"),
+                    y=alt.Y("Athletes:Q", title="Total Athletes", scale=alt.Scale(zero=False)),
+                    tooltip=["Date:T", "Athletes:Q"],
+                )
+                .properties(height=200, title="Athlete Count Over Time")
+            )
+            st.altair_chart(growth_chart, width='stretch')
         st.divider()
 
     crm_tabs = st.tabs([

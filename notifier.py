@@ -243,7 +243,7 @@ def _parse_date_email(s):
     return None
 
 
-def _build_athlete_progress_email(name, new_prs, streak_weeks, next_comp):
+def _build_athlete_progress_email(name, new_prs, streak_weeks, next_comp, archetype_id=None):
     first = name.split()[0]
     lines = [
         f"Hi {first},",
@@ -268,6 +268,17 @@ def _build_athlete_progress_email(name, new_prs, streak_weeks, next_comp):
         else:
             lines.append(f"🏁 {comp_name} was {abs(days_out)}d ago. Great effort — debrief coming soon.")
         lines.append("")
+    # Archetype-specific coaching tip
+    if archetype_id:
+        try:
+            import archetypes as _arch
+            arch = _arch.get_archetype(archetype_id)
+            tip = (arch.get("coach") or {}).get("programming_read", "")
+            if tip:
+                lines.append(f"\U0001f4a1 Your coaching focus: {tip}")
+                lines.append("")
+        except Exception:
+            pass
     lines.extend([
         "Every result you log makes your coaching sharper. Keep it up.",
         "",
@@ -276,7 +287,7 @@ def _build_athlete_progress_email(name, new_prs, streak_weeks, next_comp):
     return "\n".join(lines)
 
 
-def send_all_athlete_progress_emails(bench_rows, consistency_wins, competition_rows, email_by_name):
+def send_all_athlete_progress_emails(bench_rows, consistency_wins, competition_rows, email_by_name, archetype_by_name=None):
     """Email each athlete who has news this week: new PRs, a streak milestone, or an upcoming comp.
 
     bench_rows: new PR log rows [[date, name, ..., bench, value, ...], ...]
@@ -325,7 +336,9 @@ def send_all_athlete_progress_emails(bench_rows, consistency_wins, competition_r
         next_comp = comp_by_name.get(name)
         if not new_prs and (not streak or streak < 4) and not next_comp:
             continue
-        body = _build_athlete_progress_email(name, new_prs, streak, next_comp)
+        arch_row = (archetype_by_name or {}).get(name)
+        arch_id = str(arch_row.get("Primary Archetype", "")).strip() if arch_row else None
+        body = _build_athlete_progress_email(name, new_prs, streak, next_comp, archetype_id=arch_id)
         subject = "Your weekly training snapshot — JST Compete"
         try:
             _send_email_to(config.SMTP_FROM, config.SMTP_PASSWORD, email, subject, body)

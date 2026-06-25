@@ -909,3 +909,106 @@ def build_coach_alerts_rows(engagement_results, trend_results,
         rows.append(["(none — no 4+ week streaks detected)"])
 
     return rows
+
+
+def pr_velocity(pr_records, min_points=2):
+    """Improvement rate per (athlete, benchmark) as % per month.
+
+    Returns {athlete_name: [
+        {benchmark, rate_pct_per_month, first_date, last_date, data_points, direction}
+    ]} sorted by abs(rate) desc per athlete.
+    direction: 'improving' if > 0.3%/month, 'declining' if < -0.3%/month, else 'flat'.
+    """
+    series = {}
+    for rec in pr_records:
+        name = str(rec.get("Athlete Name", "")).strip()
+        bench = str(rec.get("Benchmark Name", "")).strip()
+        d = _parse_date(str(rec.get("Date", "")))
+        v = _parse_numeric(str(rec.get("Value", "")))
+        if name and bench and d and v is not None:
+            series.setdefault((name, bench), []).append((d, v))
+
+    results = {}
+    for (athlete, bench), pts in series.items():
+        pts.sort(key=lambda x: x[0])
+        if len(pts) < min_points:
+            continue
+        first_date, _ = pts[0]
+        last_date, _ = pts[-1]
+        span_days = (last_date - first_date).days
+        if span_days < 7:
+            continue
+        ys = [v for _, v in pts]
+        if not ys or ys[0] <= 0:
+            continue
+        s = _slope(pts)
+        entries_per_month = len(pts) / (span_days / 30.44)
+        rate_pct_per_month = round(s * entries_per_month * 100, 2)
+        direction = (
+            "improving" if rate_pct_per_month > 0.3
+            else "declining" if rate_pct_per_month < -0.3
+            else "flat"
+        )
+        results.setdefault(athlete, []).append({
+            "benchmark": bench,
+            "rate_pct_per_month": rate_pct_per_month,
+            "first_date": first_date,
+            "last_date": last_date,
+            "data_points": len(pts),
+            "direction": direction,
+        })
+
+    for athlete in results:
+        results[athlete].sort(key=lambda x: -abs(x["rate_pct_per_month"]))
+    return results
+
+
+def cohort_retention(pr_records, min_cohort_size=2):
+    """Group athletes by month of first PR log entry, compute 30/60/90-day retention.
+
+    Retention = % of cohort who logged again within N days of their first entry.
+    Only computes a window if enough time has elapsed since cohort start.
+    Returns list of {cohort (YYYY-MM), n, pct_30d, pct_60d, pct_90d} sorted newest first.
+    """
+    from collections import defaultdict
+
+    first_log = {}
+    log_dates_by_name = defaultdict(list)
+    for rec in pr_records:
+        name = str(rec.get("Athlete Name", "")).strip()
+        d = _parse_date(str(rec.get("Date", "")))
+        if name and d:
+            if name not in first_log or d < first_log[name]:
+                first_log[name] = d
+            log_dates_by_name[name].append(d)
+
+    cohorts = defaultdict(list)
+    for name, fd in first_log.items():
+        cohorts[fd.strftime("%Y-%m")].append(name)
+
+    results = []
+    for cohort_month in sorted(cohorts.keys(), reverse=True):
+        names = cohorts[cohort_month]
+        if len(names) < min_cohort_size:
+            continue
+        cohort_start = _parse_date(cohort_month + "-01")
+        days_elapsed = (TODAY - cohort_start).days if cohort_start else 0
+
+        def _retained(name, window_days):
+            fd = first_log[name]
+            cutoff = fd + dt.timedelta(days=window_days)
+            return any(d > fd and d <= cutoff for d in log_dates_by_name[name])
+
+        n = len(names)
+        r30 = round(sum(1 for nm in names if _retained(nm, 30)) / n * 100) if days_elapsed >= 30 else None
+        r60 = round(sum(1 for nm in names if _retained(nm, 60)) / n * 100) if days_elapsed >= 60 else None
+        r90 = round(sum(1 for nm in names if _retained(nm, 90)) / n * 100) if days_elapsed >= 90 else None
+        results.append({
+            "cohort": cohort_month,
+            "n": n,
+            "pct_30d": r30,
+            "pct_60d": r60,
+            "pct_90d": r90,
+        })
+
+    return results
