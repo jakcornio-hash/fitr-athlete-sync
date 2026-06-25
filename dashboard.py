@@ -215,6 +215,11 @@ def _numeric(s):
     return float(m.group()) if m else None
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_churn_history_cached():
+    return get_sheets().load_churn_history()
+
+
 # ── Pages ─────────────────────────────────────────────────────────────────────
 
 def page_self_assess():
@@ -916,7 +921,7 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
                 placeholder="e.g. Discussed competition prep — feeling strong about the next block",
             )
             note_kind = st.selectbox(
-                "Type", ["note", "chat", "result", "recovery"],
+                "Type", ["note", "chat", "result", "recovery", "goal"],
                 key=f"note_kind_{name}",
             )
             if st.form_submit_button("Save Note"):
@@ -931,6 +936,22 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
                     st.cache_data.clear()
                 else:
                     st.warning("Note is empty.")
+
+    st.divider()
+
+    # ── Goal progress ─────────────────────────────────────────────────────────
+    goal = str(profile.get("North Star Goal", "")).strip()
+    goal_notes = [e for e in timeline if e.get("kind") == "goal"]
+    if goal or goal_notes:
+        st.markdown("**🎯 Goal Progress**")
+        if goal:
+            st.info(f"**North Star Goal:** {goal}")
+        if goal_notes:
+            for entry in goal_notes:
+                with st.expander(f"🎯 {entry['date']}", expanded=False):
+                    st.write(entry["text"])
+        else:
+            st.caption("No goal notes yet — add notes tagged 'goal' using the form above.")
 
     st.divider()
 
@@ -957,6 +978,39 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
                     f"{icon} **{short_bench}:** {p['athlete_value']} "
                     f"({pct_txt}, {peer_txt}, n={p['peer_count']})"
                 )
+
+    st.divider()
+
+    # ── Churn risk history ────────────────────────────────────────────────────
+    try:
+        churn_hist = _load_churn_history_cached()
+        athlete_churn = sorted(
+            [r for r in churn_hist if str(r.get("Athlete Name", "")).strip() == name],
+            key=lambda x: str(x.get("Date", "")),
+        )
+        if len(athlete_churn) >= 3:
+            st.markdown("**📉 Churn Risk History**")
+            ch_df = pd.DataFrame(athlete_churn)[["Date", "Score", "Label"]].copy()
+            ch_df["Score"] = pd.to_numeric(ch_df["Score"], errors="coerce")
+            ch_chart = (
+                alt.Chart(ch_df)
+                .mark_line(point=True)
+                .encode(
+                    x=alt.X("Date:T", title="Date"),
+                    y=alt.Y("Score:Q", scale=alt.Scale(domain=[0, 100]),
+                             title="Churn Risk Score"),
+                    tooltip=["Date:T", "Score:Q", "Label:N"],
+                )
+            )
+            st.altair_chart(ch_chart, width='stretch')
+            latest_snap = athlete_churn[-1]
+            st.caption(
+                f"Current: {latest_snap.get('Label', '—')} "
+                f"({latest_snap.get('Score', '—')}/100)"
+                + (f" — {latest_snap.get('Factors', '')}" if latest_snap.get("Factors") else "")
+            )
+    except Exception:
+        pass
 
     st.divider()
 
@@ -2480,6 +2534,14 @@ def load_crm_data():
     return crm_by_name, sync_log
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_message_log_cached():
+    try:
+        return get_sheets().sh.worksheet(config.TAB_MESSAGE_LOG).get_all_records()
+    except Exception:
+        return []
+
+
 def page_crm(athletes, engagement_results, data_records):
     """Unified CRM integration tab: lifecycle, pipeline, rosters, discrepancies, bulk actions."""
     st.markdown("## CRM Integration")
@@ -2519,6 +2581,7 @@ def page_crm(athletes, engagement_results, data_records):
 
     crm_tabs = st.tabs([
         "🔄 Lifecycle", "🚀 Pipeline", "👥 Rosters", "⚠️ Discrepancies", "✏️ Bulk Reassign",
+        "💰 Revenue", "📨 Msg Effectiveness",
     ])
 
     with crm_tabs[0]:
@@ -2531,6 +2594,60 @@ def page_crm(athletes, engagement_results, data_records):
         _crm_discrepancies(data_records, crm_by_name)
     with crm_tabs[4]:
         _crm_bulk_reassign(data_records)
+    with crm_tabs[5]:
+        _crm_revenue(data_records)
+    with crm_tabs[6]:
+        _crm_message_effectiveness()
+
+
+def _crm_message_effectiveness():
+    """Show reply rates per automated message type from the Message Log tab."""
+    st.markdown("### Automated Message Effectiveness")
+    st.caption("Reply rates for automated Fitr messages sent by the daily sync.")
+    rows = _load_message_log_cached()
+    if not rows:
+        st.info("No messages logged yet. The Message Log tab will populate after the next sync run.")
+        return
+
+    from collections import defaultdict
+    totals = defaultdict(lambda: {"sent": 0, "replied": 0})
+    for r in rows:
+        msg_type = str(r.get("Message Type", "unknown")).strip()
+        totals[msg_type]["sent"] += 1
+        if str(r.get("Replied", "")).strip().lower() == "yes":
+            totals[msg_type]["replied"] += 1
+
+    table_rows = []
+    for msg_type, counts in sorted(totals.items()):
+        sent = counts["sent"]
+        replied = counts["replied"]
+        rate = round(replied / sent * 100, 1) if sent else 0
+        table_rows.append({"Message Type": msg_type, "Sent": sent, "Replied": replied,
+                           "Reply Rate (%)": rate})
+
+    df = pd.DataFrame(table_rows)
+    st.dataframe(df, width='stretch', hide_index=True)
+
+    # Bar chart of reply rates
+    if len(table_rows) >= 2:
+        chart = (
+            alt.Chart(df)
+            .mark_bar()
+            .encode(
+                x=alt.X("Reply Rate (%):Q", scale=alt.Scale(domain=[0, 100])),
+                y=alt.Y("Message Type:N", sort="-x"),
+                tooltip=["Message Type:N", "Sent:Q", "Replied:Q", "Reply Rate (%):Q"],
+            )
+        )
+        st.altair_chart(chart, width='stretch')
+
+    total_sent = sum(r["Sent"] for r in table_rows)
+    total_replied = sum(r["Replied"] for r in table_rows)
+    overall_rate = round(total_replied / total_sent * 100, 1) if total_sent else 0
+    st.caption(
+        f"Overall: {total_sent} messages sent, {total_replied} replies received "
+        f"({overall_rate}% reply rate)"
+    )
 
 
 def _crm_lifecycle(athletes, engagement_results, data_records, crm_by_name):
@@ -2819,6 +2936,90 @@ def _crm_bulk_reassign(data_records):
             get_sheets().batch_update_by_name(config.TAB_DATA, "Full Name", updates)
             st.success(f"✓ Updated {len(selected)} athletes → {new_prog}")
             st.cache_data.clear()
+
+
+def _crm_revenue(data_records):
+    """MRR breakdown by subscription plan."""
+    st.markdown("### Revenue")
+    st.caption("Monthly recurring revenue by subscription plan, based on _DATA 'Subscription Plan' column")
+
+    # Build {plan: count} from data_records
+    plan_counts = {}
+    for r in (data_records or []):
+        plan = str(r.get("Subscription Plan", "")).strip()
+        if plan:
+            plan_counts[plan] = plan_counts.get(plan, 0) + 1
+
+    if not plan_counts:
+        st.info("No subscription plan data found in _DATA. Add a 'Subscription Plan' column to your athlete sheet.")
+        return
+
+    # Compute MRR per plan
+    plan_rows = []
+    unpriced = []
+    total_athletes = 0
+    total_mrr = 0
+    for plan, count in sorted(plan_counts.items(), key=lambda x: -x[1]):
+        price = config.SUBSCRIPTION_PRICES.get(plan, 0)
+        mrr = price * count
+        total_athletes += count
+        total_mrr += mrr
+        plan_rows.append({
+            "Plan": plan,
+            "Athletes": count,
+            "Price/mo (£)": price if price else "—",
+            "MRR (£)": mrr,
+            "_mrr_num": mrr,
+            "_price": price,
+        })
+        if not price:
+            unpriced.append(plan)
+
+    avg_rpa = round(total_mrr / total_athletes, 2) if total_athletes else 0
+
+    # Three summary metrics
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Total Athletes", total_athletes)
+    m2.metric("Total MRR (£)", f"£{total_mrr:,.0f}")
+    m3.metric("Avg Revenue per Athlete (£)", f"£{avg_rpa:,.2f}")
+
+    st.divider()
+
+    # Bar chart: x = MRR, y = Plan, sorted descending
+    chart_rows = [r for r in plan_rows if r["_mrr_num"] > 0]
+    if chart_rows:
+        chart_df = pd.DataFrame([
+            {"Plan": r["Plan"], "MRR (£)": r["_mrr_num"]}
+            for r in sorted(chart_rows, key=lambda x: -x["_mrr_num"])
+        ])
+        bar = (
+            alt.Chart(chart_df)
+            .mark_bar(color="#1f77b4")
+            .encode(
+                x=alt.X("MRR (£):Q", title="MRR (£)"),
+                y=alt.Y("Plan:N", sort="-x", title=""),
+                tooltip=["Plan:N", "MRR (£):Q"],
+            )
+            .properties(height=max(160, len(chart_rows) * 38))
+        )
+        st.altair_chart(bar, width='stretch')
+
+    # Summary table
+    display_rows = []
+    for r in plan_rows:
+        display_rows.append({
+            "Plan": r["Plan"],
+            "Athletes": r["Athletes"],
+            "Price/mo (£)": r["Price/mo (£)"],
+            "MRR (£)": r["MRR (£)"],
+        })
+    st.dataframe(pd.DataFrame(display_rows), width='stretch', hide_index=True)
+
+    if unpriced:
+        st.caption(
+            f"Plans without a configured price: {', '.join(unpriced)}. "
+            "Update SUBSCRIPTION_PRICES in config.py to include unpriced plans."
+        )
 
 
 def page_help():

@@ -583,6 +583,8 @@ def main():
     comps_updated = sync_competition_from_typeform(sheets, email_by_name)
     print(f"Competition dates synced from Typeform: {comps_updated}")
 
+    messages_sent_log = []  # collects all automated messages for Message Log
+
     # ---- auto-congratulations via Fitr chat ----
     if bench_rows and not config.DRY_RUN:
         congrats_sent = 0
@@ -604,6 +606,8 @@ def main():
             try:
                 fitr.send_chat_message(room_id, msg)
                 congrats_sent += 1
+                messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": name,
+                                          "Message Type": "congrats", "Room ID": room_id})
                 import time as _time; _time.sleep(0.5)
             except FitrError as exc:
                 print(f"  ! Congrats message failed for {name}: {exc}")
@@ -665,6 +669,56 @@ def main():
         engagement_results, trend_results, rec_by_name, milestones, consistency_wins
     )
     sheets.overwrite_tab(config.TAB_COACH_ALERTS, alert_rows)
+
+    # ---- churn risk snapshot (written daily) ----
+    churn_snapshot_rows = []
+    for e in engagement_results:
+        nm = e["name"]
+        risk = analytics.churn_risk_score(
+            nm, engagement_results, trend_results,
+            rec_by_name=rec_by_name, last_contact_by_name=last_contact_by_name,
+        )
+        churn_snapshot_rows.append({
+            "Date": TODAY.isoformat(),
+            "Athlete Name": nm,
+            "Score": risk["score"],
+            "Label": risk["label"],
+            "Factors": ", ".join(risk["factors"]),
+        })
+    sheets.write_churn_snapshot(churn_snapshot_rows)
+    print(f"Churn history snapshot written: {len(churn_snapshot_rows)} athletes")
+
+    # ---- off-boarding: final check-in when 60d inactive + critical risk ----
+    if not config.DRY_RUN:
+        offboarding_sent = 0
+        for snap in churn_snapshot_rows:
+            nm = snap["Athlete Name"]
+            if snap["Score"] < 60:
+                continue
+            e = next((x for x in engagement_results if x["name"] == nm), {})
+            if e.get("days_since") != 60:
+                continue
+            room_id = room_id_by_name.get(nm)
+            if not room_id:
+                continue
+            first = nm.split()[0]
+            msg = (
+                f"Hey {first} 👋 It's been a little while since I've seen you in the logs — "
+                f"just checking in to see how you're getting on.\n\n"
+                f"Life gets busy, totally get it. If there's anything going on or you want "
+                f"to adjust your programme, just say the word — I'm here for you whenever "
+                f"you're ready to get back at it. 💪"
+            )
+            try:
+                fitr.send_chat_message(room_id, msg)
+                offboarding_sent += 1
+                messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
+                                          "Message Type": "offboarding", "Room ID": room_id})
+                import time as _time; _time.sleep(0.5)
+            except FitrError as exc:
+                print(f"  ! Off-boarding message failed for {nm}: {exc}")
+        if offboarding_sent:
+            print(f"Off-boarding check-in messages sent: {offboarding_sent}")
 
     # ---- digest notification ----
     print("Sending digest...")
@@ -740,6 +794,8 @@ def main():
         try:
             fitr.send_chat_message(room_id, msg)
             anniversaries_sent += 1
+            messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
+                                      "Message Type": "anniversary", "Room ID": room_id})
             import time as _time; _time.sleep(0.5)
         except FitrError as exc:
             print(f"  ! Anniversary message failed for {nm}: {exc}")
@@ -769,6 +825,8 @@ def main():
         try:
             fitr.send_chat_message(room_id, msg)
             onboarding_sent += 1
+            messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
+                                      "Message Type": "onboarding", "Room ID": room_id})
             import time as _time; _time.sleep(0.5)
         except FitrError as exc:
             print(f"  ! Onboarding message failed for {nm}: {exc}")
@@ -834,6 +892,8 @@ def main():
         try:
             fitr.send_chat_message(room_id, msg)
             comp_msgs_sent += 1
+            messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
+                                      "Message Type": f"pre_comp_{days_out}d", "Room ID": room_id})
             import time as _time; _time.sleep(0.5)
         except FitrError as exc:
             print(f"  ! Pre-comp message failed for {nm}: {exc}")
@@ -853,6 +913,41 @@ def main():
     )
     if emails_sent:
         print(f"Athlete weekly progress emails sent: {emails_sent}")
+
+    # ---- monthly athlete reports (fires on the 1st of each month) ----
+    if TODAY.day == 1:
+        monthly_sent = notifier.send_monthly_athlete_reports(data_recs, email_by_name, pr_records)
+        if monthly_sent:
+            print(f"Monthly athlete reports sent: {monthly_sent}")
+
+    # ---- log automated messages + check for replies ----
+    if messages_sent_log:
+        sheets.log_messages(messages_sent_log)
+        print(f"Automated messages logged: {len(messages_sent_log)}")
+
+    pending_msgs = sheets.load_pending_messages()
+    if pending_msgs and not config.DRY_RUN:
+        replies_found = 0
+        for pending in pending_msgs:
+            pnm = str(pending.get("Athlete Name", "")).strip()
+            room_id = room_id_by_name.get(pnm)
+            if not room_id:
+                continue
+            sent_date = str(pending.get("Date", "")).strip()
+            msg_type = str(pending.get("Message Type", "")).strip()
+            try:
+                recent = fitr.chat_messages(room_id, max_messages=10)
+                for cmsg in recent:
+                    if not cmsg.get("is_mine") and str(cmsg.get("text", "")).strip():
+                        msg_ts = str(cmsg.get("created_at", ""))[:10]
+                        if msg_ts >= sent_date:
+                            sheets.mark_message_replied(pnm, msg_type, sent_date, msg_ts)
+                            replies_found += 1
+                            break
+            except FitrError:
+                pass
+        if replies_found:
+            print(f"Athlete replies recorded: {replies_found}")
 
     # ---- sync log ----
     unknown = sorted({n for n in chat_notes} - valid_names)

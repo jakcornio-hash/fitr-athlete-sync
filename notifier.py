@@ -466,6 +466,80 @@ def send_weekly_coach_summary(athletes_by_coach, engagement_results, trend_resul
     return sent
 
 
+def send_monthly_athlete_reports(data_recs, email_by_name, pr_records):
+    """Email each athlete their monthly training summary on the 1st of the month.
+
+    Skips athletes with no activity in the previous calendar month.
+    Returns count of emails sent.
+    """
+    if not config.SMTP_FROM or not config.SMTP_PASSWORD:
+        return 0
+
+    import datetime as dt_mod
+    today = dt_mod.date.today()
+    last_month_end = today.replace(day=1) - dt_mod.timedelta(days=1)
+    last_month_start = last_month_end.replace(day=1)
+    month_label = last_month_end.strftime("%B %Y")
+
+    month_prs_by_name = {}
+    for r in pr_records:
+        nm = str(r.get("Athlete Name", "")).strip()
+        d_str = str(r.get("Date", "")).strip()
+        if nm and last_month_start.isoformat() <= d_str <= last_month_end.isoformat():
+            month_prs_by_name.setdefault(nm, []).append(r)
+
+    sent = 0
+    for rec in data_recs:
+        nm = str(rec.get("Full Name", "")).strip()
+        if not nm:
+            continue
+        email = email_by_name.get(nm) or str(rec.get("Email", "")).strip()
+        if not email:
+            continue
+        month_prs = month_prs_by_name.get(nm, [])
+        if not month_prs:
+            continue  # no activity — skip
+        sessions = len({r.get("Date") for r in month_prs if r.get("Date")})
+        benchmarks = [(str(r.get("Benchmark Name", "")), str(r.get("Value", "")))
+                      for r in month_prs]
+        prog = str(rec.get("Programme", "")).strip()
+        goal = str(rec.get("North Star Goal", "")).strip()
+
+        first = nm.split()[0]
+        lines = [
+            f"Hi {first},",
+            "",
+            f"Here's your training summary for {month_label}:",
+            "",
+            f"📅 Sessions logged: {sessions}",
+        ]
+        if benchmarks:
+            lines.append("")
+            lines.append("🏆 Results logged this month:")
+            for bench, val in benchmarks[:8]:
+                lines.append(f"  • {bench}: {val}")
+            if len(benchmarks) > 8:
+                lines.append(f"  • ...and {len(benchmarks) - 8} more")
+        if goal:
+            lines.extend(["", f"🎯 North Star Goal: {goal}"])
+        if prog:
+            lines.extend(["", f"📋 Programme: {prog}"])
+        lines.extend([
+            "",
+            "Every session you log makes your coaching sharper. Keep up the consistency.",
+            "",
+            "— JST Compete Coaching Team",
+        ])
+        subject = f"Your {month_label} training summary — JST Compete"
+        try:
+            _send_email_to(config.SMTP_FROM, config.SMTP_PASSWORD, email, subject,
+                           "\n".join(lines))
+            sent += 1
+        except Exception as exc:
+            print(f"  ! Monthly report failed for {nm} ({email}): {exc}")
+    return sent
+
+
 def send_digest(date, engagement_results, trend_results,
                 rec_alert_rows, milestones, consistency_wins):
     plain, slack_text = build_digest(

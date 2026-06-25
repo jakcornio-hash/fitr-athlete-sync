@@ -71,6 +71,8 @@ COMP_FORM_NOTES_COL = "Any notes for your coach about this competition? (optiona
 
 # Competitions tab in the main athlete sheet
 TAB_COMPETITIONS = "Competitions"
+TAB_CHURN_HISTORY = "Churn History"
+TAB_MESSAGE_LOG = "Message Log"
 
 # Recovery survey (Typeform sheet — separate from main athlete sheet)
 RECOVERY_SHEET_ID = _get("RECOVERY_SHEET_ID", "")
@@ -95,3 +97,15 @@ JST_TRACKS = [
     "Competition Ready - 2 Sessions Per Day",
     "Competition Ready - 1 Session Per Day",
 ]
+
+# Monthly subscription prices by plan name — update to match your actual plans/prices.
+# Keys must exactly match the values stored in the "Subscription Plan" column of _DATA.
+# Leave a plan out or set to 0 to exclude it from MRR calculations.
+SUBSCRIPTION_PRICES = {
+    "Bespoke": 300,
+    "JST Athlete": 97,
+    "Strength Bias": 97,
+    "Engine Bias": 97,
+    "Gymnastics Bias": 97,
+    "Competition Ready": 97,
+}

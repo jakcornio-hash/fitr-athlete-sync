@@ -219,6 +219,99 @@ class SheetsClient:
         if cells:
             ws.update_cells(cells, value_input_option="USER_ENTERED")
 
+    # ---------------------------------------------------------- churn history
+    _CHURN_HEADERS = ["Date", "Athlete Name", "Score", "Label", "Factors"]
+
+    def write_churn_snapshot(self, rows):
+        """Append one row per athlete to the Churn History tab.
+
+        rows: [{"Date": str, "Athlete Name": str, "Score": int,
+                "Label": str, "Factors": str}, ...]
+        """
+        ws = self.get_or_create(config.TAB_CHURN_HISTORY, self._CHURN_HEADERS)
+        data = [[str(r.get(h, "")) for h in self._CHURN_HEADERS] for r in rows]
+        if data and not config.DRY_RUN:
+            ws.append_rows(data, value_input_option="USER_ENTERED")
+
+    def load_churn_history(self):
+        """Return all rows from Churn History tab, or [] if tab missing."""
+        try:
+            return self.sh.worksheet(config.TAB_CHURN_HISTORY).get_all_records()
+        except Exception:
+            return []
+
+    # ---------------------------------------------------------- message log
+    _MSG_LOG_HEADERS = ["Date", "Athlete Name", "Message Type", "Room ID", "Replied", "Reply Date"]
+
+    def log_messages(self, rows):
+        """Append sent-message records to the Message Log tab.
+
+        rows: [{"Date": str, "Athlete Name": str, "Message Type": str,
+                "Room ID": str}, ...]
+        Replied and Reply Date are left blank — updated later by mark_message_replied().
+        """
+        ws = self.get_or_create(config.TAB_MESSAGE_LOG, self._MSG_LOG_HEADERS)
+        data = [
+            [str(r.get("Date", "")), str(r.get("Athlete Name", "")),
+             str(r.get("Message Type", "")), str(r.get("Room ID", "")), "", ""]
+            for r in rows
+        ]
+        if data and not config.DRY_RUN:
+            ws.append_rows(data, value_input_option="USER_ENTERED")
+
+    def load_pending_messages(self, max_age_days=4):
+        """Return message log rows where Replied is blank and Date is within max_age_days."""
+        import datetime as dt
+        today = dt.date.today()
+        try:
+            rows = self.sh.worksheet(config.TAB_MESSAGE_LOG).get_all_records()
+        except Exception:
+            return []
+        pending = []
+        for r in rows:
+            if str(r.get("Replied", "")).strip():
+                continue
+            raw = str(r.get("Date", "")).strip()
+            for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
+                try:
+                    d = dt.datetime.strptime(raw, fmt).date()
+                    if (today - d).days <= max_age_days:
+                        pending.append(r)
+                    break
+                except ValueError:
+                    continue
+        return pending
+
+    def mark_message_replied(self, athlete_name, message_type, sent_date_str, reply_date_str):
+        """Set Replied=Yes and Reply Date on the first matching un-replied row."""
+        if config.DRY_RUN:
+            return
+        try:
+            ws = self.sh.worksheet(config.TAB_MESSAGE_LOG)
+        except Exception:
+            return
+        values = ws.get_all_values()
+        if not values:
+            return
+        header = values[0]
+        try:
+            name_i = header.index("Athlete Name")
+            type_i = header.index("Message Type")
+            date_i = header.index("Date")
+            replied_i = header.index("Replied")
+            reply_date_i = header.index("Reply Date")
+        except ValueError:
+            return
+        for row_num, row in enumerate(values[1:], start=2):
+            if (len(row) > max(name_i, type_i, date_i, replied_i) and
+                    row[name_i].strip() == athlete_name.strip() and
+                    row[type_i].strip() == message_type.strip() and
+                    row[date_i].strip() == sent_date_str.strip() and
+                    not row[replied_i].strip()):
+                ws.update_cell(row_num, replied_i + 1, "Yes")
+                ws.update_cell(row_num, reply_date_i + 1, reply_date_str)
+                return
+
 
 def _col_to_idx(letter):
     idx = 0
