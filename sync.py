@@ -761,7 +761,8 @@ def main():
             f"Welcome to JST Compete, {first}! 👋 Your first log is in — you're officially on the board.\n\n"
             f"Here's how to get the most from your coaching:\n"
             f"1️⃣ Log every session as soon as you finish — 2 mins of data makes coaching infinitely better\n"
-            f"2️⃣ Submit your weekly recovery survey (link in your Fitr profile)\n"
+            f"2️⃣ Submit your weekly recovery survey here: https://jstcompete.typeform.com/to/Q1tL7MmR\n"
+            f"   (takes 2 mins, helps me adjust your training load week to week)\n"
             f"3️⃣ Message me here anytime — I'm watching your progress and will be in touch regularly\n\n"
             f"Let's go! 🔥"
         )
