@@ -1031,6 +1031,8 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
         if nm:
             data_by_name[nm] = rec
 
+    compliance_by_name = analytics.session_compliance(pr_records, data_records or [])
+
     # Build summary table
     last_logged = {}
     for r in pr_records:
@@ -1079,10 +1081,12 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
             nm, data_by_name.get(nm, {}), archetype_by_name, has_logged_nm, has_rec_nm
         )
         risk = analytics.churn_risk_score(nm, engagement_results, trend_results, rec_by_name)
+        comp_data = compliance_by_name.get(nm)
         summary_rows.append({
             "Name": nm,
             "Programme": prog_short,
             "Risk": risk["label"],
+            "Compliance": comp_data["label"] if comp_data else "—",
             "Profile": f"{done_nm}/{total_nm}",
             "Last Logged": last.isoformat() if last else "Never",
             "Days Since": days if days is not None else "—",
@@ -2983,6 +2987,149 @@ From the next sync onwards, each time an athlete logs a result, their coach gets
     """)
 
 
+def page_leaderboard(pr_records, athletes):
+    """Squad leaderboard — overall composite percentile + per-category ranked tables."""
+    lb = analytics.leaderboard_data(pr_records)
+    latest = lb["latest"]
+    lower_is_better = lb["lower_is_better"]
+    category_map = lb["category"]
+    all_benchmarks = lb["all_benchmarks"]
+
+    if not all_benchmarks:
+        st.info("Not enough data yet — leaderboard requires at least 2 athletes to have logged the same benchmark.")
+        return
+
+    # ── helpers ────────────────────────────────────────────────────────────────
+    def _ranked(bench):
+        """Return [(rank, name, value_str, value_num, date), ...] for one benchmark."""
+        rows = [
+            (nm, latest[(nm, bench)]["value_str"],
+             latest[(nm, bench)]["value_num"],
+             latest[(nm, bench)]["date"])
+            for nm in lb["athletes"]
+            if (nm, bench) in latest
+        ]
+        rows.sort(key=lambda x: x[2], reverse=not lower_is_better.get(bench, False))
+        return [(i + 1,) + r for i, r in enumerate(rows)]
+
+    def _percentile_score(athlete_name):
+        """Average percentile across all benchmarks this athlete has logged."""
+        percs = []
+        for bench in all_benchmarks:
+            if (athlete_name, bench) not in latest:
+                continue
+            ranked = _ranked(bench)
+            n = len(ranked)
+            if n < 2:
+                continue
+            pos = next((r[0] for r in ranked if r[1] == athlete_name), None)
+            if pos is None:
+                continue
+            # lower rank = better; percentile = (n - rank) / (n - 1) * 100
+            percs.append((n - pos) / (n - 1) * 100)
+        return round(sum(percs) / len(percs)) if percs else None
+
+    def _category_benchmarks(cat_name):
+        return [b for b in all_benchmarks if category_map.get(b) == cat_name]
+
+    def _render_benchmark_table(bench):
+        ranked = _ranked(bench)
+        if not ranked:
+            st.caption("No data.")
+            return
+        lib = lower_is_better.get(bench, False)
+        st.caption(f"{'Lower is better (time)' if lib else 'Higher is better'} · {len(ranked)} athletes")
+        df = pd.DataFrame([{
+            "Rank": f"{'🥇' if r[0] == 1 else '🥈' if r[0] == 2 else '🥉' if r[0] == 3 else r[0]}",
+            "Athlete": r[1],
+            "Result": r[2],
+            "Date": r[4].strftime("%d %b %Y"),
+        } for r in ranked])
+        st.dataframe(df, width='stretch', hide_index=True)
+
+    def _render_category(cat_name):
+        benches = _category_benchmarks(cat_name)
+        if not benches:
+            st.info(f"No {cat_name} benchmarks logged by 2+ athletes yet.")
+            return
+        sel_bench = st.selectbox(
+            "Benchmark", benches, key=f"lb_bench_{cat_name}",
+        )
+        _render_benchmark_table(sel_bench)
+
+        # Full category grid: rows = athletes, columns = benchmarks
+        st.markdown("**Full category overview**")
+        st.caption("Latest value per athlete — blanks mean no result logged")
+        grid_rows = []
+        for nm in lb["athletes"]:
+            row = {"Athlete": nm}
+            has_any = False
+            for b in benches:
+                val = latest.get((nm, b))
+                row[b] = val["value_str"] if val else "—"
+                if val:
+                    has_any = True
+            if has_any:
+                grid_rows.append(row)
+        if grid_rows:
+            st.dataframe(pd.DataFrame(grid_rows), width='stretch', hide_index=True)
+
+    # ── Tabs ───────────────────────────────────────────────────────────────────
+    lb_tabs = st.tabs(["🏆 Overall", "🏋️ Weightlifting", "💪 Strength", "🤸 Gymnastics", "🏃 Conditioning"])
+
+    with lb_tabs[0]:
+        st.subheader("Overall Composite Score")
+        st.caption("Average percentile across all benchmarks each athlete has logged vs the squad")
+        overall_rows = []
+        for nm in lb["athletes"]:
+            score = _percentile_score(nm)
+            if score is None:
+                continue
+            bench_count = sum(1 for b in all_benchmarks if (nm, b) in latest)
+            medal = "🥇" if not overall_rows else ("🥈" if len(overall_rows) == 1 else "🥉" if len(overall_rows) == 2 else "")
+            overall_rows.append({"": medal, "Athlete": nm, "Score": score, "Benchmarks": bench_count})
+        overall_rows.sort(key=lambda x: -x["Score"])
+        for i, r in enumerate(overall_rows):
+            r[""] = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else ""
+        if overall_rows:
+            ov_df = pd.DataFrame(overall_rows)
+            bar = (
+                alt.Chart(ov_df)
+                .mark_bar()
+                .encode(
+                    x=alt.X("Score:Q", title="Composite Percentile Score", scale=alt.Scale(domain=[0, 100])),
+                    y=alt.Y("Athlete:N", sort="-x", title=""),
+                    color=alt.Color("Score:Q", scale=alt.Scale(scheme="blues"), legend=None),
+                    tooltip=["Athlete:N", "Score:Q", "Benchmarks:Q"],
+                )
+                .properties(height=max(200, len(overall_rows) * 30))
+            )
+            st.altair_chart(bar, width='stretch')
+            st.dataframe(ov_df, width='stretch', hide_index=True)
+
+        # Benchmark selector for drill-down
+        st.divider()
+        st.markdown("**Drill into any benchmark**")
+        all_bench_sel = st.selectbox("Benchmark", all_benchmarks, key="lb_overall_bench")
+        _render_benchmark_table(all_bench_sel)
+
+    with lb_tabs[1]:
+        st.subheader("Weightlifting")
+        _render_category("Weightlifting")
+
+    with lb_tabs[2]:
+        st.subheader("Strength")
+        _render_category("Strength")
+
+    with lb_tabs[3]:
+        st.subheader("Gymnastics")
+        _render_category("Gymnastics")
+
+    with lb_tabs[4]:
+        st.subheader("Conditioning")
+        _render_category("Conditioning")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -3032,7 +3179,7 @@ def main():
     tabs = st.tabs([
         "📋 Outreach List", "🚨 Alerts", "🃏 Squad", "👥 Athletes",
         "🗓️ Week Plan", "🏁 Competitions", "📊 Programmes", "🏋️ Load",
-        "📈 Trends", "💤 Recovery", "🌐 CRM", "❓ Help",
+        "📈 Trends", "🏆 Leaderboard", "💤 Recovery", "🌐 CRM", "❓ Help",
     ])
 
     with tabs[0]:
@@ -3054,10 +3201,12 @@ def main():
     with tabs[8]:
         page_trends(pr_records, athletes)
     with tabs[9]:
-        page_recovery(rec_by_name)
+        page_leaderboard(pr_records, athletes)
     with tabs[10]:
-        page_crm(athletes, engagement_results, data_records)
+        page_recovery(rec_by_name)
     with tabs[11]:
+        page_crm(athletes, engagement_results, data_records)
+    with tabs[12]:
         page_help()
 
 

@@ -746,6 +746,99 @@ def main():
     if anniversaries_sent:
         print(f"Anniversary messages sent: {anniversaries_sent}")
 
+    # ---- new athlete onboarding (first log == today) ----
+    onboarding_sent = 0
+    for a in athletes:
+        nm = a["name"]
+        first_log = first_log_by_name.get(nm)
+        if not first_log or first_log != TODAY:
+            continue
+        room_id = room_id_by_name.get(nm)
+        if not room_id or config.DRY_RUN:
+            continue
+        first = nm.split()[0]
+        msg = (
+            f"Welcome to JST Compete, {first}! 👋 Your first log is in — you're officially on the board.\n\n"
+            f"Here's how to get the most from your coaching:\n"
+            f"1️⃣ Log every session as soon as you finish — 2 mins of data makes coaching infinitely better\n"
+            f"2️⃣ Submit your weekly recovery survey (link in your Fitr profile)\n"
+            f"3️⃣ Message me here anytime — I'm watching your progress and will be in touch regularly\n\n"
+            f"Let's go! 🔥"
+        )
+        try:
+            fitr.send_chat_message(room_id, msg)
+            onboarding_sent += 1
+            import time as _time; _time.sleep(0.5)
+        except FitrError as exc:
+            print(f"  ! Onboarding message failed for {nm}: {exc}")
+    if onboarding_sent:
+        print(f"New athlete onboarding messages sent: {onboarding_sent}")
+
+    # ---- pre-competition automated messages ----
+    # A comp milestones: send once on exact day (sync runs daily)
+    _COMP_MSG_DAYS = {
+        70: ("10 weeks out",
+             "Your 10-week competition prep block starts {today}. "
+             "Everything from here points to {comp} — I'll be switching your programme over. "
+             "Trust the process and let's build something special. 🏆"),
+        21: ("3 weeks out",
+             "Three weeks to {comp}, {first}! 🗓️ "
+             "We're in the final stretch now — keep the quality high and manage your recovery. "
+             "Any questions about your prep, just ask."),
+        7:  ("race week",
+             "Race week is here, {first}! 🔥 "
+             "{comp} is 7 days away. "
+             "Stick to the plan, trust your training, and stay sharp. "
+             "You've put the work in — now it's time to show it."),
+        1:  ("day before",
+             "Tomorrow is your day, {first}. 🏁 "
+             "{comp} — you're ready. "
+             "Good sleep tonight, good warm-up tomorrow, and go express what you've built. "
+             "We're behind you all the way. 💪"),
+    }
+    competition_rows = sheets.load_competitions()
+    comp_msgs_sent = 0
+    for row in competition_rows:
+        nm = str(row.get("Athlete Name", "")).strip()
+        comp_nm = str(row.get("Competition Name", "")).strip() or "your competition"
+        comp_type = str(row.get("Type", "A")).strip().upper()
+        raw_date = str(row.get("Date", "")).strip()
+        if not nm or not raw_date:
+            continue
+        import datetime as _dt2
+        comp_date = None
+        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%b-%Y", "%d %b %Y"):
+            try:
+                comp_date = _dt2.datetime.strptime(raw_date, fmt).date()
+                break
+            except ValueError:
+                continue
+        if not comp_date:
+            continue
+        days_out = (comp_date - TODAY).days
+        template = _COMP_MSG_DAYS.get(days_out)
+        if not template:
+            continue
+        # Only auto-message for A comps; 21d applies to A+B
+        if comp_type == "C":
+            continue
+        if days_out in (70, 1) and comp_type != "A":
+            continue
+        room_id = room_id_by_name.get(nm)
+        if not room_id or config.DRY_RUN:
+            continue
+        first = nm.split()[0]
+        _, msg_tpl = template
+        msg = msg_tpl.format(first=first, comp=comp_nm, today=TODAY.strftime("%d %b %Y"))
+        try:
+            fitr.send_chat_message(room_id, msg)
+            comp_msgs_sent += 1
+            import time as _time; _time.sleep(0.5)
+        except FitrError as exc:
+            print(f"  ! Pre-comp message failed for {nm}: {exc}")
+    if comp_msgs_sent:
+        print(f"Pre-competition messages sent: {comp_msgs_sent}")
+
     # ---- weekly athlete progress emails ----
     archetype_rows = sheets.load_archetype_assessments()
     archetype_by_name = {
@@ -753,9 +846,8 @@ def main():
         for r in archetype_rows
         if str(r.get("Athlete Name", "")).strip()
     }
-    competition_rows = sheets.load_competitions()
     emails_sent = notifier.send_all_athlete_progress_emails(
-        bench_rows, consistency_wins, competition_rows, email_by_name,
+        bench_rows, consistency_wins, competition_rows, email_by_name,  # competition_rows already loaded above
         archetype_by_name=archetype_by_name,
     )
     if emails_sent:

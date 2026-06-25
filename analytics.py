@@ -963,6 +963,126 @@ def pr_velocity(pr_records, min_points=2):
     return results
 
 
+_LB_CATEGORIES = {
+    "Weightlifting": ["clean", "snatch", "jerk"],
+    "Strength": ["squat", "deadlift", "press", "bench"],
+    "Gymnastics": ["pull", "muscle", "hspu", "handstand", "ring dip", "toes-to-bar", "toes to bar", "ttb"],
+    "Conditioning": ["row", "run", "bike", "assault", "erg", "400m", "800m", "1km", "1.2km", "2km", "mile", "sprint"],
+}
+
+_LB_LOWER_IS_BETTER = ["row", "run", "bike", "assault", "erg", "400m", "800m", "1km", "1.2km", "2km", "5km", "mile", "sprint"]
+
+
+def leaderboard_data(pr_records):
+    """Latest value per (athlete, benchmark) from all-time PR log.
+
+    Returns {
+        "latest": {(athlete, benchmark): {"value_str": str, "value_num": float, "date": date}},
+        "all_benchmarks": sorted list of benchmark names logged by >= 2 athletes,
+        "athletes": sorted list of all athlete names with at least one entry,
+        "lower_is_better": {benchmark_name: bool},
+        "category": {benchmark_name: category_name | None},
+    }
+    """
+    latest = {}
+    for rec in pr_records:
+        name = str(rec.get("Athlete Name", "")).strip()
+        bench = str(rec.get("Benchmark Name", "")).strip()
+        d = _parse_date(str(rec.get("Date", "")))
+        v_str = str(rec.get("Value", "")).strip()
+        v_num = _parse_numeric(v_str)
+        if name and bench and d and v_num is not None:
+            key = (name, bench)
+            if key not in latest or d > latest[key]["date"]:
+                latest[key] = {"value_str": v_str, "value_num": v_num, "date": d}
+
+    # Only keep benchmarks where >= 2 athletes have a value
+    from collections import Counter
+    bench_counts = Counter(b for _, b in latest.keys())
+    shared_benchmarks = {b for b, c in bench_counts.items() if c >= 2}
+
+    all_benchmarks = sorted(shared_benchmarks)
+    all_athletes = sorted({a for a, _ in latest.keys()})
+
+    lower_is_better = {}
+    category_map = {}
+    for bench in all_benchmarks:
+        bl = bench.lower()
+        lower_is_better[bench] = any(kw in bl for kw in _LB_LOWER_IS_BETTER)
+        cat = None
+        for cat_name, keywords in _LB_CATEGORIES.items():
+            if any(kw in bl for kw in keywords):
+                cat = cat_name
+                break
+        category_map[bench] = cat
+
+    return {
+        "latest": {k: v for k, v in latest.items() if k[1] in shared_benchmarks},
+        "all_benchmarks": all_benchmarks,
+        "athletes": all_athletes,
+        "lower_is_better": lower_is_better,
+        "category": category_map,
+    }
+
+
+def session_compliance(pr_records, data_records, weeks=4):
+    """Compliance % per athlete: unique training days logged vs programme expectation.
+
+    Expected sessions derived from programme name:
+      "2 Sessions Per Day" → 14 sessions/week
+      "1 Session Per Day"  →  7 sessions/week
+      Otherwise            →  5 sessions/week (default)
+
+    Returns {athlete_name: {"actual": int, "expected": int, "pct": int, "label": str}}
+    """
+    from collections import defaultdict
+
+    data_by_name = {}
+    for rec in (data_records or []):
+        nm = str(rec.get("Full Name", "")).strip()
+        if nm:
+            data_by_name[nm] = rec
+
+    cutoff = TODAY - dt.timedelta(weeks=weeks)
+
+    log_days_by_name = defaultdict(set)
+    for rec in pr_records:
+        nm = str(rec.get("Athlete Name", "")).strip()
+        d = _parse_date(str(rec.get("Date", "")))
+        if nm and d and d > cutoff:
+            log_days_by_name[nm].add(d)
+
+    results = {}
+    for name, days_set in log_days_by_name.items():
+        prog = str(data_by_name.get(name, {}).get("Programme", "")).lower()
+        if "2 session" in prog:
+            expected_per_week = 14
+        elif "1 session" in prog:
+            expected_per_week = 7
+        else:
+            expected_per_week = 5
+
+        expected_total = expected_per_week * weeks
+        actual = len(days_set)
+        pct = round(actual / expected_total * 100) if expected_total else 0
+
+        if pct >= 80:
+            label = f"✅ {pct}%"
+        elif pct >= 50:
+            label = f"🟡 {pct}%"
+        else:
+            label = f"🔴 {pct}%"
+
+        results[name] = {
+            "actual": actual,
+            "expected": expected_total,
+            "pct": pct,
+            "label": label,
+        }
+
+    return results
+
+
 def cohort_retention(pr_records, min_cohort_size=2):
     """Group athletes by month of first PR log entry, compute 30/60/90-day retention.
 
