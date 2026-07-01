@@ -151,6 +151,103 @@ def test_cohort_retention_basic():
         assert 0 <= jan_cohort["pct_30d"] <= 100
 
 
+# ── training_load ─────────────────────────────────────────────────────────────
+
+def test_training_load_basic():
+    """Weekly counts across two athletes."""
+    import datetime as dt
+    # 3 logs Mon + 1 log Wed same week = 2 unique days
+    monday = "2025-01-06"
+    wednesday = "2025-01-08"
+    next_monday = "2025-01-13"
+    records = [
+        {"Athlete Name": "Alice", "Date": monday, "Benchmark Name": "Back Squat", "Value": "100"},
+        {"Athlete Name": "Alice", "Date": monday, "Benchmark Name": "Snatch", "Value": "70"},
+        {"Athlete Name": "Alice", "Date": wednesday, "Benchmark Name": "Row", "Value": "7:00"},
+        {"Athlete Name": "Alice", "Date": next_monday, "Benchmark Name": "Back Squat", "Value": "102"},
+        {"Athlete Name": "Bob", "Date": monday, "Benchmark Name": "Deadlift", "Value": "150"},
+    ]
+    # Use a large weeks value so the Jan 2025 dates fall within the window
+    result = analytics.training_load(records, weeks=9999)
+    assert "Alice" in result
+    assert "Bob" in result
+    alice_sessions = {w["week"]: w["sessions"] for w in result["Alice"]}
+    # Week containing Monday 6 Jan 2025 = 2025-W02
+    assert alice_sessions.get("2025-W02") == 2
+    assert alice_sessions.get("2025-W03") == 1
+    bob_sessions = {w["week"]: w["sessions"] for w in result["Bob"]}
+    assert bob_sessions.get("2025-W02") == 1
+
+
+def test_training_load_empty():
+    assert analytics.training_load([]) == {}
+
+
+def test_training_load_deduplicates_same_day():
+    """Multiple PRs on same day should count as 1 session."""
+    records = [
+        {"Athlete Name": "Alice", "Date": "2025-01-06", "Benchmark Name": "A", "Value": "1"},
+        {"Athlete Name": "Alice", "Date": "2025-01-06", "Benchmark Name": "B", "Value": "2"},
+        {"Athlete Name": "Alice", "Date": "2025-01-06", "Benchmark Name": "C", "Value": "3"},
+    ]
+    result = analytics.training_load(records, weeks=9999)
+    alice_weeks = result.get("Alice", [])
+    week = alice_weeks[0] if alice_weeks else {}
+    assert week.get("sessions") == 1
+
+
+# ── duplicate_candidates ──────────────────────────────────────────────────────
+
+def test_duplicate_candidates_finds_near_match():
+    athletes = [{"name": "John Smith"}, {"name": "Jon Smith"}]
+    data_records = []
+    pr_records = []
+    result = analytics.duplicate_candidates(athletes, data_records, pr_records, threshold=0.80)
+    assert len(result) >= 1
+    pair = result[0]
+    names = {pair["name_a"].lower(), pair["name_b"].lower()}
+    assert "john smith" in names and "jon smith" in names
+    assert pair["score"] >= 0.80
+
+
+def test_duplicate_candidates_no_false_positives():
+    athletes = [{"name": "Alice Jones"}, {"name": "Bob Smith"}, {"name": "Claire Wu"}]
+    data_records = []
+    pr_records = []
+    result = analytics.duplicate_candidates(athletes, data_records, pr_records)
+    assert result == []
+
+
+def test_duplicate_candidates_exact_match_excluded():
+    """Same name in two data sources — should not flag as duplicate."""
+    athletes = [{"name": "Alice Jones"}]
+    data_records = [{"Full Name": "Alice Jones"}]
+    pr_records = [{"Athlete Name": "Alice Jones", "Date": "2025-01-01", "Benchmark Name": "A", "Value": "1"}]
+    result = analytics.duplicate_candidates(athletes, data_records, pr_records)
+    assert result == []
+
+
+# ── leaderboard_data ──────────────────────────────────────────────────────────
+
+def test_leaderboard_data_filters_single_athlete():
+    """Benchmarks with only one athlete should not appear."""
+    records = [
+        {"Athlete Name": "Alice", "Date": "2025-01-01", "Benchmark Name": "Clean & Jerk", "Value": "80 kg"},
+        {"Athlete Name": "Alice", "Date": "2025-01-01", "Benchmark Name": "Back Squat", "Value": "100 kg"},
+        {"Athlete Name": "Bob",   "Date": "2025-01-01", "Benchmark Name": "Back Squat", "Value": "120 kg"},
+    ]
+    lb = analytics.leaderboard_data(records)
+    # Clean & Jerk only has 1 athlete → should not appear
+    assert "Clean & Jerk" not in (lb.get("all_benchmarks") or [])
+    # Back Squat has 2 → should appear
+    assert "Back Squat" in (lb.get("all_benchmarks") or [])
+
+
+def test_leaderboard_data_empty():
+    lb = analytics.leaderboard_data([])
+    assert lb.get("athletes") == [] or lb.get("latest") == {}
+
+
 if __name__ == "__main__":
     import traceback, sys
     passed = failed = 0

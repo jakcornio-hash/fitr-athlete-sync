@@ -233,6 +233,23 @@ def _send_email_to(smtp_from, smtp_password, to_addr, subject, body):
         s.send_message(msg)
 
 
+def _send_html_email_to(smtp_from, smtp_password, to_addr, subject, plain_body, html_body):
+    """Send a multipart email with plain-text fallback and HTML version."""
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = smtp_from
+    msg["To"] = to_addr
+    msg.attach(MIMEText(plain_body, "plain"))
+    msg.attach(MIMEText(html_body, "html"))
+    with smtplib.SMTP("smtp.gmail.com", 587) as s:
+        s.ehlo()
+        s.starttls()
+        s.login(smtp_from, smtp_password)
+        s.send_message(msg)
+
+
 def _parse_date_email(s):
     import datetime as dt_mod
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%b-%Y", "%d %b %Y"):
@@ -506,34 +523,78 @@ def send_monthly_athlete_reports(data_recs, email_by_name, pr_records):
         goal = str(rec.get("North Star Goal", "")).strip()
 
         first = nm.split()[0]
-        lines = [
-            f"Hi {first},",
-            "",
-            f"Here's your training summary for {month_label}:",
-            "",
-            f"📅 Sessions logged: {sessions}",
-        ]
+
+        # ── plain text ────────────────────────────────────────────────────────
+        plain_lines = [f"Hi {first},", "", f"Your training summary for {month_label}:", "",
+                       f"Sessions logged: {sessions}"]
         if benchmarks:
-            lines.append("")
-            lines.append("🏆 Results logged this month:")
+            plain_lines += ["", "Results this month:"]
             for bench, val in benchmarks[:8]:
-                lines.append(f"  • {bench}: {val}")
+                plain_lines.append(f"  - {bench}: {val}")
             if len(benchmarks) > 8:
-                lines.append(f"  • ...and {len(benchmarks) - 8} more")
+                plain_lines.append(f"  - ...and {len(benchmarks) - 8} more")
         if goal:
-            lines.extend(["", f"🎯 North Star Goal: {goal}"])
+            plain_lines += ["", f"North Star Goal: {goal}"]
         if prog:
-            lines.extend(["", f"📋 Programme: {prog}"])
-        lines.extend([
-            "",
-            "Every session you log makes your coaching sharper. Keep up the consistency.",
-            "",
-            "— JST Compete Coaching Team",
-        ])
+            plain_lines += ["", f"Programme: {prog}"]
+        plain_lines += ["", "Every session you log makes your coaching sharper.",
+                        "", "— JST Compete Coaching Team"]
+        plain_body = "\n".join(plain_lines)
+
+        # ── HTML ──────────────────────────────────────────────────────────────
+        bench_rows_html = "".join(
+            f"<tr><td style='padding:6px 12px;border-bottom:1px solid #f0f0f0'>{b}</td>"
+            f"<td style='padding:6px 12px;border-bottom:1px solid #f0f0f0;font-weight:600'>{v}</td></tr>"
+            for b, v in benchmarks[:8]
+        )
+        bench_section = (
+            f"<h3 style='color:#1a1a1a;margin:24px 0 8px'>🏆 Results this month</h3>"
+            f"<table style='width:100%;border-collapse:collapse;font-size:14px'>"
+            f"{bench_rows_html}</table>"
+            + (f"<p style='color:#888;font-size:13px'>...and {len(benchmarks)-8} more</p>"
+               if len(benchmarks) > 8 else "")
+        ) if benchmarks else ""
+        goal_section = (
+            f"<div style='background:#f0f7ff;border-left:4px solid #0066cc;"
+            f"padding:12px 16px;margin:20px 0;border-radius:4px'>"
+            f"<strong>🎯 North Star Goal</strong><br>{goal}</div>"
+        ) if goal else ""
+        prog_section = (
+            f"<p style='color:#555;font-size:13px'>📋 Programme: <strong>{prog}</strong></p>"
+        ) if prog else ""
+
+        html_body = f"""<!DOCTYPE html>
+<html><body style='font-family:Arial,sans-serif;max-width:560px;margin:0 auto;color:#1a1a1a'>
+<div style='background:#0066cc;padding:24px 32px;border-radius:8px 8px 0 0'>
+  <h1 style='color:#fff;margin:0;font-size:22px'>JST Compete</h1>
+  <p style='color:#cce0ff;margin:4px 0 0;font-size:14px'>{month_label} Training Summary</p>
+</div>
+<div style='background:#fff;padding:24px 32px;border:1px solid #e8e8e8;border-top:none;border-radius:0 0 8px 8px'>
+  <p>Hi {first},</p>
+  <div style='display:flex;gap:16px;margin:20px 0'>
+    <div style='text-align:center;background:#f8f9fa;border-radius:8px;padding:16px 24px;flex:1'>
+      <div style='font-size:32px;font-weight:700;color:#0066cc'>{sessions}</div>
+      <div style='font-size:13px;color:#666;margin-top:4px'>sessions logged</div>
+    </div>
+    <div style='text-align:center;background:#f8f9fa;border-radius:8px;padding:16px 24px;flex:1'>
+      <div style='font-size:32px;font-weight:700;color:#0066cc'>{len(benchmarks)}</div>
+      <div style='font-size:13px;color:#666;margin-top:4px'>results recorded</div>
+    </div>
+  </div>
+  {bench_section}
+  {goal_section}
+  {prog_section}
+  <hr style='border:none;border-top:1px solid #f0f0f0;margin:24px 0'>
+  <p style='color:#555;font-size:14px'>Every session you log makes your coaching sharper.
+  Keep up the consistency.</p>
+  <p style='color:#888;font-size:13px'>— JST Compete Coaching Team</p>
+</div>
+</body></html>"""
+
         subject = f"Your {month_label} training summary — JST Compete"
         try:
-            _send_email_to(config.SMTP_FROM, config.SMTP_PASSWORD, email, subject,
-                           "\n".join(lines))
+            _send_html_email_to(config.SMTP_FROM, config.SMTP_PASSWORD, email,
+                                subject, plain_body, html_body)
             sent += 1
         except Exception as exc:
             print(f"  ! Monthly report failed for {nm} ({email}): {exc}")

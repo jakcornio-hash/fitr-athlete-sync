@@ -220,6 +220,14 @@ def _load_churn_history_cached():
     return get_sheets().load_churn_history()
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_draft_replies_cached():
+    try:
+        return get_sheets().load_draft_replies()
+    except Exception:
+        return []
+
+
 # ── Pages ─────────────────────────────────────────────────────────────────────
 
 def page_self_assess():
@@ -537,6 +545,12 @@ def _archetype_panel(name, archetype_by_name, profile=None):
                 "Paste your dashboard URL before the query string below."
             )
             st.code(f"?mode=self_assess&id={jst_id}", language=None)
+        with st.expander("📊 Share Progress Page with Athlete"):
+            st.caption(
+                "A read-only view of the athlete's goal, recent results, training consistency, "
+                "and competition calendar. Paste your dashboard URL before the query string below."
+            )
+            st.code(f"?mode=progress&id={jst_id}", language=None)
 
 
 def _athlete_profile_panel(name, data_by_name, pr_records, trend_results,
@@ -1009,6 +1023,52 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
                 f"({latest_snap.get('Score', '—')}/100)"
                 + (f" — {latest_snap.get('Factors', '')}" if latest_snap.get("Factors") else "")
             )
+    except Exception:
+        pass
+
+    # ── Training load chart ───────────────────────────────────────────────────
+    try:
+        tl_all = analytics.training_load(pr_records, weeks=12)
+        tl_athlete = tl_all.get(name, [])
+        if len(tl_athlete) >= 2:
+            st.markdown("**🏃 Weekly Training Load (12 weeks)**")
+            tl_df = pd.DataFrame(tl_athlete)
+            tl_df["week_start"] = pd.to_datetime(tl_df["week_start"])
+            tl_chart = (
+                alt.Chart(tl_df)
+                .mark_bar(color="#1f77b4", opacity=0.8)
+                .encode(
+                    x=alt.X("week_start:T", title="Week starting"),
+                    y=alt.Y("sessions:Q", title="Training days logged", scale=alt.Scale(domain=[0, 7])),
+                    tooltip=[alt.Tooltip("week_start:T", title="Week"), alt.Tooltip("sessions:Q", title="Days")],
+                )
+                .properties(height=200)
+            )
+            st.altair_chart(tl_chart, width='stretch')
+            recent_sessions = [w["sessions"] for w in tl_athlete[-4:]]
+            avg_4w = round(sum(recent_sessions) / len(recent_sessions), 1) if recent_sessions else 0
+            st.caption(f"4-week avg: {avg_4w} training days/week")
+            st.divider()
+    except Exception:
+        pass
+
+    # ── Draft reply panel ─────────────────────────────────────────────────────
+    try:
+        all_drafts = _load_draft_replies_cached()
+        athlete_draft = next(
+            (r for r in all_drafts if str(r.get("Athlete Name", "")).strip() == name),
+            None,
+        )
+        if athlete_draft:
+            st.markdown("**✉️ AI-Drafted Reply**")
+            st.caption(f"Generated {athlete_draft.get('Date', '')} — based on most recent Fitr message")
+            draft_text = str(athlete_draft.get("Draft Reply", "")).strip()
+            st.code(draft_text, language=None)
+            if st.button("✅ Mark as Done", key=f"draft_done_{name}", type="secondary"):
+                get_sheets().clear_draft_reply(name)
+                st.success("Draft cleared.")
+                st.cache_data.clear()
+            st.divider()
     except Exception:
         pass
 
@@ -2542,7 +2602,7 @@ def _load_message_log_cached():
         return []
 
 
-def page_crm(athletes, engagement_results, data_records):
+def page_crm(athletes, engagement_results, data_records, pr_records=None):
     """Unified CRM integration tab: lifecycle, pipeline, rosters, discrepancies, bulk actions."""
     st.markdown("## CRM Integration")
 
@@ -2581,7 +2641,7 @@ def page_crm(athletes, engagement_results, data_records):
 
     crm_tabs = st.tabs([
         "🔄 Lifecycle", "🚀 Pipeline", "👥 Rosters", "⚠️ Discrepancies", "✏️ Bulk Reassign",
-        "💰 Revenue", "📨 Msg Effectiveness",
+        "💰 Revenue", "📨 Msg Effectiveness", "📊 Coach Stats", "🔍 Duplicates",
     ])
 
     with crm_tabs[0]:
@@ -2598,6 +2658,10 @@ def page_crm(athletes, engagement_results, data_records):
         _crm_revenue(data_records)
     with crm_tabs[6]:
         _crm_message_effectiveness()
+    with crm_tabs[7]:
+        _crm_coach_stats(athletes, engagement_results, data_records)
+    with crm_tabs[8]:
+        _crm_dedup(athletes, data_records, pr_records or [])
 
 
 def _crm_message_effectiveness():
@@ -3022,6 +3086,263 @@ def _crm_revenue(data_records):
         )
 
 
+def page_progress():
+    """Athlete-facing progress view — shown when ?mode=progress&id=JST_ID."""
+    jst_id = (st.query_params.get("id") or "").strip()
+    if not jst_id:
+        st.error("No athlete ID in URL. Ask your coach for your personal progress link.")
+        return
+
+    sheets = get_sheets()
+    try:
+        data_records = sheets.read_records(config.TAB_DATA)
+        pr_records = sheets.read_records(config.TAB_PR_LOG)
+    except Exception:
+        st.error("Unable to load data. Please try again later.")
+        return
+
+    # Find athlete by JST ID
+    profile = None
+    athlete_name = None
+    for rec in data_records:
+        rid = str(rec.get("Athlete ID", "")).strip()
+        if rid and rid == jst_id:
+            athlete_name = str(rec.get("Full Name", "")).strip()
+            profile = rec
+            break
+
+    if not athlete_name or not profile:
+        st.error("Link not recognised — ask your coach for a new one.")
+        return
+
+    st.title(f"🏋️ Your Progress — {athlete_name}")
+    st.caption("Powered by JST Compete · Updated daily")
+    st.divider()
+
+    # ── Goal ──────────────────────────────────────────────────────────────────
+    goal = str(profile.get("North Star Goal", "")).strip()
+    if goal:
+        st.markdown("### 🎯 Your Goal")
+        st.info(goal)
+        st.divider()
+
+    # ── Summary stats ─────────────────────────────────────────────────────────
+    athlete_prs = [r for r in pr_records if str(r.get("Athlete Name", "")).strip() == athlete_name]
+    if athlete_prs:
+        dates = [_parse_date(str(r.get("Date", ""))) for r in athlete_prs]
+        dates = [d for d in dates if d]
+        benchmarks_logged = len({str(r.get("Benchmark Name", "")).strip() for r in athlete_prs})
+        last_log = max(dates).strftime("%d %b %Y") if dates else "—"
+        days_active = (max(dates) - min(dates)).days if len(dates) >= 2 else 0
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total PR Entries", len(athlete_prs))
+        c2.metric("Benchmarks Tracked", benchmarks_logged)
+        c3.metric("Last Logged", last_log)
+        st.divider()
+
+    # ── Recent results ─────────────────────────────────────────────────────────
+    if athlete_prs:
+        st.markdown("### 📈 Recent Results")
+        recent = sorted(
+            athlete_prs,
+            key=lambda r: str(r.get("Date", "")),
+            reverse=True,
+        )[:10]
+        recent_rows = []
+        for r in recent:
+            recent_rows.append({
+                "Date": str(r.get("Date", "")).strip(),
+                "Benchmark": str(r.get("Benchmark Name", "")).strip(),
+                "Result": str(r.get("Value", "")).strip(),
+                "Note": str(r.get("Note", "")).strip(),
+            })
+        st.dataframe(pd.DataFrame(recent_rows), width='stretch', hide_index=True)
+        st.divider()
+
+    # ── Training load chart ───────────────────────────────────────────────────
+    try:
+        tl_all = analytics.training_load(pr_records, weeks=12)
+        tl_data = tl_all.get(athlete_name, [])
+        if len(tl_data) >= 2:
+            st.markdown("### 🏃 Training Consistency (last 12 weeks)")
+            tl_df = pd.DataFrame(tl_data)
+            tl_df["week_start"] = pd.to_datetime(tl_df["week_start"])
+            chart = (
+                alt.Chart(tl_df)
+                .mark_bar(color="#2196F3", opacity=0.85)
+                .encode(
+                    x=alt.X("week_start:T", title="Week"),
+                    y=alt.Y("sessions:Q", title="Days logged", scale=alt.Scale(domain=[0, 7])),
+                    tooltip=[alt.Tooltip("week_start:T", title="Week"), alt.Tooltip("sessions:Q", title="Days logged")],
+                )
+                .properties(height=220)
+            )
+            st.altair_chart(chart, width='stretch')
+            avg_4w = sum(w["sessions"] for w in tl_data[-4:]) / min(4, len(tl_data))
+            st.caption(f"4-week average: {avg_4w:.1f} training days per week")
+            st.divider()
+    except Exception:
+        pass
+
+    # ── Competition calendar ───────────────────────────────────────────────────
+    try:
+        competition_rows = sheets.load_competitions()
+        athlete_comps = [
+            cr for cr in competition_rows
+            if str(cr.get("Athlete Name", "")).strip() == athlete_name
+        ]
+        if athlete_comps:
+            st.markdown("### 🏁 Your Competition Calendar")
+            comp_rows_display = []
+            for cr in sorted(athlete_comps, key=lambda x: str(x.get("Date", ""))):
+                cd = _parse_date(str(cr.get("Date", "")).strip())
+                if not cd:
+                    continue
+                days_out = (cd - TODAY).days
+                if days_out >= 0:
+                    w, d = divmod(days_out, 7)
+                    time_str = f"{w}w {d}d" if w else f"{d}d"
+                else:
+                    time_str = f"{abs(days_out)}d ago"
+                result = str(cr.get("Result", "")).strip()
+                comp_rows_display.append({
+                    "Competition": str(cr.get("Competition Name", "")).strip(),
+                    "Date": cd.strftime("%d %b %Y"),
+                    "In": time_str,
+                    "Type": str(cr.get("Type", "")).strip(),
+                    "Result": result or "—",
+                })
+            st.dataframe(pd.DataFrame(comp_rows_display), width='stretch', hide_index=True)
+            st.divider()
+    except Exception:
+        pass
+
+    # ── Programme ─────────────────────────────────────────────────────────────
+    programme = str(profile.get("Programme", "")).strip()
+    tier = str(profile.get("Tier", "")).strip()
+    if programme or tier:
+        st.markdown("### 🎽 Your Programme")
+        pc1, pc2 = st.columns(2)
+        pc1.metric("Programme", programme or "—")
+        pc2.metric("Tier", tier or "—")
+
+    st.divider()
+    st.caption("Questions about your data? Message your coach directly in Fitr.")
+
+
+def _crm_coach_stats(athletes, engagement_results, data_records):
+    """Per-coach retention dashboard."""
+    st.markdown("### Coach Retention Stats")
+    st.caption("Squad size, activity, and churn risk distribution per coach")
+
+    data_by_name = {
+        str(r.get("Full Name", "")).strip(): r
+        for r in (data_records or [])
+        if str(r.get("Full Name", "")).strip()
+    }
+    eng_by_name = {e["name"]: e for e in engagement_results}
+
+    # Group athletes by programme/coach
+    by_coach = {}
+    for a in athletes:
+        nm = a["name"]
+        rec = data_by_name.get(nm, {})
+        coach = str(rec.get("Programme", "")).strip() or "— Unassigned —"
+        by_coach.setdefault(coach, []).append(nm)
+
+    if not by_coach:
+        st.info("No athlete programme data available.")
+        return
+
+    rows = []
+    for coach, names in sorted(by_coach.items()):
+        eng_data = [eng_by_name.get(nm, {}) for nm in names]
+        n = len(names)
+        active = sum(
+            1 for e in eng_data
+            if e.get("days_since") is not None and e.get("days_since", 9999) <= 14
+        )
+        inactive = sum(1 for e in eng_data if e.get("flag"))
+        never = sum(1 for e in eng_data if e.get("last_logged") == "never")
+        days_vals = [e["days_since"] for e in eng_data if e.get("days_since") is not None]
+        avg_days = round(sum(days_vals) / len(days_vals), 1) if days_vals else None
+
+        # Churn risk distribution
+        risk_counts = {"🔴 Critical": 0, "🟡 Elevated": 0, "🟠 Moderate": 0, "🟢 Low": 0}
+        for nm in names:
+            risk = analytics.churn_risk_score(nm, engagement_results, {}, {})
+            lbl = risk.get("label", "🟢 Low")
+            if lbl in risk_counts:
+                risk_counts[lbl] += 1
+
+        pct_active = round(active / n * 100) if n else 0
+        rows.append({
+            "Coach / Programme": _prog_short(coach),
+            "Athletes": n,
+            "Active (≤14d)": f"{active} ({pct_active}%)",
+            "Needs Contact": inactive,
+            "Never Logged": never,
+            "Avg Days Since Log": avg_days if avg_days is not None else "—",
+            "🔴 Critical": risk_counts["🔴 Critical"],
+            "🟡 Elevated": risk_counts["🟡 Elevated"],
+            "🟢 Low": risk_counts["🟢 Low"],
+        })
+
+    rows.sort(key=lambda x: -(x["Needs Contact"]))
+    st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
+
+    # Highlight any coach with ≥ 3 critical athletes
+    urgent_coaches = [r for r in rows if r["🔴 Critical"] >= 3]
+    if urgent_coaches:
+        names_str = ", ".join(r["Coach / Programme"] for r in urgent_coaches)
+        st.warning(f"⚠️ High churn risk concentration: {names_str}")
+
+
+def _crm_dedup(athletes, data_records, pr_records):
+    """Duplicate / alias name detection across data sources."""
+    st.markdown("### Duplicate & Alias Detection")
+    st.caption("Suspiciously similar names across Benchmarks, _DATA, and PR Log — possible duplicates or aliases")
+
+    with st.spinner("Scanning for similar names…"):
+        candidates = analytics.duplicate_candidates(athletes, data_records, pr_records, threshold=0.82)
+
+    if not candidates:
+        st.success("✓ No duplicate or alias candidates found (threshold: 82% similarity)")
+        return
+
+    st.warning(f"{len(candidates)} suspicious name pairs found")
+
+    threshold_slider = st.slider(
+        "Similarity threshold", min_value=0.70, max_value=1.0, value=0.82, step=0.01,
+        key="dedup_threshold",
+        help="Higher = stricter (fewer results). 0.82 catches one-letter swaps and missing initials.",
+    )
+
+    filtered = [c for c in candidates if c["score"] >= threshold_slider]
+    if not filtered:
+        st.info("No matches at this threshold level.")
+        return
+
+    st.caption(f"Showing {len(filtered)} pair(s) at ≥{threshold_slider:.0%} similarity")
+
+    rows = []
+    for c in filtered:
+        rows.append({
+            "Name A": c["name_a"],
+            "Name B": c["name_b"],
+            "Similarity": f"{c['score']:.1%}",
+            "Sources": c["sources"],
+        })
+    st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
+
+    st.caption(
+        "To resolve: manually check these pairs in Google Sheets. "
+        "If they are the same person, rename one to match the other — "
+        "then re-run the daily sync to merge records."
+    )
+
+
 def page_help():
     """Coach guide — explains each tab and how to use the dashboard."""
     st.markdown("## Dashboard Guide")
@@ -3338,6 +3659,10 @@ def main():
         page_self_assess()
         return
 
+    if st.query_params.get("mode") == "progress":
+        page_progress()
+        return
+
     st.title("🏋️ JST Compete — Coaching Dashboard")
     st.caption(f"Data refreshes every 15 minutes · Last loaded: {dt.datetime.now().strftime('%H:%M')}")
 
@@ -3406,7 +3731,7 @@ def main():
     with tabs[10]:
         page_recovery(rec_by_name)
     with tabs[11]:
-        page_crm(athletes, engagement_results, data_records)
+        page_crm(athletes, engagement_results, data_records, pr_records=pr_records)
     with tabs[12]:
         page_help()
 

@@ -1132,3 +1132,128 @@ def cohort_retention(pr_records, min_cohort_size=2):
         })
 
     return results
+
+
+def training_load(pr_records, weeks=12):
+    """Weekly training load per athlete: unique session days per calendar week.
+
+    pr_records: list of dicts from the PR Log tab (keys: Athlete Name, Date, ...)
+    weeks: how many calendar weeks to look back from today
+
+    Returns:
+        {athlete_name: [{"week": "YYYY-WW", "week_start": "YYYY-MM-DD", "sessions": int}, ...]}
+        Sorted oldest-first. Only includes athletes with at least one log in the window.
+    """
+    cutoff = TODAY - dt.timedelta(days=weeks * 7)
+
+    # Collect unique (athlete, date) pairs within the window
+    days_by_athlete = {}
+    for rec in pr_records:
+        name = str(rec.get("Athlete Name", "")).strip()
+        d = _parse_date(str(rec.get("Date", "")))
+        if not name or not d:
+            continue
+        if d < cutoff:
+            continue
+        days_by_athlete.setdefault(name, set()).add(d)
+
+    results = {}
+    for name, day_set in days_by_athlete.items():
+        # Group unique dates by ISO week
+        week_days = {}
+        for d in day_set:
+            week_key = d.strftime("%G-W%V")
+            week_start = d - dt.timedelta(days=d.weekday())
+            week_days.setdefault(week_key, {"week_start": week_start, "dates": set()})
+            week_days[week_key]["dates"].add(d)
+
+        if not week_days:
+            continue
+
+        # Determine full range of weeks between first and last log
+        all_week_starts = sorted(v["week_start"] for v in week_days.values())
+        first_monday = all_week_starts[0]
+        last_monday = all_week_starts[-1]
+
+        # Build ordered list filling gaps with 0
+        output = []
+        current = first_monday
+        while current <= last_monday:
+            wk = current.strftime("%G-W%V")
+            sessions = len(week_days[wk]["dates"]) if wk in week_days else 0
+            output.append({
+                "week": wk,
+                "week_start": current.isoformat(),
+                "sessions": sessions,
+            })
+            current += dt.timedelta(weeks=1)
+
+        results[name] = output
+
+    return results
+
+
+def duplicate_candidates(athletes, data_records, pr_records, threshold=0.82):
+    """Detect suspiciously similar athlete names across Benchmarks, _DATA, and PR Log.
+
+    Returns a list of dicts sorted by similarity descending:
+        [{"name_a": str, "name_b": str, "score": float, "sources": str}]
+
+    'sources' is a list of which data sources each name appears in, e.g.
+        ["benchmarks", "pr_log"] for name_a and ["data"] for name_b
+        — formatted as "name_a: benchmarks,pr_log | name_b: data"
+
+    threshold: minimum SequenceMatcher ratio to flag (0.82 ~= one letter swap or
+               missing initial). Exact matches are excluded.
+    """
+    import difflib
+
+    # Collect name -> set of sources
+    name_sources = {}
+
+    for a in (athletes or []):
+        nm = str(a.get("name", "")).strip()
+        if nm:
+            name_sources.setdefault(nm, set()).add("benchmarks")
+
+    for rec in (data_records or []):
+        nm = str(rec.get("Full Name", "")).strip()
+        if nm:
+            name_sources.setdefault(nm, set()).add("data")
+
+    for rec in (pr_records or []):
+        nm = str(rec.get("Athlete Name", "")).strip()
+        if nm:
+            name_sources.setdefault(nm, set()).add("pr_log")
+
+    names = list(name_sources.keys())
+    results = []
+    seen = set()
+
+    for i in range(len(names)):
+        for j in range(i + 1, len(names)):
+            a = names[i]
+            b = names[j]
+
+            # Skip exact matches (case-insensitive)
+            if a.lower() == b.lower():
+                continue
+
+            pair_key = (min(a, b), max(a, b))
+            if pair_key in seen:
+                continue
+            seen.add(pair_key)
+
+            score = difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio()
+            if score >= threshold:
+                src_a = ",".join(sorted(name_sources[a]))
+                src_b = ",".join(sorted(name_sources[b]))
+                results.append({
+                    "name_a": a,
+                    "name_b": b,
+                    "score": round(score, 4),
+                    "sources": f"{a}: {src_a} | {b}: {src_b}",
+                })
+
+    results.sort(key=lambda x: -x["score"])
+    return results

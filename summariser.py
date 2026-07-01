@@ -62,3 +62,57 @@ def summarise_conversation(athlete_name, messages_text, activity_date=None):
     except Exception as e:  # never let summarisation kill the run
         print(f"  ! summariser error for {athlete_name}: {e}")
         return None
+
+
+_REPLY_SYSTEM = (
+    "You are drafting a reply from a CrossFit coach (JST Compete) to an athlete's message. "
+    "The conversation transcript is chronological. The LAST message is the athlete's most recent message. "
+    "Draft a warm, direct, coach-to-athlete reply that:\n"
+    "1. Acknowledges what the athlete said specifically\n"
+    "2. Gives actionable coaching guidance or reassurance\n"
+    "3. Asks one follow-up question if relevant\n"
+    "Keep it under 100 words. Write in plain text, no markdown. Sound like a real coach, not a form letter. "
+    "If the last message in the thread is clearly from the coach (not the athlete), reply exactly: SKIP. "
+    "If there is nothing meaningful to reply to, reply exactly: SKIP."
+)
+
+
+def draft_reply(athlete_name, thread_text, profile_data=None):
+    """Draft a coaching reply to an athlete's most recent message.
+
+    thread_text: plain-text transcript built by format_thread() — chronological,
+                 newest message is LAST.
+    profile_data: optional dict with keys like Programme, North Star Goal,
+                  Tier, Injury Status pulled from _DATA for this athlete.
+
+    Returns a draft reply string, or None if no reply is warranted.
+    """
+    if profile_data is None:
+        profile_data = {}
+    client = _client()
+    if client is None:
+        return None
+    try:
+        resp = client.messages.create(
+            model=config.ANTHROPIC_MODEL,
+            max_tokens=200,
+            system=_REPLY_SYSTEM,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Athlete: {athlete_name}\n"
+                    f"Programme: {profile_data.get('Programme', '—')}\n"
+                    f"Goal: {profile_data.get('North Star Goal', '—')}\n"
+                    f"Tier: {profile_data.get('Tier', '—')}\n"
+                    f"Injury status: {profile_data.get('Injury Status', '—')}\n"
+                    f"\nConversation (chronological, most recent last):\n{thread_text}"
+                ),
+            }],
+        )
+        text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
+        if not text or text.upper().startswith("SKIP"):
+            return None
+        return text
+    except Exception as e:
+        print(f"  ! draft_reply error for {athlete_name}: {e}")
+        return None

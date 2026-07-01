@@ -69,10 +69,25 @@ COMP_FORM_DATE_COL = "What is the competition date? (DD/MM/YYYY)"
 COMP_FORM_TYPE_COL = "What type of competition is this?"
 COMP_FORM_NOTES_COL = "Any notes for your coach about this competition? (optional)"
 
+# Athlete intake Typeform — new athlete onboarding form
+# Set INTAKE_FORM_SHEET_ID to the Google Sheet ID of the intake Typeform responses.
+INTAKE_FORM_SHEET_ID = _get("INTAKE_FORM_SHEET_ID", "")
+INTAKE_FORM_TAB = _get("INTAKE_FORM_TAB", "Sheet1")
+# Column headers — must match Typeform question text exactly
+INTAKE_FORM_FULL_NAME_COL = "Your full name"
+INTAKE_FORM_EMAIL_COL = "Email address"
+INTAKE_FORM_GOAL_COL = "What is your main goal?"
+INTAKE_FORM_TIER_COL = "What is your current competition level?"
+INTAKE_FORM_OCCUPATION_COL = "What is your occupation?"
+INTAKE_FORM_EQUIPMENT_COL = "What equipment do you have access to?"
+INTAKE_FORM_NOTES_COL = "Anything else your coach should know? (optional)"
+
 # Competitions tab in the main athlete sheet
 TAB_COMPETITIONS = "Competitions"
 TAB_CHURN_HISTORY = "Churn History"
 TAB_MESSAGE_LOG = "Message Log"
+TAB_DRAFT_REPLIES = "Draft Replies"
+TAB_TRAINING_LOAD = "Training Load"
 
 # Recovery survey (Typeform sheet — separate from main athlete sheet)
 RECOVERY_SHEET_ID = _get("RECOVERY_SHEET_ID", "")

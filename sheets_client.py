@@ -312,6 +312,98 @@ class SheetsClient:
                 ws.update_cell(row_num, reply_date_i + 1, reply_date_str)
                 return
 
+    # --------------------------------------------------------- draft replies
+    _DRAFT_HEADERS = ["Date", "Athlete Name", "Room ID", "Draft Reply", "Cleared"]
+
+    def write_draft_reply(self, athlete_name, room_id, draft_text):
+        """Upsert a draft reply for an athlete. Replaces any existing non-cleared row."""
+        if config.DRY_RUN:
+            return
+        ws = self.get_or_create(config.TAB_DRAFT_REPLIES, self._DRAFT_HEADERS)
+        import datetime as _dt
+        today = _dt.date.today().isoformat()
+        # Check if row already exists for this athlete
+        try:
+            values = ws.get_all_values()
+            header = values[0] if values else self._DRAFT_HEADERS
+            name_i = header.index("Athlete Name")
+            cleared_i = header.index("Cleared")
+            for row_num, row in enumerate(values[1:], start=2):
+                if (len(row) > name_i and row[name_i].strip() == athlete_name.strip()
+                        and (len(row) <= cleared_i or not row[cleared_i].strip())):
+                    # Update existing row
+                    draft_i = header.index("Draft Reply")
+                    date_i = header.index("Date")
+                    ws.update_cell(row_num, date_i + 1, today)
+                    ws.update_cell(row_num, draft_i + 1, draft_text)
+                    return
+        except Exception:
+            pass
+        # Append new row
+        ws.append_row([today, athlete_name, str(room_id), draft_text, ""],
+                      value_input_option="USER_ENTERED")
+
+    def load_draft_replies(self):
+        """Return all non-cleared draft reply rows."""
+        try:
+            rows = self.sh.worksheet(config.TAB_DRAFT_REPLIES).get_all_records()
+            return [r for r in rows if not str(r.get("Cleared", "")).strip()]
+        except Exception:
+            return []
+
+    def clear_draft_reply(self, athlete_name):
+        """Mark draft reply as cleared (coach has actioned it)."""
+        if config.DRY_RUN:
+            return
+        try:
+            ws = self.sh.worksheet(config.TAB_DRAFT_REPLIES)
+            values = ws.get_all_values()
+            if not values:
+                return
+            header = values[0]
+            name_i = header.index("Athlete Name")
+            cleared_i = header.index("Cleared")
+            for row_num, row in enumerate(values[1:], start=2):
+                if (len(row) > name_i and row[name_i].strip() == athlete_name.strip()
+                        and (len(row) <= cleared_i or not row[cleared_i].strip())):
+                    ws.update_cell(row_num, cleared_i + 1, "Yes")
+                    return
+        except Exception:
+            pass
+
+    # ------------------------------------------------------- training load
+    _TRAINING_LOAD_HEADERS = ["Date", "Athlete Name", "Week", "Sessions"]
+
+    def write_training_load(self, rows):
+        """Append training load snapshot rows to the Training Load tab.
+
+        rows: [{"Date": str, "Athlete Name": str, "Week": str, "Sessions": int}]
+        """
+        ws = self.get_or_create(config.TAB_TRAINING_LOAD, self._TRAINING_LOAD_HEADERS)
+        data = [[str(r.get("Date", "")), str(r.get("Athlete Name", "")),
+                 str(r.get("Week", "")), str(r.get("Sessions", 0))] for r in rows]
+        if data and not config.DRY_RUN:
+            ws.append_rows(data, value_input_option="USER_ENTERED")
+
+    def load_training_load(self):
+        """Return all rows from Training Load tab, or [] if tab missing."""
+        try:
+            return self.sh.worksheet(config.TAB_TRAINING_LOAD).get_all_records()
+        except Exception:
+            return []
+
+    # --------------------------------------------------------- intake form
+    def load_intake_responses(self):
+        """Read athlete intake Typeform responses from an external sheet."""
+        if not config.INTAKE_FORM_SHEET_ID:
+            return []
+        try:
+            return self.read_external_records(config.INTAKE_FORM_SHEET_ID,
+                                              config.INTAKE_FORM_TAB)
+        except Exception as e:
+            print(f"  ! intake form read failed: {e}")
+            return []
+
 
 def _col_to_idx(letter):
     idx = 0

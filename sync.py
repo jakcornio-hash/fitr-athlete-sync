@@ -164,8 +164,11 @@ def collect_challenges(fitr, existing_keys):
 
 
 def collect_chat_summaries(rooms, valid_names, fitr):
-    """Return {athlete_name: summary_line} for conversations active within CHAT_LOOKBACK_DAYS.
-    Accepts pre-fetched rooms to avoid a second API call."""
+    """Return ({athlete_name: summary_line}, {athlete_name: (room_id, thread_text)}).
+
+    Second dict contains athletes whose most recent message is FROM them (needs a reply).
+    Accepts pre-fetched rooms to avoid a second API call.
+    """
     chat_cutoff = TODAY - dt.timedelta(days=config.CHAT_LOOKBACK_DAYS)
     candidates = []
     for room in rooms:
@@ -183,6 +186,7 @@ def collect_chat_summaries(rooms, valid_names, fitr):
         candidates.append((room["id"], name, msg_date))
 
     out = {}
+    pending_reply_candidates = {}  # name -> (room_id, thread_text)
     for room_id, name, msg_date in candidates[: config.MAX_CHAT_SUMMARIES]:
         try:
             messages = fitr.chat_messages(room_id, max_messages=40)
@@ -192,10 +196,15 @@ def collect_chat_summaries(rooms, valid_names, fitr):
         thread_text = format_thread(messages)
         if not thread_text:
             continue
+        # Detect if the most recent message is from the athlete (needs a reply)
+        if messages:
+            last_author = (messages[0].get("author") or {}).get("full_name", "").strip()
+            if last_author.lower() == name.lower():
+                pending_reply_candidates[name] = (room_id, thread_text)
         summary = summariser.summarise_conversation(name, thread_text, activity_date=msg_date)
         if summary:
             out[name] = f"[{TODAY.isoformat()} — chat] {summary}"
-    return out
+    return out, pending_reply_candidates
 
 
 def update_athlete_profiles(sheets, athletes, fitr_profiles_by_id):
@@ -296,6 +305,61 @@ def sync_competition_from_typeform(sheets, email_by_name):
         added += 1
 
     return added
+
+
+# ------------------------------------------- athlete intake Typeform sync
+def sync_intake_from_typeform(sheets, email_by_name):
+    """Populate _DATA from athlete intake Typeform responses.
+
+    Takes the most recent submission per athlete. Only updates fields that
+    the athlete filled in and that differ from the current _DATA value.
+    Returns count of athletes updated.
+    """
+    rows = sheets.load_intake_responses()
+    if not rows:
+        return 0
+
+    email_to_name = {v.lower(): k for k, v in email_by_name.items()}
+
+    # Group by athlete, keep latest submission
+    latest_by_name = {}
+    for row in rows:
+        email = str(row.get(config.INTAKE_FORM_EMAIL_COL, "")).strip().lower()
+        raw_name = str(row.get(config.INTAKE_FORM_FULL_NAME_COL, "")).strip()
+        nm = email_to_name.get(email) or raw_name
+        if not nm:
+            continue
+        submitted = str(row.get("Submitted At", "")).strip()
+        existing = latest_by_name.get(nm)
+        if existing is None or submitted > existing.get("_submitted", ""):
+            row["_submitted"] = submitted
+            latest_by_name[nm] = row
+
+    if not latest_by_name:
+        return 0
+
+    # Field mapping: intake form column → _DATA column
+    _INTAKE_FIELD_MAP = {
+        config.INTAKE_FORM_GOAL_COL: "North Star Goal",
+        config.INTAKE_FORM_TIER_COL: "Tier",
+        config.INTAKE_FORM_OCCUPATION_COL: "Occupation",
+        config.INTAKE_FORM_EQUIPMENT_COL: "Equipment Access",
+        config.INTAKE_FORM_NOTES_COL: "Coaching Notes",
+    }
+
+    updates = {}
+    for nm, row in latest_by_name.items():
+        row_updates = {}
+        for form_col, data_col in _INTAKE_FIELD_MAP.items():
+            val = str(row.get(form_col, "")).strip()
+            if val:
+                row_updates[data_col] = val
+        if row_updates:
+            updates[nm] = row_updates
+
+    if updates:
+        sheets.batch_update_by_name(config.TAB_DATA, "Full Name", updates)
+    return len(updates)
 
 
 # ------------------------------------------------------- programme from survey
@@ -548,7 +612,7 @@ def main():
 
     valid_names = {a["name"] for a in athletes}
     rooms = fitr.chat_rooms()
-    chat_notes = collect_chat_summaries(rooms, valid_names, fitr)
+    chat_notes, pending_reply_candidates = collect_chat_summaries(rooms, valid_names, fitr)
     print(f"Conversations summarised: {len(chat_notes)}")
 
     # Build room_id lookup for sending messages to athletes
@@ -583,6 +647,10 @@ def main():
     comps_updated = sync_competition_from_typeform(sheets, email_by_name)
     print(f"Competition dates synced from Typeform: {comps_updated}")
 
+    intake_updated = sync_intake_from_typeform(sheets, email_by_name)
+    if intake_updated:
+        print(f"Athlete profiles updated from intake form: {intake_updated}")
+
     messages_sent_log = []  # collects all automated messages for Message Log
 
     # ---- auto-congratulations via Fitr chat ----
@@ -615,6 +683,21 @@ def main():
 
     # ---- writes ----
     sheets.append_rows(config.TAB_PR_LOG, bench_rows + chal_rows)
+
+    # ---- draft replies for pending athlete messages ----
+    if pending_reply_candidates and not config.DRY_RUN:
+        data_preview = sheets.read_records(config.TAB_DATA)
+        data_by_name_draft = {str(r.get("Full Name", "")).strip(): r for r in data_preview
+                              if str(r.get("Full Name", "")).strip()}
+        drafts_generated = 0
+        for nm, (room_id, thread_text) in pending_reply_candidates.items():
+            profile = data_by_name_draft.get(nm, {})
+            draft = summariser.draft_reply(nm, thread_text, profile_data=profile)
+            if draft:
+                sheets.write_draft_reply(nm, room_id, draft)
+                drafts_generated += 1
+        if drafts_generated:
+            print(f"Reply drafts generated: {drafts_generated}")
 
     # ---- per-coach Slack notifications ----
     coach_channel_map = sheets.load_coaches()
@@ -899,6 +982,66 @@ def main():
             print(f"  ! Pre-comp message failed for {nm}: {exc}")
     if comp_msgs_sent:
         print(f"Pre-competition messages sent: {comp_msgs_sent}")
+
+    # ---- competition result congratulations ----
+    # Send once when a result is logged for a recent comp, using Message Log to avoid duplicates.
+    if not config.DRY_RUN:
+        try:
+            all_msg_log = sheets.sh.worksheet(config.TAB_MESSAGE_LOG).get_all_records()
+        except Exception:
+            all_msg_log = []
+        already_comp_messaged = {
+            str(r.get("Message Type", "")).strip()
+            for r in all_msg_log
+            if str(r.get("Message Type", "")).startswith("comp_result_")
+            and str(r.get("Athlete Name", "")).strip() == str(r.get("Athlete Name", "")).strip()
+        }
+        # Rebuild as (athlete, type_key) set for exact matching
+        already_comp_messaged = {
+            (str(r.get("Athlete Name", "")).strip(), str(r.get("Message Type", "")).strip())
+            for r in all_msg_log
+            if str(r.get("Message Type", "")).startswith("comp_result_")
+        }
+        comp_result_msgs_sent = 0
+        for row in competition_rows:
+            nm = str(row.get("Athlete Name", "")).strip()
+            result = str(row.get("Result", "")).strip()
+            comp_nm = str(row.get("Competition Name", "")).strip()
+            if not nm or not result or not comp_nm:
+                continue
+            raw_date = str(row.get("Date", "")).strip()
+            comp_date = None
+            import datetime as _dt3
+            for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%b-%Y", "%d %b %Y"):
+                try:
+                    comp_date = _dt3.datetime.strptime(raw_date, fmt).date()
+                    break
+                except ValueError:
+                    continue
+            if not comp_date or (TODAY - comp_date).days > 14 or comp_date > TODAY:
+                continue
+            msg_type_key = f"comp_result_{comp_nm[:25].replace(' ', '_')}"
+            if (nm, msg_type_key) in already_comp_messaged:
+                continue
+            room_id = room_id_by_name.get(nm)
+            if not room_id:
+                continue
+            first = nm.split()[0]
+            msg = (
+                f"Well done on {comp_nm}, {first}! 🏆 Result: {result}. "
+                f"Really proud of the effort you put in — let's debrief when you're ready "
+                f"and use this to plan the next block. 💪"
+            )
+            try:
+                fitr.send_chat_message(room_id, msg)
+                comp_result_msgs_sent += 1
+                messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
+                                          "Message Type": msg_type_key, "Room ID": room_id})
+                import time as _time; _time.sleep(0.5)
+            except FitrError as exc:
+                print(f"  ! Comp result message failed for {nm}: {exc}")
+        if comp_result_msgs_sent:
+            print(f"Competition result messages sent: {comp_result_msgs_sent}")
 
     # ---- weekly athlete progress emails ----
     archetype_rows = sheets.load_archetype_assessments()
