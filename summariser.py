@@ -64,6 +64,49 @@ def summarise_conversation(athlete_name, messages_text, activity_date=None):
         return None
 
 
+_BRIEF_SYSTEM = (
+    "You are generating a concise weekly coaching brief for a CrossFit coach at JST Compete. "
+    "The coach will read this at the start of their week to know exactly where to focus. "
+    "Format the output as exactly 5 bullet points (use • prefix), each under 25 words. "
+    "Cover: who needs urgent contact, who to celebrate, key performance or load signals, "
+    "competition prep priority, and one squad-level pattern worth addressing. "
+    "Be specific — name athletes, quote numbers. Do not use headings or preamble. "
+    "If the squad data is sparse, say so briefly and focus on what is actionable."
+)
+
+
+def coaching_brief(coach_name, athlete_lines):
+    """Generate a 5-bullet weekly coaching brief for one coach.
+
+    athlete_lines: list of plain-text strings, one per athlete with status summary
+                   e.g. ["Alice — 🔴 Critical (45d inactive, declining snatch)", ...]
+    Returns the brief text, or None on failure / no API key.
+    """
+    client = _client()
+    if client is None:
+        return None
+    squad_text = "\n".join(f"- {line}" for line in athlete_lines) if athlete_lines else "(no athletes)"
+    try:
+        resp = client.messages.create(
+            model=config.ANTHROPIC_MODEL,
+            max_tokens=350,
+            system=_BRIEF_SYSTEM,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Coach: {coach_name}\n"
+                    f"Squad ({len(athlete_lines)} athletes):\n{squad_text}\n\n"
+                    "Write the weekly coaching brief."
+                ),
+            }],
+        )
+        text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
+        return text or None
+    except Exception as e:
+        print(f"  ! coaching_brief error for {coach_name}: {e}")
+        return None
+
+
 _REPLY_SYSTEM = (
     "You are drafting a reply from a CrossFit coach (JST Compete) to an athlete's message. "
     "The conversation transcript is chronological. The LAST message is the athlete's most recent message. "

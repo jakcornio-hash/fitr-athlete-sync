@@ -486,12 +486,14 @@ def _load_crm_name_to_programme(sheets):
     return mapping
 
 
-def auto_onboard_new_athletes(sheets, rooms):
+def auto_onboard_new_athletes(sheets, rooms, fitr=None, room_id_by_name=None,
+                               messages_sent_log=None, dashboard_base_url=None):
     """Detect athletes present in Fitr chat rooms but missing from Benchmarks.
 
     Cross-references each new opponent against the CRM. Exact name matches are
-    auto-added to Benchmarks and _DATA with the correct Programme. Returns the
-    count of athletes added.
+    auto-added to Benchmarks and _DATA with the correct Programme. If fitr and
+    room_id_by_name are provided, sends an intake form link + self-assessment prompt
+    to newly onboarded athletes. Returns the count of athletes added.
     """
     if not config.CRM_SHEET_ID:
         return 0
@@ -583,6 +585,36 @@ def auto_onboard_new_athletes(sheets, rooms):
 
     for name, fid, prog in to_onboard:
         print(f"  [auto-onboard] Added {name!r} (Fitr ID {fid}) → {prog!r}")
+
+    # Send onboarding checklist to newly added athletes
+    if fitr and room_id_by_name and not config.DRY_RUN:
+        import time as _time
+        for name, fid, prog in to_onboard:
+            room_id = room_id_by_name.get(name)
+            if not room_id:
+                continue
+            first = name.split()[0]
+            intake_msg = (
+                f"Hi {first}! 👋 You've been added to the JST Compete coaching system — "
+                f"really looking forward to working with you.\n\n"
+                f"Two quick things to get us started:\n\n"
+                f"1️⃣ Fill in your athlete intake form — takes about 3 minutes and gives me "
+                f"everything I need to personalise your programming:\n"
+                f"https://jstcompete.typeform.com/to/Q1tL7MmR\n\n"
+                f"2️⃣ Submit your first weekly recovery check-in (once you're training) at the same link.\n\n"
+                f"Message me here anytime. Let's get to work! 🔥"
+            )
+            try:
+                fitr.send_chat_message(room_id, intake_msg)
+                if messages_sent_log is not None:
+                    messages_sent_log.append({
+                        "Date": TODAY.isoformat(), "Athlete Name": name,
+                        "Message Type": "onboard_checklist", "Room ID": room_id,
+                    })
+                _time.sleep(0.5)
+                print(f"  [auto-onboard] Sent onboarding checklist to {name!r}")
+            except Exception as exc:
+                print(f"  ! Onboarding checklist failed for {name}: {exc}")
 
     return len(to_onboard)
 
@@ -836,7 +868,10 @@ def main():
             print(f"Weekly squad summaries sent to {summaries_sent} coach channel(s)")
 
     # ---- auto-onboard new bespoke athletes from chat rooms ----
-    onboarded = auto_onboard_new_athletes(sheets, rooms)
+    onboarded = auto_onboard_new_athletes(
+        sheets, rooms, fitr=fitr, room_id_by_name=room_id_by_name,
+        messages_sent_log=messages_sent_log,
+    )
     if onboarded:
         print(f"New bespoke athletes auto-onboarded: {onboarded}")
 

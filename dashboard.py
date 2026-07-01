@@ -228,6 +228,29 @@ def _load_draft_replies_cached():
         return []
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def _load_recovery_all_cached():
+    """All recovery submissions {lower_email: [rows]}. TTL=30min (large payload)."""
+    try:
+        return rec_mod.all_by_email(get_sheets())
+    except Exception:
+        return {}
+
+
+@st.cache_resource(show_spinner="Connecting to Fitr…")
+def get_fitr():
+    """Authenticated FitrClient using Streamlit secrets (or config env vars)."""
+    from fitr_client import FitrClient
+    for key in ("FITR_ACCESS_TOKEN", "FITR_EMAIL", "FITR_PASSWORD",
+                "FITR_CLIENT_ID", "FITR_CLIENT_SECRET"):
+        val = str(st.secrets.get(key, "") or "").strip()
+        if val:
+            setattr(config, key, val)
+    client = FitrClient()
+    client.authenticate()
+    return client
+
+
 # ── Pages ─────────────────────────────────────────────────────────────────────
 
 def page_self_assess():
@@ -870,6 +893,36 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
                 else:
                     st.warning("Competition name and date are required.")
 
+    # ── Competitive record ────────────────────────────────────────────────────
+    if competition_rows:
+        past_with_result = [
+            cr for cr in competition_rows
+            if str(cr.get("Athlete Name", "")).strip() == name
+            and str(cr.get("Result", "")).strip()
+        ]
+        if past_with_result:
+            past_with_result.sort(key=lambda x: str(x.get("Date", "")))
+            st.markdown("**🏆 Competitive Record**")
+            cr_metrics = st.columns(min(len(past_with_result), 3))
+            for idx, cr in enumerate(past_with_result[-3:]):
+                cd = _parse_date(str(cr.get("Date", "")).strip())
+                label = str(cr.get("Competition Name", "")).strip()[:28]
+                result = str(cr.get("Result", "")).strip()
+                date_str = cd.strftime("%b %Y") if cd else ""
+                cr_metrics[idx % 3].metric(label, result, help=date_str)
+            if len(past_with_result) > 3:
+                with st.expander(f"All {len(past_with_result)} results"):
+                    all_cr_rows = []
+                    for cr in past_with_result:
+                        cd = _parse_date(str(cr.get("Date", "")).strip())
+                        all_cr_rows.append({
+                            "Date": cd.strftime("%d %b %Y") if cd else "",
+                            "Competition": str(cr.get("Competition Name", "")).strip(),
+                            "Type": str(cr.get("Type", "")).strip(),
+                            "Result": str(cr.get("Result", "")).strip(),
+                        })
+                    st.dataframe(pd.DataFrame(all_cr_rows), width='stretch', hide_index=True)
+
     st.divider()
 
     # ── Benchmark snapshots ───────────────────────────────────────────────────
@@ -886,6 +939,49 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
             short = col.replace(" (kg)", "").replace(" (mm:ss)", "").replace("1RM ", "")
             cols[i % 4].metric(short, val)
         st.divider()
+
+    # ── Manual PR entry ───────────────────────────────────────────────────────
+    athlete_benches = sorted({
+        str(r.get("Benchmark Name", "")).strip()
+        for r in pr_records
+        if str(r.get("Athlete Name", "")).strip() == name and r.get("Benchmark Name")
+    })
+    with st.expander("➕ Log a Result"):
+        with st.form(f"manual_pr_{name}", clear_on_submit=True):
+            pr_bench_options = athlete_benches or ["Back Squat 1RM (kg)", "Clean & Jerk 1RM (kg)",
+                                                    "Snatch 1RM (kg)", "Deadlift 1RM (kg)",
+                                                    "2k Row (mm:ss)", "1.2km Run (mm:ss)"]
+            pr_bench = st.selectbox(
+                "Benchmark", pr_bench_options + ["— Other (type below) —"],
+                key=f"pr_bench_{name}",
+            )
+            pr_bench_custom = st.text_input(
+                "Custom benchmark name (if not in list above)",
+                key=f"pr_bench_custom_{name}",
+                placeholder="e.g. Front Squat 1RM (kg)",
+            )
+            pr_value = st.text_input("Result", key=f"pr_value_{name}", placeholder="e.g. 120 or 7:42")
+            pr_date = st.date_input("Date", value=TODAY, key=f"pr_date_{name}")
+            pr_note = st.text_input("Note (optional)", key=f"pr_note_{name}",
+                                    placeholder="e.g. competition, post-illness")
+            if st.form_submit_button("Save Result", type="primary"):
+                bench_final = pr_bench_custom.strip() if pr_bench_custom.strip() else (
+                    pr_bench if pr_bench != "— Other (type below) —" else ""
+                )
+                if bench_final and pr_value.strip():
+                    email = str(profile.get("Email", "")).strip()
+                    new_row = [
+                        pr_date.isoformat(), name, bench_final,
+                        pr_value.strip(), email, pr_note.strip(),
+                    ]
+                    get_sheets().append_rows(config.TAB_PR_LOG, [new_row])
+                    st.success(f"Saved — {bench_final}: {pr_value.strip()} ({pr_date})")
+                    st.cache_data.clear()
+                elif not bench_final:
+                    st.warning("Choose or type a benchmark name.")
+                else:
+                    st.warning("Enter a result value.")
+    st.divider()
 
     # ── Latest recovery ───────────────────────────────────────────────────────
     rec_row = rec_by_name.get(name)
@@ -909,6 +1005,52 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
         submitted = str(rec_row.get("Submitted At", "")).strip()
         if submitted:
             st.caption(f"Survey submitted: {submitted}")
+
+        # Recovery trend — show multi-submission sparklines if athlete has history
+        try:
+            email_key = str(profile.get("Email", "")).strip().lower()
+            if email_key:
+                rec_all = _load_recovery_all_cached()
+                athlete_rec_history = rec_all.get(email_key, [])
+                if len(athlete_rec_history) >= 3:
+                    with st.expander(f"📉 Recovery trend ({len(athlete_rec_history)} submissions)"):
+                        trend_pts = []
+                        for rr in athlete_rec_history:
+                            ts = str(rr.get(rec_mod.RECOVERY_COLS["timestamp"], "")).strip()
+                            s_v = _numeric(str(rr.get("Soreness", "")).strip())
+                            st_v = _numeric(str(rr.get("Stress", "")).strip())
+                            mo_v = _numeric(str(rr.get("Motivation", "")).strip())
+                            if ts and any(v is not None for v in [s_v, st_v, mo_v]):
+                                trend_pts.append({
+                                    "Date": ts[:10],
+                                    "Soreness": s_v,
+                                    "Stress": st_v,
+                                    "Motivation": mo_v,
+                                })
+                        if len(trend_pts) >= 3:
+                            tr_df = pd.DataFrame(trend_pts)
+                            tr_df["Date"] = pd.to_datetime(tr_df["Date"], errors="coerce")
+                            tr_df = tr_df.dropna(subset=["Date"]).sort_values("Date")
+                            tr_melt = tr_df.melt(
+                                id_vars="Date",
+                                value_vars=["Soreness", "Stress", "Motivation"],
+                                var_name="Metric", value_name="Score",
+                            ).dropna(subset=["Score"])
+                            rec_chart = (
+                                alt.Chart(tr_melt)
+                                .mark_line(point=True)
+                                .encode(
+                                    x=alt.X("Date:T", title="Date"),
+                                    y=alt.Y("Score:Q", scale=alt.Scale(domain=[0, 10]), title="Score / 10"),
+                                    color=alt.Color("Metric:N"),
+                                    tooltip=["Date:T", "Metric:N", "Score:Q"],
+                                )
+                                .properties(height=200)
+                            )
+                            st.altair_chart(rec_chart, width='stretch')
+        except Exception:
+            pass
+
         st.divider()
 
     # ── Archetype ─────────────────────────────────────────────────────────────
@@ -1063,11 +1205,28 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
             st.markdown("**✉️ AI-Drafted Reply**")
             st.caption(f"Generated {athlete_draft.get('Date', '')} — based on most recent Fitr message")
             draft_text = str(athlete_draft.get("Draft Reply", "")).strip()
+            room_id = str(athlete_draft.get("Room ID", "")).strip()
             st.code(draft_text, language=None)
-            if st.button("✅ Mark as Done", key=f"draft_done_{name}", type="secondary"):
-                get_sheets().clear_draft_reply(name)
-                st.success("Draft cleared.")
-                st.cache_data.clear()
+            fitr_messaging_on = st.session_state.get("fitr_messaging_on", False)
+            d_col1, d_col2 = st.columns(2)
+            with d_col1:
+                if fitr_messaging_on and room_id:
+                    if st.button("🚀 Send & Clear", key=f"draft_send_{name}", type="primary"):
+                        try:
+                            fitr_client = get_fitr()
+                            fitr_client.send_chat_message(room_id, draft_text)
+                            get_sheets().clear_draft_reply(name)
+                            st.success("Sent and cleared!")
+                            st.cache_data.clear()
+                        except Exception as exc:
+                            st.error(f"Send failed: {exc}")
+                else:
+                    st.caption("🔴 Toggle Fitr messaging ON in the sidebar to send directly.")
+            with d_col2:
+                if st.button("✅ Mark as Done", key=f"draft_done_{name}", type="secondary"):
+                    get_sheets().clear_draft_reply(name)
+                    st.success("Draft cleared.")
+                    st.cache_data.clear()
             st.divider()
     except Exception:
         pass
@@ -1405,6 +1564,46 @@ def page_trends(pr_records, athletes):
         st.dataframe(vel_df, width='stretch', hide_index=True)
     else:
         st.caption("Not enough data points yet (need at least 2 entries per benchmark).")
+
+    # ── Cohort retention ──────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("**👥 Cohort Retention**")
+    st.caption("% of athletes still logging at 30, 60, and 90 days — by the month they first appeared")
+    cohort_data = analytics.cohort_retention(pr_records, min_cohort_size=2)
+    if cohort_data:
+        cohort_rows = []
+        for c in cohort_data:
+            cohort_rows.append({
+                "Cohort": str(c.get("cohort", "")),
+                "Athletes": c.get("n", 0),
+                "30d %": c.get("pct_30d", 0),
+                "60d %": c.get("pct_60d", 0),
+                "90d %": c.get("pct_90d", 0),
+            })
+        cohort_df = pd.DataFrame(cohort_rows)
+        st.dataframe(cohort_df, width='stretch', hide_index=True)
+
+        # Grouped bar chart: 30d / 60d / 90d per cohort
+        if len(cohort_rows) >= 2:
+            melt_df = cohort_df.melt(
+                id_vars="Cohort", value_vars=["30d %", "60d %", "90d %"],
+                var_name="Window", value_name="Retention %",
+            )
+            cohort_chart = (
+                alt.Chart(melt_df)
+                .mark_bar()
+                .encode(
+                    x=alt.X("Cohort:N", title="Starting cohort"),
+                    y=alt.Y("Retention %:Q", scale=alt.Scale(domain=[0, 100])),
+                    color=alt.Color("Window:N", legend=alt.Legend(title="")),
+                    xOffset="Window:N",
+                    tooltip=["Cohort:N", "Window:N", "Retention %:Q"],
+                )
+                .properties(height=260)
+            )
+            st.altair_chart(cohort_chart, width='stretch')
+    else:
+        st.caption("Not enough data yet — need cohorts of ≥2 athletes with 90+ days of history.")
 
 
 def page_recovery(rec_by_name):
@@ -3298,6 +3497,49 @@ def _crm_coach_stats(athletes, engagement_results, data_records):
         names_str = ", ".join(r["Coach / Programme"] for r in urgent_coaches)
         st.warning(f"⚠️ High churn risk concentration: {names_str}")
 
+    # ── AI weekly coaching brief ───────────────────────────────────────────────
+    st.divider()
+    st.markdown("**🤖 AI Weekly Coaching Brief**")
+    st.caption(
+        "Generates a 5-bullet priority brief per coach using Claude. "
+        "Click Generate to run — uses your Anthropic API key."
+    )
+
+    if "coaching_briefs" not in st.session_state:
+        st.session_state.coaching_briefs = {}
+
+    coach_options = sorted({r["Coach / Programme"] for r in rows if r["Coach / Programme"] != "— Unassigned —"})
+    sel_brief_coach = st.selectbox(
+        "Coach / Programme", ["— select —"] + coach_options, key="brief_coach_sel"
+    )
+
+    if sel_brief_coach and sel_brief_coach != "— select —":
+        if st.button("Generate Brief", key="gen_brief_btn", type="primary"):
+            # Build per-athlete summary lines for this coach
+            coach_athlete_names = [
+                nm for nm in by_coach.get(sel_brief_coach, [])
+            ]
+            brief_lines = []
+            for nm in coach_athlete_names:
+                e = eng_by_name.get(nm, {})
+                risk = analytics.churn_risk_score(nm, engagement_results, {}, {})
+                days_txt = f"{e['days_since']}d inactive" if e.get("days_since") is not None else "never logged"
+                brief_lines.append(
+                    f"{nm} — {risk.get('label', '—')} · {days_txt}"
+                    + (f" · {e.get('last_logged', '')}" if e.get("last_logged") else "")
+                )
+            import summariser as _sum
+            with st.spinner("Generating brief with Claude…"):
+                brief_text = _sum.coaching_brief(sel_brief_coach, brief_lines)
+            if brief_text:
+                st.session_state.coaching_briefs[sel_brief_coach] = brief_text
+            else:
+                st.warning("No brief generated — check ANTHROPIC_API_KEY is set.")
+
+        cached_brief = st.session_state.coaching_briefs.get(sel_brief_coach)
+        if cached_brief:
+            st.markdown(cached_brief)
+
 
 def _crm_dedup(athletes, data_records, pr_records):
     """Duplicate / alias name detection across data sources."""
@@ -3662,6 +3904,23 @@ def main():
     if st.query_params.get("mode") == "progress":
         page_progress()
         return
+
+    # ── Sidebar controls ──────────────────────────────────────────────────────
+    with st.sidebar:
+        st.markdown("### ⚡ Fitr Messaging")
+        fitr_on = st.toggle(
+            "Enable sending via Fitr",
+            value=st.session_state.get("fitr_messaging_on", False),
+            key="fitr_messaging_on",
+            help=(
+                "When ON, the Send button on AI draft replies posts directly to the athlete "
+                "in Fitr. Toggle OFF to use copy-only mode (no messages sent)."
+            ),
+        )
+        if fitr_on:
+            st.success("🟢 Fitr messaging ON")
+        else:
+            st.warning("🔴 Fitr messaging OFF — copy only")
 
     st.title("🏋️ JST Compete — Coaching Dashboard")
     st.caption(f"Data refreshes every 15 minutes · Last loaded: {dt.datetime.now().strftime('%H:%M')}")

@@ -49,6 +49,24 @@ def latest_by_email(sheets):
     return out
 
 
+def all_by_email(sheets):
+    """Return {lower_email: [rows chronological]} for all recovery submissions."""
+    try:
+        if config.RECOVERY_SHEET_ID:
+            rows = sheets.read_external_records(config.RECOVERY_SHEET_ID, config.RECOVERY_TAB)
+        else:
+            rows = sheets.read_records(config.TAB_RECOVERY)
+    except Exception:
+        return {}
+    out = {}
+    for row in rows:
+        email = str(row.get(RECOVERY_COLS["email"], "")).strip().lower()
+        if not email:
+            continue
+        out.setdefault(email, []).append(row)
+    return out
+
+
 def readiness_string(row):
     g = lambda k: str(row.get(RECOVERY_COLS[k], "")).strip()
     parts = []
