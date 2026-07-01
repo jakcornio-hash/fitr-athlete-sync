@@ -601,6 +601,28 @@ def send_monthly_athlete_reports(data_recs, email_by_name, pr_records):
     return sent
 
 
+def send_progress_page_email(smtp_from, smtp_password, to_addr, athlete_name, jst_id, dashboard_url):
+    """Email an athlete a link to their read-only progress page."""
+    first = athlete_name.split()[0]
+    url = f"{dashboard_url.rstrip('/')}/?mode=progress&id={jst_id}"
+    subject = f"Your JST Compete Progress Page — {first}"
+    plain = (
+        f"Hi {first},\n\n"
+        f"Here's your personal progress page where you can see your results, "
+        f"training consistency, and competition calendar:\n\n"
+        f"{url}\n\n"
+        f"Keep pushing!\n\nJST Compete"
+    )
+    html = (
+        f"<p>Hi {first},</p>"
+        f"<p>Here's your personal progress page where you can see your results, "
+        f"training consistency, and competition calendar:</p>"
+        f"<p><a href='{url}' style='font-size:16px;font-weight:bold;'>View Your Progress Page →</a></p>"
+        f"<p>Keep pushing!<br><strong>JST Compete</strong></p>"
+    )
+    _send_html_email_to(smtp_from, smtp_password, to_addr, subject, plain, html)
+
+
 def send_draft_reply_alerts(names, webhook_url=None):
     """Send a Slack notification when AI draft replies are ready for review.
 

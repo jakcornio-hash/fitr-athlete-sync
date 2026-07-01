@@ -18,6 +18,7 @@ import analytics
 import archetypes as arch_mod
 import config
 import message_templates as msg_tmpl
+import notifier
 import recovery as rec_mod
 
 _CHAT_DATE_RE = re.compile(r'\[(\d{4}-\d{2}-\d{2}) — chat\]')
@@ -526,12 +527,12 @@ def _archetype_panel(name, archetype_by_name, profile=None):
 
             # Profile mix
             try:
-                profile = json.loads(assessment.get("Profile JSON") or "{}").get("profile", [])
+                arch_profile = json.loads(assessment.get("Profile JSON") or "{}").get("profile", [])
             except (json.JSONDecodeError, TypeError):
-                profile = []
-            if profile:
+                arch_profile = []
+            if arch_profile:
                 st.markdown("**Profile mix:**")
-                for entry in profile[:5]:
+                for entry in arch_profile[:5]:
                     aid = entry.get("archetype", "")
                     pct = entry.get("pct", 0)
                     a_def = arch_mod.get_archetype(aid)
@@ -561,6 +562,7 @@ def _archetype_panel(name, archetype_by_name, profile=None):
         _archetype_assessment_form(name)
 
     jst_id = str((profile or {}).get("Athlete ID", "")).strip()
+    athlete_email = str((profile or {}).get("Email", "")).strip()
     if jst_id:
         with st.expander("🔗 Share Self-Assessment Link with Athlete"):
             st.caption(
@@ -573,7 +575,71 @@ def _archetype_panel(name, archetype_by_name, profile=None):
                 "A read-only view of the athlete's goal, recent results, training consistency, "
                 "and competition calendar. Paste your dashboard URL before the query string below."
             )
+            _base = "https://fitr-athlete-sync-m2pyq2zecb4nnmwnphpuuq.streamlit.app"
             st.code(f"?mode=progress&id={jst_id}", language=None)
+            if athlete_email:
+                if st.button(f"📧 Email progress page to {name.split()[0]}", key=f"email_progress_{name}"):
+                    try:
+                        smtp_from = st.secrets.get("SMTP_FROM", "") or config.SMTP_FROM
+                        smtp_pw = st.secrets.get("SMTP_PASSWORD", "") or config.SMTP_PASSWORD
+                        if smtp_from and smtp_pw:
+                            notifier.send_progress_page_email(
+                                smtp_from, smtp_pw, athlete_email, name, jst_id, _base
+                            )
+                            st.success(f"Progress page sent to {athlete_email}")
+                        else:
+                            st.warning("SMTP credentials not configured — add SMTP_FROM and SMTP_PASSWORD to secrets.")
+                    except Exception as _e:
+                        st.error(f"Email failed: {_e}")
+
+
+def _parse_goal_numeric(goal_text):
+    """Extract (target_value, lower_is_better) from a North Star Goal string.
+    Returns (None, False) when no numeric target can be found.
+    """
+    nums = re.findall(r'\d+(?:\.\d+)?', goal_text)
+    if not nums:
+        return None, False
+    lower = any(kw in goal_text.lower() for kw in ("under", "sub", "below", "faster", "less than"))
+    return float(nums[0]), lower
+
+
+def _match_goal_to_benchmark(goal_text, pr_records, athlete_name):
+    """Return (benchmark_name, current_value_float, current_value_str) for the best
+    matching benchmark in the athlete's PR log, or (None, None, None) if not found.
+    """
+    if not goal_text:
+        return None, None, None
+    latest = {}
+    for r in pr_records:
+        if str(r.get("Athlete Name", "")).strip() != athlete_name:
+            continue
+        bench = str(r.get("Benchmark Name", "")).strip()
+        if not bench:
+            continue
+        try:
+            d = dt.date.fromisoformat(str(r.get("Date", ""))[:10])
+        except Exception:
+            continue
+        raw_val = str(r.get("Value", "")).strip()
+        v_nums = re.findall(r'\d+(?:\.\d+)?', raw_val)
+        v = float(v_nums[0]) if v_nums else None
+        if v is not None:
+            if bench not in latest or d > latest[bench][0]:
+                latest[bench] = (d, v, raw_val)
+    if not latest:
+        return None, None, None
+    goal_words = {w for w in re.split(r'\W+', goal_text.lower()) if len(w) > 2}
+    best_match, best_score = None, 0
+    for bench in latest:
+        bench_words = {w for w in re.split(r'\W+', bench.lower()) if len(w) > 2}
+        score = len(goal_words & bench_words)
+        if score > best_score:
+            best_score, best_match = score, bench
+    if best_match and best_score > 0:
+        _, curr_v, curr_str = latest[best_match]
+        return best_match, curr_v, curr_str
+    return None, None, None
 
 
 def _athlete_profile_panel(name, data_by_name, pr_records, trend_results,
@@ -1102,6 +1168,27 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
         st.markdown("**🎯 Goal Progress**")
         if goal:
             st.info(f"**North Star Goal:** {goal}")
+            target_val, lower_is_better = _parse_goal_numeric(goal)
+            if target_val is not None:
+                bench_name, curr_v, curr_str = _match_goal_to_benchmark(goal, pr_records, name)
+                if bench_name and curr_v is not None:
+                    if lower_is_better:
+                        achieved = curr_v <= target_val
+                        if achieved:
+                            st.success(f"🎉 Goal achieved! **{bench_name}:** {curr_str} (target: {target_val:.0f})")
+                        else:
+                            gc1, gc2 = st.columns([3, 1])
+                            gc1.markdown(f"**{bench_name}:** {curr_str}  →  target {target_val:.0f}")
+                            gc2.metric("To go", f"−{curr_v - target_val:.1f}")
+                    else:
+                        pct = min(1.0, curr_v / target_val) if target_val > 0 else 0.0
+                        if curr_v >= target_val:
+                            st.success(f"🎉 Goal achieved! **{bench_name}:** {curr_str} (target: {target_val:.0f})")
+                        else:
+                            gc1, gc2 = st.columns([3, 1])
+                            gc1.markdown(f"**{bench_name}:** {curr_str}  →  target {target_val:.0f}")
+                            gc1.progress(pct)
+                            gc2.metric("Progress", f"{round(pct * 100)}%")
         if goal_notes:
             for entry in goal_notes:
                 with st.expander(f"🎯 {entry['date']}", expanded=False):
@@ -1370,9 +1457,15 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
         })
 
     # ── Search + Filters ──────────────────────────────────────────────────────
-    search_query = st.text_input(
+    sc1, sc2 = st.columns([1, 1])
+    search_query = sc1.text_input(
         "🔍 Search athlete", key="athletes_search",
         placeholder="Type a name to filter…",
+        label_visibility="collapsed",
+    )
+    notes_search = sc2.text_input(
+        "📝 Search coaching notes", key="athletes_notes_search",
+        placeholder="e.g. knee, open qualifier…",
         label_visibility="collapsed",
     )
 
@@ -1411,6 +1504,12 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
     if search_query:
         q = search_query.strip().lower()
         filtered_rows = [r for r in filtered_rows if q in r["Name"].lower()]
+    if notes_search:
+        nq = notes_search.strip().lower()
+        filtered_rows = [
+            r for r in filtered_rows
+            if nq in str(data_by_name.get(r["Name"], {}).get("Coaching Notes", "")).lower()
+        ]
     if f_prog:
         filtered_rows = [r for r in filtered_rows if r["Programme"] in f_prog]
     if f_tier:
@@ -3598,6 +3697,112 @@ def _crm_dedup(athletes, data_records, pr_records):
     )
 
 
+def page_sync_health():
+    """Sync health monitoring — run history, PR row trends, errors, message log stats."""
+    st.header("⚙️ Sync Health")
+
+    sheets = get_sheets()
+
+    sync_log = []
+    try:
+        sync_log = sheets.read_records(config.TAB_SYNC_LOG)
+    except Exception:
+        st.warning("Sync Log tab not found. Run the daily sync at least once.")
+        return
+
+    if not sync_log:
+        st.info("No sync runs recorded yet.")
+        return
+
+    last = sync_log[-1]
+    last_date = str(last.get("Run Date", "—"))
+    st.caption(f"Last sync: **{last_date}** — {len(sync_log)} total runs on record")
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Total Athletes", str(last.get("Total Athletes", "—")))
+    c2.metric("New Results", str(last.get("New PR Log rows", 0)))
+    c3.metric("Chats Summarised", str(last.get("Conversations summarised", 0)))
+    c4.metric("Auto-onboarded", str(last.get("Athletes auto-onboarded", 0)))
+    c5.metric("Emails Sent", str(last.get("Athlete Emails Sent", 0)))
+
+    last_note = str(last.get("Notes", "")).strip().lower()
+    if last_note and last_note != "ok":
+        st.warning(f"⚠️ Last run note: {last.get('Notes', '')}")
+    else:
+        st.success("✅ Last sync ran cleanly")
+
+    st.divider()
+
+    log_df = pd.DataFrame(sync_log)
+    if "Run Date" in log_df.columns and "New PR Log rows" in log_df.columns:
+        log_df["Run Date"] = pd.to_datetime(log_df["Run Date"], errors="coerce")
+        log_df["New PR Log rows"] = pd.to_numeric(log_df["New PR Log rows"], errors="coerce").fillna(0)
+        log_df["Total Athletes"] = pd.to_numeric(log_df["Total Athletes"], errors="coerce").fillna(0)
+        chart_df = log_df.dropna(subset=["Run Date"])
+
+        st.markdown("**New results per sync run**")
+        bars = (
+            alt.Chart(chart_df)
+            .mark_bar()
+            .encode(
+                x=alt.X("Run Date:T", title="Date"),
+                y=alt.Y("New PR Log rows:Q", title="New Results"),
+                tooltip=["Run Date:T", "New PR Log rows:Q"],
+            )
+        )
+        st.altair_chart(bars, width="stretch")
+
+        st.markdown("**Squad size over time**")
+        line = (
+            alt.Chart(chart_df)
+            .mark_line(point=True)
+            .encode(
+                x=alt.X("Run Date:T", title="Date"),
+                y=alt.Y("Total Athletes:Q", title="Athletes", scale=alt.Scale(zero=False)),
+                tooltip=["Run Date:T", "Total Athletes:Q"],
+            )
+        )
+        st.altair_chart(line, width="stretch")
+
+    errors = [r for r in sync_log if str(r.get("Notes", "")).strip().lower() not in ("ok", "")]
+    if errors:
+        st.divider()
+        st.markdown("**⚠️ Sync warnings & errors (most recent 10)**")
+        for r in errors[-10:]:
+            st.warning(f"{r.get('Run Date', '?')} — {r.get('Notes', '')}")
+
+    st.divider()
+    st.markdown("**📨 Automated Message Log**")
+    try:
+        msg_log = sheets.read_records(config.TAB_MESSAGE_LOG)
+        if msg_log:
+            msg_df = pd.DataFrame(msg_log)
+            if "Message Type" in msg_df.columns:
+                type_counts = (
+                    msg_df["Message Type"]
+                    .value_counts()
+                    .reset_index()
+                    .rename(columns={"index": "Message Type", "Message Type": "Count"})
+                )
+                if "Count" not in type_counts.columns:
+                    type_counts.columns = ["Message Type", "Count"]
+                bar_chart = (
+                    alt.Chart(type_counts)
+                    .mark_bar()
+                    .encode(
+                        y=alt.Y("Message Type:N", sort="-x", title=None),
+                        x=alt.X("Count:Q", title="Messages Sent"),
+                        tooltip=["Message Type:N", "Count:Q"],
+                    )
+                )
+                st.altair_chart(bar_chart, width="stretch")
+                st.caption(f"Total automated messages sent: {len(msg_log)}")
+        else:
+            st.caption("No messages logged yet.")
+    except Exception:
+        st.caption("Message Log not available.")
+
+
 def page_help():
     """Coach guide — explains each tab and how to use the dashboard."""
     st.markdown("## Dashboard Guide")
@@ -3977,7 +4182,7 @@ def main():
     tabs = st.tabs([
         "📋 Outreach List", "🚨 Alerts", "🃏 Squad", "👥 Athletes",
         "🗓️ Week Plan", "🏁 Competitions", "📊 Programmes", "🏋️ Load",
-        "📈 Trends", "🏆 Leaderboard", "💤 Recovery", "🌐 CRM", "❓ Help",
+        "📈 Trends", "🏆 Leaderboard", "💤 Recovery", "🌐 CRM", "⚙️ Sync", "❓ Help",
     ])
 
     with tabs[0]:
@@ -4005,6 +4210,8 @@ def main():
     with tabs[11]:
         page_crm(athletes, engagement_results, data_records, pr_records=pr_records)
     with tabs[12]:
+        page_sync_health()
+    with tabs[13]:
         page_help()
 
 

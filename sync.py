@@ -389,7 +389,17 @@ def sync_intake_from_typeform(sheets, email_by_name):
     if not rows:
         return 0
 
-    email_to_name = {v.lower(): k for k, v in email_by_name.items()}
+    merged_email_by_name = dict(email_by_name)
+    try:
+        data_recs_intake = sheets.read_records(config.TAB_DATA)
+        for rec in data_recs_intake:
+            nm2 = str(rec.get("Full Name", "")).strip()
+            em2 = str(rec.get("Email", "")).strip().lower()
+            if nm2 and em2:
+                merged_email_by_name.setdefault(nm2, em2)
+    except Exception:
+        pass
+    email_to_name = {v.lower(): k for k, v in merged_email_by_name.items()}
 
     # Group by athlete, keep latest submission
     latest_by_name = {}
@@ -1104,65 +1114,116 @@ def main():
     if comp_msgs_sent:
         print(f"Pre-competition messages sent: {comp_msgs_sent}")
 
-    # ---- competition result congratulations ----
-    # Send once when a result is logged for a recent comp, using Message Log to avoid duplicates.
+    # ---- comp message dedup set (covers post_comp_ and comp_result_ prefixes) ----
+    sent_comp_keys = set()
     if not config.DRY_RUN:
         try:
-            all_msg_log = sheets.sh.worksheet(config.TAB_MESSAGE_LOG).get_all_records()
+            _msg_log_rows = sheets.sh.worksheet(config.TAB_MESSAGE_LOG).get_all_records()
+            sent_comp_keys = {
+                (str(r.get("Athlete Name", "")).strip(), str(r.get("Message Type", "")).strip())
+                for r in _msg_log_rows
+                if str(r.get("Message Type", "")).startswith(("post_comp_", "comp_result_"))
+            }
         except Exception:
-            all_msg_log = []
-        already_comp_messaged = {
-            str(r.get("Message Type", "")).strip()
-            for r in all_msg_log
-            if str(r.get("Message Type", "")).startswith("comp_result_")
-            and str(r.get("Athlete Name", "")).strip() == str(r.get("Athlete Name", "")).strip()
-        }
-        # Rebuild as (athlete, type_key) set for exact matching
-        already_comp_messaged = {
-            (str(r.get("Athlete Name", "")).strip(), str(r.get("Message Type", "")).strip())
-            for r in all_msg_log
-            if str(r.get("Message Type", "")).startswith("comp_result_")
-        }
-        comp_result_msgs_sent = 0
-        for row in competition_rows:
-            nm = str(row.get("Athlete Name", "")).strip()
-            result = str(row.get("Result", "")).strip()
-            comp_nm = str(row.get("Competition Name", "")).strip()
-            if not nm or not result or not comp_nm:
-                continue
-            raw_date = str(row.get("Date", "")).strip()
-            comp_date = None
-            import datetime as _dt3
-            for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%b-%Y", "%d %b %Y"):
-                try:
-                    comp_date = _dt3.datetime.strptime(raw_date, fmt).date()
-                    break
-                except ValueError:
-                    continue
-            if not comp_date or (TODAY - comp_date).days > 14 or comp_date > TODAY:
-                continue
-            msg_type_key = f"comp_result_{comp_nm[:25].replace(' ', '_')}"
-            if (nm, msg_type_key) in already_comp_messaged:
-                continue
-            room_id = room_id_by_name.get(nm)
-            if not room_id:
-                continue
-            first = nm.split()[0]
-            msg = (
-                f"Well done on {comp_nm}, {first}! 🏆 Result: {result}. "
-                f"Really proud of the effort you put in — let's debrief when you're ready "
-                f"and use this to plan the next block. 💪"
-            )
+            pass
+
+    # ---- post-competition messages (fires the day after each competition) ----
+    post_comp_msgs_sent = 0
+    for row in competition_rows:
+        nm = str(row.get("Athlete Name", "")).strip()
+        comp_nm = str(row.get("Competition Name", "")).strip() or "your competition"
+        comp_type = str(row.get("Type", "A")).strip().upper()
+        raw_date = str(row.get("Date", "")).strip()
+        if not nm or not raw_date:
+            continue
+        import datetime as _dt4
+        comp_date = None
+        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%b-%Y", "%d %b %Y"):
             try:
-                fitr.send_chat_message(room_id, msg)
-                comp_result_msgs_sent += 1
-                messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
-                                          "Message Type": msg_type_key, "Room ID": room_id})
-                import time as _time; _time.sleep(0.5)
-            except FitrError as exc:
-                print(f"  ! Comp result message failed for {nm}: {exc}")
-        if comp_result_msgs_sent:
-            print(f"Competition result messages sent: {comp_result_msgs_sent}")
+                comp_date = _dt4.datetime.strptime(raw_date, fmt).date()
+                break
+            except ValueError:
+                continue
+        if not comp_date:
+            continue
+        days_out = (comp_date - TODAY).days
+        if days_out != -1:
+            continue
+        msg_type_key = f"post_comp_{comp_nm[:25].replace(' ', '_')}"
+        if (nm, msg_type_key) in sent_comp_keys:
+            continue
+        room_id = room_id_by_name.get(nm)
+        if not room_id or config.DRY_RUN:
+            continue
+        first = nm.split()[0]
+        if comp_type in ("A", "B"):
+            msg = (
+                f"Hey {first} — hope you're recovering well after {comp_nm}! 💪\n\n"
+                f"Would love to hear how it went. When you get a moment, can you share:\n"
+                f"1️⃣ What was your result / placing?\n"
+                f"2️⃣ What went well that you want to build on?\n"
+                f"3️⃣ What's one thing you'd do differently next time?\n"
+                f"4️⃣ How is your body feeling right now?\n\n"
+                f"Really proud of the work you put in to get here. 🏆"
+            )
+        else:
+            msg = (
+                f"Hey {first} — how did {comp_nm} go yesterday? "
+                f"Would love to hear your result and any thoughts from the day! 💪"
+            )
+        try:
+            fitr.send_chat_message(room_id, msg)
+            post_comp_msgs_sent += 1
+            messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
+                                      "Message Type": msg_type_key, "Room ID": room_id})
+            import time as _time; _time.sleep(0.5)
+        except FitrError as exc:
+            print(f"  ! Post-comp message failed for {nm}: {exc}")
+    if post_comp_msgs_sent:
+        print(f"Post-competition messages sent: {post_comp_msgs_sent}")
+
+    # ---- competition result congratulations ----
+    # Send once when a result is entered for a recent comp, deduped via sent_comp_keys.
+    comp_result_msgs_sent = 0
+    for row in competition_rows:
+        nm = str(row.get("Athlete Name", "")).strip()
+        result = str(row.get("Result", "")).strip()
+        comp_nm = str(row.get("Competition Name", "")).strip()
+        if not nm or not result or not comp_nm:
+            continue
+        raw_date = str(row.get("Date", "")).strip()
+        comp_date = None
+        import datetime as _dt3
+        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%b-%Y", "%d %b %Y"):
+            try:
+                comp_date = _dt3.datetime.strptime(raw_date, fmt).date()
+                break
+            except ValueError:
+                continue
+        if not comp_date or (TODAY - comp_date).days > 14 or comp_date > TODAY:
+            continue
+        msg_type_key = f"comp_result_{comp_nm[:25].replace(' ', '_')}"
+        if (nm, msg_type_key) in sent_comp_keys:
+            continue
+        room_id = room_id_by_name.get(nm)
+        if not room_id or config.DRY_RUN:
+            continue
+        first = nm.split()[0]
+        msg = (
+            f"Well done on {comp_nm}, {first}! 🏆 Result: {result}. "
+            f"Really proud of the effort you put in — let's debrief when you're ready "
+            f"and use this to plan the next block. 💪"
+        )
+        try:
+            fitr.send_chat_message(room_id, msg)
+            comp_result_msgs_sent += 1
+            messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
+                                      "Message Type": msg_type_key, "Room ID": room_id})
+            import time as _time; _time.sleep(0.5)
+        except FitrError as exc:
+            print(f"  ! Comp result message failed for {nm}: {exc}")
+    if comp_result_msgs_sent:
+        print(f"Competition result messages sent: {comp_result_msgs_sent}")
 
     # ---- weekly athlete progress emails ----
     archetype_rows = sheets.load_archetype_assessments()
