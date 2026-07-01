@@ -277,13 +277,38 @@ def sync_competition_from_typeform(sheets, email_by_name):
     """
     if not config.COMP_FORM_SHEET_ID:
         return 0
-    email_to_name = {v.lower(): k for k, v in email_by_name.items()}
+
+    # Build email→name from PR Log, then supplement with _DATA (so athletes
+    # who haven't logged any benchmarks yet can still be resolved).
+    merged_email_by_name = dict(email_by_name)
+    try:
+        data_recs = sheets.read_records(config.TAB_DATA)
+        for rec in data_recs:
+            nm = str(rec.get("Full Name", "")).strip()
+            em = str(rec.get("Email", "")).strip().lower()
+            if nm and em:
+                merged_email_by_name.setdefault(nm, em)
+    except Exception:
+        pass
+
+    email_to_name = {v.lower(): k for k, v in merged_email_by_name.items()}
+    # All known athlete names (for name-based fallback)
+    all_known_names = list(email_to_name.values())
 
     try:
         rows = sheets.read_external_records(config.COMP_FORM_SHEET_ID, config.COMP_FORM_TAB)
     except Exception as e:
         print(f"  ! comp form read failed: {e}")
         return 0
+
+    if rows:
+        # Warn once if expected columns are missing from the Typeform sheet
+        sample = rows[0]
+        for col in (config.COMP_FORM_EMAIL_COL, config.COMP_FORM_FULL_NAME_COL,
+                    config.COMP_FORM_COMP_NAME_COL, config.COMP_FORM_DATE_COL):
+            if col not in sample:
+                print(f"  ! comp form: column {col!r} not found. "
+                      f"Available: {list(sample.keys())[:8]}")
 
     # Load existing Competitions tab for dedupe
     existing = sheets.load_competitions()
@@ -297,18 +322,20 @@ def sync_competition_from_typeform(sheets, email_by_name):
         seen_keys.add(key)
 
     added = 0
+    skipped_unresolved = []
     for row in rows:
-        # Resolve athlete from email or full name field
+        # Resolve athlete: email first, then exact name, then case-insensitive name
         email = str(row.get(config.COMP_FORM_EMAIL_COL, "")).strip().lower()
         nm = email_to_name.get(email)
         if not nm:
-            # Try matching via the full name field directly
             raw_name = str(row.get(config.COMP_FORM_FULL_NAME_COL, "")).strip()
-            for athlete_name in email_to_name.values():
-                if athlete_name.lower() == raw_name.lower():
-                    nm = athlete_name
+            for known in all_known_names:
+                if known.lower() == raw_name.lower():
+                    nm = known
                     break
         if not nm:
+            raw_name = str(row.get(config.COMP_FORM_FULL_NAME_COL, "")).strip()
+            skipped_unresolved.append(raw_name or f"<email:{email}>")
             continue
 
         comp_name = str(row.get(config.COMP_FORM_COMP_NAME_COL, "")).strip()
@@ -342,6 +369,10 @@ def sync_competition_from_typeform(sheets, email_by_name):
         })
         seen_keys.add(key)
         added += 1
+
+    if skipped_unresolved:
+        print(f"  ! comp form: {len(skipped_unresolved)} submissions could not be matched to an athlete "
+              f"(email + name lookup failed): {', '.join(sorted(skipped_unresolved))}")
 
     return added
 
