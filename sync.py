@@ -44,11 +44,17 @@ def _parse_date(s):
 def _fmt_value(v):
     """Pretty value+symbol from a Fitr last_value dict."""
     val = v.get("value")
-    sym = v.get("symbol") or v.get("units") or ""
+    sym = (v.get("symbol") or v.get("units") or "").strip()
     if val is None:
         return ""
-    # Fitr stores some measures in base units (e.g. grams); value already
-    # comes back human-scaled in last_value, so just join with the symbol.
+    # Convert seconds-based benchmarks to mm:ss (or h:mm:ss) for readability.
+    if sym.lower() in ("secs", "sec", "seconds", "s") and isinstance(val, (int, float)) and val >= 0:
+        total = int(round(val))
+        mins, secs = divmod(total, 60)
+        if mins >= 60:
+            hrs, mins = divmod(mins, 60)
+            return f"{hrs}:{mins:02d}:{secs:02d}"
+        return f"{mins}:{secs:02d}"
     return f"{val} {sym}".strip()
 
 
