@@ -41,6 +41,39 @@ def _parse_date(s):
     return None
 
 
+def _normalize_benchmark(name):
+    """Map Fitr variant name to canonical display name using BENCHMARK_NAME_MAP."""
+    if not name:
+        return name
+    canonical = config.BENCHMARK_NAME_MAP.get(name.strip().lower())
+    return canonical if canonical else name.strip()
+
+
+def _goal_achieved(goal_text, bench_name, value_str):
+    """Return True if this result appears to meet the athlete's North Star Goal.
+
+    Heuristic: benchmark name must be a substring of the goal text AND the
+    numeric value must meet or exceed the first number found in the goal.
+    For goals containing "under", "sub", "below", or "faster", lower is better.
+    """
+    import re as _re
+    if not goal_text or not bench_name or not value_str:
+        return False
+    goal_lower = goal_text.lower()
+    if bench_name.lower() not in goal_lower:
+        return False
+    goal_nums = [float(x) for x in _re.findall(r'\d+(?:\.\d+)?', goal_text)]
+    if not goal_nums:
+        return False
+    goal_val = goal_nums[0]
+    val_nums = [float(x) for x in _re.findall(r'\d+(?:\.\d+)?', str(value_str))]
+    if not val_nums:
+        return False
+    result_val = val_nums[0]
+    lower_is_better = any(kw in goal_lower for kw in ("under", "sub", "below", "faster", "less than"))
+    return result_val <= goal_val if lower_is_better else result_val >= goal_val
+
+
 def _fmt_value(v):
     """Pretty value+symbol from a Fitr last_value dict."""
     val = v.get("value")
@@ -115,7 +148,7 @@ def collect_benchmarks(fitr, athletes, existing_keys, email_by_name, prev_lookup
             d = _parse_date(lv.get("date"))
             if not d or d < CUTOFF or d > TODAY:
                 continue
-            bench = b.get("name", "")
+            bench = _normalize_benchmark(b.get("name", ""))
             value = _fmt_value(lv)
             key = (a["name"].lower(), bench.lower(), value.lower(), d.isoformat())
             if key in existing_keys:
@@ -691,7 +724,22 @@ def main():
 
     messages_sent_log = []  # collects all automated messages for Message Log
 
-    # ---- auto-congratulations via Fitr chat ----
+    # ---- load _DATA once for use throughout the rest of main() ----
+    data_recs = sheets.read_records(config.TAB_DATA)
+    data_by_name_all = {
+        str(r.get("Full Name", "")).strip(): r for r in data_recs
+        if str(r.get("Full Name", "")).strip()
+    }
+    goals_by_name = {
+        nm: str(r.get("North Star Goal", "")).strip()
+        for nm, r in data_by_name_all.items()
+    }
+    programme_by_name = {
+        nm: str(r.get("Programme", "")).strip()
+        for nm, r in data_by_name_all.items()
+    }
+
+    # ---- auto-congratulations + goal celebrations via Fitr chat ----
     if bench_rows and not config.DRY_RUN:
         congrats_sent = 0
         for row in bench_rows:
@@ -705,7 +753,16 @@ def main():
             if not room_id:
                 continue
             first = name.split()[0]
-            if prev and prev not in ("", "first entry"):
+            goal = goals_by_name.get(name, "")
+            if goal and _goal_achieved(goal, bench, value):
+                msg = (
+                    f"🎉 {first}!!! You just hit your North Star Goal — "
+                    f"{bench}: {value}!\n\n"
+                    f"This is exactly what we've been building towards. "
+                    f"Massive achievement — so proud of what you've done. 🏆\n\n"
+                    f"Time to set the next one!"
+                )
+            elif prev and prev not in ("", "first entry"):
                 msg = f"Nice work {first} 💪 {bench}: {value} (was {prev}). Keep pushing!"
             else:
                 msg = f"Great first result {first} 💪 {bench}: {value}. Looking forward to tracking your progress!"
@@ -724,27 +781,19 @@ def main():
 
     # ---- draft replies for pending athlete messages ----
     if pending_reply_candidates and not config.DRY_RUN:
-        data_preview = sheets.read_records(config.TAB_DATA)
-        data_by_name_draft = {str(r.get("Full Name", "")).strip(): r for r in data_preview
-                              if str(r.get("Full Name", "")).strip()}
-        drafts_generated = 0
+        drafted_names = []
         for nm, (room_id, thread_text) in pending_reply_candidates.items():
-            profile = data_by_name_draft.get(nm, {})
+            profile = data_by_name_all.get(nm, {})
             draft = summariser.draft_reply(nm, thread_text, profile_data=profile)
             if draft:
                 sheets.write_draft_reply(nm, room_id, draft)
-                drafts_generated += 1
-        if drafts_generated:
-            print(f"Reply drafts generated: {drafts_generated}")
+                drafted_names.append(nm)
+        if drafted_names:
+            print(f"Reply drafts generated: {len(drafted_names)}")
+            notifier.send_draft_reply_alerts(drafted_names)
 
     # ---- per-coach Slack notifications ----
     coach_channel_map = sheets.load_coaches()
-    data_recs = sheets.read_records(config.TAB_DATA)
-    programme_by_name = {
-        str(r.get("Full Name", "")).strip(): str(r.get("Programme", "")).strip()
-        for r in data_recs
-        if str(r.get("Full Name", "")).strip()
-    }
     if coach_channel_map and (bench_rows or chal_rows):
         notified = notifier.send_coach_notifications(
             bench_rows, chal_rows, programme_by_name, coach_channel_map,

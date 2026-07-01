@@ -601,6 +601,35 @@ def send_monthly_athlete_reports(data_recs, email_by_name, pr_records):
     return sent
 
 
+def send_draft_reply_alerts(names, webhook_url=None):
+    """Send a Slack notification when AI draft replies are ready for review.
+
+    names: list of athlete names with pending draft replies.
+    Uses the provided webhook_url or falls back to SLACK_WEBHOOK_URL.
+    Returns True if sent successfully, False otherwise.
+    """
+    url = webhook_url or config.SLACK_WEBHOOK_URL
+    if not url or not names:
+        return False
+    n = len(names)
+    name_list = "\n".join(f"  • {nm}" for nm in sorted(names))
+    text = (
+        f"📨 *{n} AI draft repl{'y' if n == 1 else 'ies'} ready for review*\n\n"
+        f"{name_list}\n\n"
+        f"Open the dashboard → Athletes tab → select athlete → scroll to Draft Reply."
+    )
+    try:
+        payload = json.dumps({"text": text}).encode()
+        req = urllib.request.Request(
+            url, data=payload, headers={"Content-Type": "application/json"}
+        )
+        urllib.request.urlopen(req, timeout=10, context=_SSL_CONTEXT)
+        return True
+    except Exception as e:
+        print(f"  ! Draft reply Slack alert failed: {e}")
+        return False
+
+
 def send_digest(date, engagement_results, trend_results,
                 rec_alert_rows, milestones, consistency_wins):
     plain, slack_text = build_digest(

@@ -1369,7 +1369,13 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
             "Logging": "📝 Nudge" if nudge else ("✅ Active" if (days is not None and days < 28) else "⚠️ Inactive"),
         })
 
-    # ── Filters ───────────────────────────────────────────────────────────────
+    # ── Search + Filters ──────────────────────────────────────────────────────
+    search_query = st.text_input(
+        "🔍 Search athlete", key="athletes_search",
+        placeholder="Type a name to filter…",
+        label_visibility="collapsed",
+    )
+
     all_programmes = sorted({r["Programme"] for r in summary_rows})
     all_tiers = sorted(filter(None, {
         str(data_by_name.get(a["name"], {}).get("Tier", "")).strip()
@@ -1402,6 +1408,9 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
         f_sub, f_ref = [], []
 
     filtered_rows = summary_rows
+    if search_query:
+        q = search_query.strip().lower()
+        filtered_rows = [r for r in filtered_rows if q in r["Name"].lower()]
     if f_prog:
         filtered_rows = [r for r in filtered_rows if r["Programme"] in f_prog]
     if f_tier:
@@ -1455,15 +1464,17 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
 def page_trends(pr_records, athletes):
     athlete_names = sorted({a["name"] for a in athletes})
 
-    col_sel, col_cmp = st.columns([2, 1])
-    selected = col_sel.selectbox("Athlete", athlete_names, key="trend_main")
-    compare_mode = col_cmp.checkbox("Compare with another athlete", key="trend_cmp_toggle")
-
-    selected_b = None
-    if compare_mode:
-        other_names = [n for n in athlete_names if n != selected]
-        if other_names:
-            selected_b = st.selectbox("Compare with", other_names, key="trend_b")
+    col_sel, col_cmp = st.columns([2, 2])
+    selected = col_sel.selectbox("Primary Athlete", athlete_names, key="trend_main")
+    compare_names = col_cmp.multiselect(
+        "Compare with (up to 4)",
+        [n for n in athlete_names if n != selected],
+        key="trend_cmp_names",
+        placeholder="Add athletes to compare…",
+    )
+    if len(compare_names) > 4:
+        st.caption("Showing first 4 comparison athletes.")
+        compare_names = compare_names[:4]
 
     if not selected:
         return
@@ -1504,10 +1515,13 @@ def page_trends(pr_records, athletes):
         st.info("No numeric values found for this benchmark.")
         return
 
-    points_b = _get_points(selected_b, selected_bench) if selected_b else []
-    df_all = pd.DataFrame(points_a + points_b).sort_values("Date")
+    all_points = list(points_a)
+    for cmp_name in compare_names:
+        all_points.extend(_get_points(cmp_name, selected_bench))
 
-    if points_b:
+    df_all = pd.DataFrame(all_points).sort_values("Date")
+
+    if compare_names:
         chart = (
             alt.Chart(df_all)
             .mark_line(point=True)
@@ -1532,18 +1546,17 @@ def page_trends(pr_records, athletes):
         )
     st.altair_chart(chart, width='stretch')
 
-    df_a = pd.DataFrame(points_a).sort_values("Date")
-    col1, col2, col3 = st.columns(3)
-    col1.metric(f"{selected} — Entries", len(df_a))
-    col2.metric(f"{selected} — Best", df_a["Label"].iloc[df_a["Value"].argmax()])
-    col3.metric(f"{selected} — Latest", df_a["Label"].iloc[-1])
-
-    if points_b:
-        df_b = pd.DataFrame(points_b).sort_values("Date")
-        cb1, cb2, cb3 = st.columns(3)
-        cb1.metric(f"{selected_b} — Entries", len(df_b))
-        cb2.metric(f"{selected_b} — Best", df_b["Label"].iloc[df_b["Value"].argmax()])
-        cb3.metric(f"{selected_b} — Latest", df_b["Label"].iloc[-1])
+    # Stats row per athlete
+    all_compared = [selected] + list(compare_names)
+    stat_cols = st.columns(len(all_compared))
+    for col, nm in zip(stat_cols, all_compared):
+        pts = _get_points(nm, selected_bench)
+        if not pts:
+            col.caption(f"{nm}: no data")
+            continue
+        df_nm = pd.DataFrame(pts).sort_values("Date")
+        col.metric(f"{nm} — Best", df_nm["Label"].iloc[df_nm["Value"].argmax()])
+        col.caption(f"{len(df_nm)} entries · Latest: {df_nm['Label'].iloc[-1]}")
 
     # ── PR Velocity ─────────────────────────────────────────────────────────────
     st.divider()
