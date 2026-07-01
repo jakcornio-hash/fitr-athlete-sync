@@ -699,6 +699,111 @@ def auto_onboard_new_athletes(sheets, rooms, fitr=None, room_id_by_name=None,
     return len(to_onboard)
 
 
+def capture_postcomp_responses(fitr, sheets, TODAY):
+    """Scan Fitr for athlete replies to post-comp messages; store in Competitions tab.
+
+    Only captures responses for messages sent in the last 45 days that don't already
+    have a response recorded. Returns count of rows updated.
+    """
+    try:
+        msg_log = sheets.sh.worksheet(config.TAB_MESSAGE_LOG).get_all_records()
+    except Exception:
+        return 0
+
+    pending = [
+        r for r in msg_log
+        if str(r.get("Message Type", "")).startswith("post_comp_")
+        and str(r.get("Room ID", "")).strip()
+    ]
+    if not pending:
+        return 0
+
+    try:
+        ws = sheets.sh.worksheet(config.TAB_COMPETITIONS)
+        all_values = ws.get_all_values()
+    except Exception:
+        return 0
+
+    if not all_values:
+        return 0
+
+    comp_header = all_values[0]
+    if "Athlete Name" not in comp_header:
+        return 0
+
+    name_col = comp_header.index("Athlete Name")
+    date_col = comp_header.index("Date") if "Date" in comp_header else None
+
+    if "Post-comp Response" not in comp_header:
+        resp_col = len(comp_header)
+        if not config.DRY_RUN:
+            ws.update_cell(1, resp_col + 1, "Post-comp Response")
+        comp_header.append("Post-comp Response")
+        for row_vals in all_values[1:]:
+            while len(row_vals) < len(comp_header):
+                row_vals.append("")
+    else:
+        resp_col = comp_header.index("Post-comp Response")
+
+    import datetime as _dt5
+    captured = 0
+
+    for pm in pending:
+        nm = str(pm.get("Athlete Name", "")).strip()
+        room_id = str(pm.get("Room ID", "")).strip()
+        send_date = str(pm.get("Date", "")).strip()
+        if not nm or not room_id or not send_date:
+            continue
+        try:
+            send_dt = _dt5.date.fromisoformat(send_date)
+        except (ValueError, TypeError):
+            continue
+        if (TODAY - send_dt).days > 45:
+            continue
+
+        try:
+            messages = fitr.chat_messages(room_id, max_messages=25)
+        except Exception:
+            continue
+
+        replies = [
+            str(m.get("text", "")).strip()
+            for m in messages
+            if not m.get("is_mine")
+            and str(m.get("created_at", ""))[:10] >= send_date
+            and str(m.get("text", "")).strip()
+        ]
+        if not replies:
+            continue
+
+        response_text = "\n".join(reversed(replies))
+
+        for row_i, row in enumerate(all_values[1:], start=2):
+            if name_col >= len(row) or str(row[name_col]).strip() != nm:
+                continue
+            if resp_col < len(row) and str(row[resp_col]).strip():
+                continue  # already captured
+            if date_col is not None and date_col < len(row):
+                row_date_str = str(row[date_col]).strip()
+                row_date = None
+                for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%b-%Y", "%d %b %Y"):
+                    try:
+                        row_date = _dt5.datetime.strptime(row_date_str, fmt).date()
+                        break
+                    except Exception:
+                        continue
+                if row_date and abs((row_date - send_dt).days) > 10:
+                    continue  # date mismatch — different competition
+            if config.DRY_RUN:
+                print(f"[DRY_RUN] {nm}: would capture post-comp response ({len(replies)} msg(s))")
+            else:
+                ws.update_cell(row_i, resp_col + 1, response_text)
+            captured += 1
+            break
+
+    return captured
+
+
 # --------------------------------------------------------------------- driver
 def main():
     if not config.SHEET_ID:
@@ -1224,6 +1329,11 @@ def main():
             print(f"  ! Comp result message failed for {nm}: {exc}")
     if comp_result_msgs_sent:
         print(f"Competition result messages sent: {comp_result_msgs_sent}")
+
+    # ---- capture athlete replies to post-comp messages ----
+    post_comp_replies = capture_postcomp_responses(fitr, sheets, TODAY)
+    if post_comp_replies:
+        print(f"Post-competition responses captured: {post_comp_replies}")
 
     # ---- weekly athlete progress emails ----
     archetype_rows = sheets.load_archetype_assessments()

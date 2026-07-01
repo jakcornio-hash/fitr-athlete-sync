@@ -136,7 +136,7 @@ class SheetsClient:
 
     # ---------------------------------------------------------- competitions
     TAB_COMPETITIONS = config.TAB_COMPETITIONS
-    _COMP_HEADERS = ["Athlete Name", "Competition Name", "Date", "Type", "Notes", "Synced At", "Result"]
+    _COMP_HEADERS = ["Athlete Name", "Competition Name", "Date", "Type", "Notes", "Synced At", "Result", "Post-comp Response"]
 
     def load_competitions(self):
         """Return all rows from Competitions tab, or [] if not yet created."""

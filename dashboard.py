@@ -238,6 +238,20 @@ def _load_recovery_all_cached():
         return {}
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _get_fitr_room_ids():
+    """Return {athlete_name: room_id} from Fitr chat rooms. Cached 1hr."""
+    try:
+        rooms = get_fitr().chat_rooms()
+        return {
+            (room.get("opponent") or {}).get("full_name", "").strip(): room["id"]
+            for room in rooms
+            if room.get("id") and (room.get("opponent") or {}).get("full_name", "").strip()
+        }
+    except Exception:
+        return {}
+
+
 @st.cache_resource(show_spinner="Connecting to Fitr…")
 def get_fitr():
     """Authenticated FitrClient using Streamlit secrets (or config env vars)."""
@@ -1295,9 +1309,18 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
             room_id = str(athlete_draft.get("Room ID", "")).strip()
             st.code(draft_text, language=None)
             fitr_messaging_on = st.session_state.get("fitr_messaging_on", False)
+            _per_draft_key = f"fitr_allow_draft_{name}"
+            if fitr_messaging_on and room_id:
+                fitr_this_athlete = st.toggle(
+                    f"Allow send to {name.split()[0]}",
+                    key=_per_draft_key,
+                    help="Per-athlete safety switch — enable once per session before the Send button appears.",
+                )
+            else:
+                fitr_this_athlete = False
             d_col1, d_col2 = st.columns(2)
             with d_col1:
-                if fitr_messaging_on and room_id:
+                if fitr_this_athlete and room_id:
                     if st.button("🚀 Send & Clear", key=f"draft_send_{name}", type="primary"):
                         try:
                             fitr_client = get_fitr()
@@ -1307,6 +1330,8 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
                             st.cache_data.clear()
                         except Exception as exc:
                             st.error(f"Send failed: {exc}")
+                elif fitr_messaging_on:
+                    st.caption(f"⬆️ Enable the toggle above to send to {name.split()[0]}.")
                 else:
                     st.caption("🔴 Toggle Fitr messaging ON in the sidebar to send directly.")
             with d_col2:
@@ -1718,7 +1743,7 @@ def page_trends(pr_records, athletes):
         st.caption("Not enough data yet — need cohorts of ≥2 athletes with 90+ days of history.")
 
 
-def page_recovery(rec_by_name):
+def page_recovery(rec_by_name, pr_records=None):
     if not rec_by_name:
         if not config.RECOVERY_SHEET_ID:
             st.info("Recovery sheet not configured (RECOVERY_SHEET_ID not set).")
@@ -1762,6 +1787,120 @@ def page_recovery(rec_by_name):
     styled = styled.map(lambda v: _colour(v, "Motivation"), subset=["Motivation"])
 
     st.dataframe(styled, width='stretch', hide_index=True)
+
+    # ── Pattern insights ───────────────────────────────────────────────────────
+    rec_all_by_email = _load_recovery_all_cached()
+    if not rec_all_by_email:
+        return
+
+    # Email → athlete name mapping
+    email_to_name = {}
+    if pr_records:
+        for _r in pr_records:
+            _nm = str(_r.get("Athlete Name", "")).strip()
+            _em = str(_r.get("Email", "")).strip().lower()
+            if _nm and _em:
+                email_to_name[_em] = _nm
+
+    all_subs = []
+    import datetime as _dt6
+    for _email, _rows in rec_all_by_email.items():
+        _nm = email_to_name.get(_email.lower())
+        if not _nm:
+            continue
+        for _row in _rows:
+            _ts = str(_row.get("Submitted At", "")).strip()
+            try:
+                _d = _dt6.date.fromisoformat(_ts[:10])
+                _day = _d.strftime("%A")
+            except Exception:
+                continue
+            try:
+                _sor = float(str(_row.get("Soreness", "")).strip())
+                _str = float(str(_row.get("Stress", "")).strip())
+                _mot = float(str(_row.get("Motivation", "")).strip())
+                _score = round((10 - _sor + 10 - _str + _mot) / 3, 2)
+            except (ValueError, TypeError):
+                continue
+            _prog = str(_row.get(config.RECOVERY_PROGRAMME_COL, "")).strip()
+            all_subs.append({
+                "Athlete": _nm, "Date": _d.isoformat(), "Day": _day,
+                "Score": _score, "Soreness": _sor, "Stress": _str,
+                "Motivation": _mot, "Programme": _prog or "—",
+            })
+
+    if not all_subs:
+        return
+
+    subs_df = pd.DataFrame(all_subs)
+    subs_df["Date"] = pd.to_datetime(subs_df["Date"])
+
+    st.divider()
+    _DOW = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    st.markdown("**📅 Recovery by Day of Week** *(squad average — 10 = perfect readiness)*")
+    dow = (
+        subs_df.groupby("Day")["Score"]
+        .mean()
+        .reindex(_DOW)
+        .dropna()
+        .reset_index()
+        .rename(columns={"Score": "Avg Score"})
+    )
+    st.altair_chart(
+        alt.Chart(dow)
+        .mark_bar()
+        .encode(
+            x=alt.X("Day:N", sort=_DOW, title=None),
+            y=alt.Y("Avg Score:Q", scale=alt.Scale(domain=[0, 10]), title="Avg Readiness"),
+            color=alt.Color("Avg Score:Q",
+                            scale=alt.Scale(scheme="redyellowgreen", domain=[0, 10]),
+                            legend=None),
+            tooltip=["Day:N", alt.Tooltip("Avg Score:Q", format=".1f")],
+        ),
+        width="stretch",
+    )
+
+    four_weeks_ago = TODAY - dt.timedelta(weeks=4)
+    recent = subs_df[subs_df["Date"].dt.date >= four_weeks_ago].copy()
+    if not recent.empty and len(recent["Athlete"].unique()) >= 2:
+        st.markdown("**📈 Individual Readiness Trend — last 4 weeks**")
+        st.altair_chart(
+            alt.Chart(recent)
+            .mark_line(point=True, opacity=0.75)
+            .encode(
+                x=alt.X("Date:T", title="Date"),
+                y=alt.Y("Score:Q", scale=alt.Scale(domain=[0, 10]), title="Readiness"),
+                color=alt.Color("Athlete:N", legend=alt.Legend(title="Athlete")),
+                tooltip=["Athlete:N", "Date:T",
+                         alt.Tooltip("Score:Q", format=".1f"),
+                         "Soreness:Q", "Stress:Q", "Motivation:Q"],
+            ),
+            width="stretch",
+        )
+
+    prog_df = subs_df[subs_df["Programme"] != "—"]
+    if not prog_df.empty:
+        st.markdown("**📊 Recovery by Programme** *(average across all submissions)*")
+        prog_avg = (
+            prog_df.groupby("Programme")["Score"]
+            .mean()
+            .reset_index()
+            .rename(columns={"Score": "Avg Score"})
+            .sort_values("Avg Score")
+        )
+        st.altair_chart(
+            alt.Chart(prog_avg)
+            .mark_bar()
+            .encode(
+                y=alt.Y("Programme:N", sort=None, title=None),
+                x=alt.X("Avg Score:Q", scale=alt.Scale(domain=[0, 10]), title="Avg Readiness"),
+                color=alt.Color("Avg Score:Q",
+                                scale=alt.Scale(scheme="redyellowgreen", domain=[0, 10]),
+                                legend=None),
+                tooltip=["Programme:N", alt.Tooltip("Avg Score:Q", format=".1f")],
+            ),
+            width="stretch",
+        )
 
 
 _PHASE_EMOJI = {
@@ -1946,6 +2085,32 @@ def page_competitions(comp_results, athletes, data_records, competition_rows=Non
                     comp_dt = _parse_date(str(row.get("Date", "")).strip())
                     st.caption(f"{athlete_nm} — {comp_nm} ({comp_dt.strftime('%d %b %Y') if comp_dt else '?'})")
                 st.info("Open an athlete's profile to log their result.")
+
+    # Post-competition responses captured from Fitr chat
+    if competition_rows:
+        feedback_rows = [
+            row for row in competition_rows
+            if str(row.get("Post-comp Response", "")).strip()
+            and str(row.get("Athlete Name", "")).strip() in all_names
+        ]
+        if feedback_rows:
+            with st.expander(
+                f"📬 {len(feedback_rows)} post-competition response{'s' if len(feedback_rows) > 1 else ''} received",
+                expanded=True,
+            ):
+                for _row in sorted(feedback_rows, key=lambda r: r.get("Date", ""), reverse=True):
+                    _nm = str(_row.get("Athlete Name", "")).strip()
+                    _comp = str(_row.get("Competition Name", "")).strip()
+                    _response = str(_row.get("Post-comp Response", "")).strip()
+                    _result = str(_row.get("Result", "")).strip()
+                    _comp_dt = _parse_date(str(_row.get("Date", "")).strip())
+                    _date_str = _comp_dt.strftime("%d %b") if _comp_dt else "?"
+                    _badge = "✅ result logged" if _result else "⚠️ result pending"
+                    st.markdown(f"**{_nm} — {_comp}** ({_date_str}) · {_badge}")
+                    st.markdown(_response)
+                    if not _result:
+                        st.caption("↑ Read the response above and enter the result in the Competitions sheet.")
+                    st.divider()
 
     # Athletes without any competition planned
     with_comp = {c["name"] for c in comp_results}
@@ -2139,6 +2304,29 @@ def _outreach_send_buttons(msg):
         )
     with c2:
         st.link_button("💬 WhatsApp", f"https://wa.me/?text={encoded}")
+
+
+def _fitr_send_widget(name, msg, idx=0):
+    """Per-athlete Fitr send toggle + button. Global toggle must be ON first."""
+    if not st.session_state.get("fitr_messaging_on", False):
+        return
+    per_key = f"fitr_allow_outreach_{name}"
+    allowed = st.toggle(
+        f"Allow direct Fitr send to {name.split()[0]}",
+        key=per_key,
+        help="Per-athlete safety switch — must enable each session before the Send button appears.",
+    )
+    if allowed:
+        if st.button("🚀 Send via Fitr", key=f"fitr_send_outreach_{name}_{idx}", type="primary"):
+            try:
+                room_id = _get_fitr_room_ids().get(name)
+                if room_id:
+                    get_fitr().send_chat_message(room_id, msg)
+                    st.success(f"✅ Sent to {name.split()[0]} in Fitr!")
+                else:
+                    st.error(f"No Fitr room found for {name} — check they're in your Fitr inbox.")
+            except Exception as _exc:
+                st.error(f"Send failed: {_exc}")
 
 
 def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
@@ -2445,7 +2633,7 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
             st.caption("No archetype assessed yet — showing generic message.")
 
         athlete_rows = [r for r in rows if r["Athlete"] == sel]
-        for r in athlete_rows:
+        for i, r in enumerate(athlete_rows):
             reason_type = r.get("_reason_type")
             ctx = r.get("_ctx", {})
             comp_msg = r.get("_comp_msg")
@@ -2455,6 +2643,7 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
                     # Competition phase message — already fully built by analytics
                     st.code(comp_msg, language=None)
                     _outreach_send_buttons(comp_msg)
+                    _fitr_send_widget(sel, comp_msg, idx=i)
                 elif reason_type:
                     msg = msg_tmpl.generate_message(sel, reason_type, ctx, arch_id)
                     st.code(msg, language=None)
@@ -2463,6 +2652,7 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
                         coach_hints = (arch_def.get("coach", {}).get("coach_toward", []))[:2]
                         if coach_hints:
                             st.caption("Coaching cues for this archetype: " + " · ".join(coach_hints))
+                    _fitr_send_widget(sel, msg, idx=i)
                 else:
                     st.caption("No message template for this item.")
 
@@ -4131,8 +4321,9 @@ def main():
             value=st.session_state.get("fitr_messaging_on", False),
             key="fitr_messaging_on",
             help=(
-                "When ON, the Send button on AI draft replies posts directly to the athlete "
-                "in Fitr. Toggle OFF to use copy-only mode (no messages sent)."
+                "When ON, enables Fitr send buttons on AI draft replies and outreach messages. "
+                "Each athlete also has a per-athlete safety toggle that must be enabled separately. "
+                "Toggle OFF to use copy-only mode (no messages sent)."
             ),
         )
         if fitr_on:
@@ -4206,7 +4397,7 @@ def main():
     with tabs[9]:
         page_leaderboard(pr_records, athletes)
     with tabs[10]:
-        page_recovery(rec_by_name)
+        page_recovery(rec_by_name, pr_records=pr_records)
     with tabs[11]:
         page_crm(athletes, engagement_results, data_records, pr_records=pr_records)
     with tabs[12]:
