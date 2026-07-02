@@ -77,18 +77,20 @@ def _goal_achieved(goal_text, bench_name, value_str):
 def _fmt_value(v):
     """Pretty value+symbol from a Fitr last_value dict."""
     val = v.get("value")
-    sym = (v.get("symbol") or v.get("units") or "").strip()
+    sym = (v.get("symbol") or "").strip()
+    units = (v.get("units") or "").strip().lower()
     if val is None:
         return ""
-    # Convert seconds-based benchmarks to mm:ss (or h:mm:ss) for readability.
-    if sym.lower() in ("secs", "sec", "seconds", "s") and isinstance(val, (int, float)) and val >= 0:
+    # Fitr returns time benchmarks with symbol='mm:ss' and units='second' (value in seconds).
+    is_time = sym.lower() in ("secs", "sec", "seconds", "s", "mm:ss") or units in ("second", "seconds")
+    if is_time and isinstance(val, (int, float)) and val >= 0:
         total = int(round(val))
         mins, secs = divmod(total, 60)
         if mins >= 60:
             hrs, mins = divmod(mins, 60)
             return f"{hrs}:{mins:02d}:{secs:02d}"
         return f"{mins}:{secs:02d}"
-    return f"{val} {sym}".strip()
+    return f"{val} {sym}".strip() if sym else str(val)
 
 
 # ----------------------------------------------------------------- load sheet
@@ -292,8 +294,20 @@ def sync_competition_from_typeform(sheets, email_by_name):
         pass
 
     email_to_name = {v.lower(): k for k, v in merged_email_by_name.items()}
-    # All known athlete names (for name-based fallback)
+    # All known athlete names — start from email map, then supplement with
+    # every name in Benchmarks (catches athletes who have no email in _DATA)
     all_known_names = list(email_to_name.values())
+    try:
+        bm_values = sheets.read_values(config.TAB_BENCHMARKS)
+        if bm_values:
+            bm_header = bm_values[0]
+            for r in bm_values[1:]:
+                rec = dict(zip(bm_header, r))
+                nm = (rec.get("Name") or "").strip()
+                if nm and nm not in all_known_names:
+                    all_known_names.append(nm)
+    except Exception:
+        pass
 
     try:
         rows = sheets.read_external_records(config.COMP_FORM_SHEET_ID, config.COMP_FORM_TAB)
@@ -324,17 +338,26 @@ def sync_competition_from_typeform(sheets, email_by_name):
     added = 0
     skipped_unresolved = []
     for row in rows:
-        # Resolve athlete: email first, then exact name, then case-insensitive name
+        # Resolve athlete: email → exact name → fuzzy name
+        import difflib as _difflib
         email = str(row.get(config.COMP_FORM_EMAIL_COL, "")).strip().lower()
         nm = email_to_name.get(email)
+        raw_name = str(row.get(config.COMP_FORM_FULL_NAME_COL, "")).strip()
         if not nm:
-            raw_name = str(row.get(config.COMP_FORM_FULL_NAME_COL, "")).strip()
             for known in all_known_names:
                 if known.lower() == raw_name.lower():
                     nm = known
                     break
+        if not nm and raw_name:
+            matches = _difflib.get_close_matches(
+                raw_name.lower(),
+                [k.lower() for k in all_known_names],
+                n=1, cutoff=0.6,
+            )
+            if matches:
+                nm = next(k for k in all_known_names if k.lower() == matches[0])
+                print(f"  [comp form] fuzzy matched '{raw_name}' → '{nm}'")
         if not nm:
-            raw_name = str(row.get(config.COMP_FORM_FULL_NAME_COL, "")).strip()
             skipped_unresolved.append(raw_name or f"<email:{email}>")
             continue
 
@@ -567,7 +590,8 @@ def _load_crm_name_to_programme(sheets):
 
 
 def auto_onboard_new_athletes(sheets, rooms, fitr=None, room_id_by_name=None,
-                               messages_sent_log=None, dashboard_base_url=None):
+                               messages_sent_log=None, dashboard_base_url=None,
+                               bespoke_names=None):
     """Detect athletes present in Fitr chat rooms but missing from Benchmarks.
 
     Cross-references each new opponent against the CRM. Exact name matches are
@@ -670,19 +694,22 @@ def auto_onboard_new_athletes(sheets, rooms, fitr=None, room_id_by_name=None,
     if fitr and room_id_by_name and not config.DRY_RUN:
         import time as _time
         for name, fid, prog in to_onboard:
+            if bespoke_names and name in bespoke_names:
+                print(f"  [auto-onboard] Skipping Fitr message for bespoke athlete: {name!r}")
+                continue
             room_id = room_id_by_name.get(name)
             if not room_id:
                 continue
             first = name.split()[0]
             intake_msg = (
-                f"Hi {first}! 👋 You've been added to the JST Compete coaching system — "
-                f"really looking forward to working with you.\n\n"
-                f"Two quick things to get us started:\n\n"
-                f"1️⃣ Fill in your athlete intake form — takes about 3 minutes and gives me "
-                f"everything I need to personalise your programming:\n"
+                f"Hey {first}, you've been added to the JST Compete coaching system — good to have you in.\n\n"
+                f"Two things to get started:\n\n"
+                f"1. Athlete intake form (3 minutes — tells me everything I need to set your programming up properly):\n"
                 f"https://jstcompete.typeform.com/to/Q1tL7MmR\n\n"
-                f"2️⃣ Submit your first weekly recovery check-in (once you're training) at the same link.\n\n"
-                f"Message me here anytime. Let's get to work! 🔥"
+                f"2. Weekly recovery check-in — same link. Once you're training, do this each week. "
+                f"It takes 2 minutes and is how I manage your load week to week.\n\n"
+                f"Message me here anytime.\n\n"
+                f"Jak"
             )
             try:
                 fitr.send_chat_message(room_id, intake_msg)
@@ -804,6 +831,98 @@ def capture_postcomp_responses(fitr, sheets, TODAY):
     return captured
 
 
+# --------------------------------------------------------- weekly digest writer
+def generate_weekly_athlete_digests(sheets, athletes, pr_records, rec_by_name, data_by_name_all):
+    """Generate AI coaching insights for all athletes and prepend to Coaching Notes.
+
+    Runs on Monday or on first-ever deployment (no existing digests).
+    Guards per-athlete: skips if a weekly_digest note already exists since the current
+    Monday (Mon-Sun window), so re-runs on the same day are safe.
+    Returns count of athletes whose digest was written.
+    """
+    import re as _re
+    import datetime as _dtw
+
+    this_monday = TODAY - _dtw.timedelta(days=TODAY.weekday())
+    is_monday = TODAY.weekday() == 0
+    fourteen_days_ago = TODAY - _dtw.timedelta(days=14)
+    digest_pattern = _re.compile(r'\[(\d{4}-\d{2}-\d{2}) — weekly_digest\]')
+
+    pr_by_name = {}
+    for r in pr_records:
+        nm = str(r.get("Athlete Name", "")).strip()
+        d_str = str(r.get("Date", "")).strip()
+        bench = str(r.get("Benchmark Name", "")).strip()
+        val = str(r.get("Value", "")).strip()
+        prev_val = str(r.get("Previous Value", "")).strip()
+        if nm and d_str and bench:
+            pr_by_name.setdefault(nm, []).append((d_str, bench, val, prev_val))
+
+    note_lines = {}
+    for a in athletes:
+        nm = a["name"]
+        profile = data_by_name_all.get(nm, {})
+        existing_notes = str(profile.get("Coaching Notes", "")).strip()
+
+        has_any_digest = bool(digest_pattern.search(existing_notes))
+        if not is_monday and has_any_digest:
+            continue  # only run on Mondays (or first-ever)
+
+        recent_digest_dates = [
+            _dtw.date.fromisoformat(m.group(1))
+            for m in digest_pattern.finditer(existing_notes)
+            if _dtw.date.fromisoformat(m.group(1)) >= this_monday
+        ]
+        if recent_digest_dates:
+            continue  # already generated this week
+
+        recent_prs = sorted(
+            [(d, b, v, pv) for d, b, v, pv in pr_by_name.get(nm, [])
+             if d >= fourteen_days_ago.isoformat()],
+            reverse=True,
+        )
+        pr_lines = [
+            f"{d}: {b} — {v}" + (f" (prev: {pv})" if pv else "")
+            for d, b, v, pv in recent_prs
+        ]
+
+        rec_row = rec_by_name.get(nm, {})
+        rec_lines = []
+        if rec_row:
+            submitted = str(rec_row.get("Submitted At", "")).strip()
+            sor = str(rec_row.get("Soreness", "")).strip()
+            st_ = str(rec_row.get("Stress", "")).strip()
+            mo = str(rec_row.get("Motivation", "")).strip()
+            if submitted:
+                try:
+                    s_f, st_f, mo_f = float(sor), float(st_), float(mo)
+                    score = (10 - s_f + 10 - st_f + mo_f) / 3
+                    rec_lines.append(
+                        f"{submitted[:10]}: Soreness {sor}, Stress {st_}, Motivation {mo} "
+                        f"(composite: {score:.1f}/10)"
+                    )
+                except (ValueError, TypeError):
+                    pass
+
+        if not pr_lines and not rec_lines:
+            continue  # no data to digest
+
+        goal = str(profile.get("North Star Goal", "")).strip()
+        programme = str(profile.get("Programme", "")).strip()
+
+        insight = summariser.weekly_athlete_insight(nm, pr_lines, rec_lines, goal, programme)
+        if insight:
+            note_lines[nm] = f"[{TODAY.isoformat()} — weekly_digest] {insight}"
+
+    if note_lines and not config.DRY_RUN:
+        append_coaching_notes(sheets, note_lines)
+    elif note_lines and config.DRY_RUN:
+        for nm, line in note_lines.items():
+            print(f"[DRY_RUN] Weekly digest for {nm}: {line[:100]}…")
+
+    return len(note_lines)
+
+
 # --------------------------------------------------------------------- driver
 def main():
     if not config.SHEET_ID:
@@ -817,7 +936,15 @@ def main():
 
     athletes = load_athletes(sheets)
     print(f"Athletes with Fitr IDs: {len(athletes)}")
+
+    if config.TEST_ATHLETES:
+        athletes = [a for a in athletes if a["name"] in config.TEST_ATHLETES]
+        print(f"TEST_ATHLETES filter active — restricted to: {[a['name'] for a in athletes]}")
+
     existing_keys, email_by_name, prev_lookup = load_existing_prlog(sheets)
+
+    if config.TEST_ATHLETES:
+        email_by_name = {k: v for k, v in email_by_name.items() if k in config.TEST_ATHLETES}
 
     bench_rows, bench_notes, scraped_rows = collect_benchmarks(
         fitr, athletes, existing_keys, email_by_name, prev_lookup
@@ -884,6 +1011,12 @@ def main():
         nm: str(r.get("Programme", "")).strip()
         for nm, r in data_by_name_all.items()
     }
+    bespoke_names = {
+        nm for nm, r in data_by_name_all.items()
+        if str(r.get("Subscription Plan", "")).strip().lower() == "bespoke"
+    }
+    if bespoke_names:
+        print(f"Bespoke athletes (automated messages suppressed): {len(bespoke_names)}")
 
     # ---- auto-congratulations + goal celebrations via Fitr chat ----
     if bench_rows and not config.DRY_RUN:
@@ -892,6 +1025,8 @@ def main():
             if len(row) < 5:
                 continue
             name = row[1]
+            if name in bespoke_names:
+                continue
             bench = row[3]
             value = row[4]
             prev = row[6] if len(row) > 6 else ""
@@ -902,16 +1037,16 @@ def main():
             goal = goals_by_name.get(name, "")
             if goal and _goal_achieved(goal, bench, value):
                 msg = (
-                    f"🎉 {first}!!! You just hit your North Star Goal — "
-                    f"{bench}: {value}!\n\n"
-                    f"This is exactly what we've been building towards. "
-                    f"Massive achievement — so proud of what you've done. 🏆\n\n"
-                    f"Time to set the next one!"
+                    f"Hey {first} — you just hit your North Star Goal. "
+                    f"{bench}: {value}. That's what we've been building towards.\n\n"
+                    f"Really proud of what you've put in to get there. "
+                    f"Time to set the next one.\n\n"
+                    f"Jak"
                 )
             elif prev and prev not in ("", "first entry"):
-                msg = f"Nice work {first} 💪 {bench}: {value} (was {prev}). Keep pushing!"
+                msg = f"Hey {first} — {bench}: {value}. New PB (was {prev}). Good work.\n\nJak"
             else:
-                msg = f"Great first result {first} 💪 {bench}: {value}. Looking forward to tracking your progress!"
+                msg = f"Hey {first} — first result in for {bench}: {value}. Good start — we'll build from there.\n\nJak"
             try:
                 fitr.send_chat_message(room_id, msg)
                 congrats_sent += 1
@@ -973,6 +1108,13 @@ def main():
     consistency_wins = analytics.consistency_check(pr_records, athletes)
     rec_alert_rows = analytics.recovery_alerts(rec_by_name)
 
+    # ---- weekly AI coaching digest per athlete ----
+    digests_written = generate_weekly_athlete_digests(
+        sheets, athletes, pr_records, rec_by_name, data_by_name_all
+    )
+    if digests_written:
+        print(f"Weekly athlete coaching digests written: {digests_written}")
+
     flagged_count = sum(1 for e in engagement_results if e["flag"])
     concern_count = sum(
         1 for signals in trend_results.values()
@@ -1009,6 +1151,8 @@ def main():
         offboarding_sent = 0
         for snap in churn_snapshot_rows:
             nm = snap["Athlete Name"]
+            if nm in bespoke_names:
+                continue
             if snap["Score"] < 60:
                 continue
             e = next((x for x in engagement_results if x["name"] == nm), {})
@@ -1019,11 +1163,11 @@ def main():
                 continue
             first = nm.split()[0]
             msg = (
-                f"Hey {first} 👋 It's been a little while since I've seen you in the logs — "
-                f"just checking in to see how you're getting on.\n\n"
-                f"Life gets busy, totally get it. If there's anything going on or you want "
-                f"to adjust your programme, just say the word — I'm here for you whenever "
-                f"you're ready to get back at it. 💪"
+                f"Hey {first} — it's been a while since I've seen you in the logs. "
+                f"Hope everything's okay.\n\n"
+                f"If life's got in the way or you want to adjust something with the programme, "
+                f"just drop me a message. No pressure.\n\n"
+                f"Jak"
             )
             try:
                 fitr.send_chat_message(room_id, msg)
@@ -1071,7 +1215,7 @@ def main():
     # ---- auto-onboard new bespoke athletes from chat rooms ----
     onboarded = auto_onboard_new_athletes(
         sheets, rooms, fitr=fitr, room_id_by_name=room_id_by_name,
-        messages_sent_log=messages_sent_log,
+        messages_sent_log=messages_sent_log, bespoke_names=bespoke_names,
     )
     if onboarded:
         print(f"New bespoke athletes auto-onboarded: {onboarded}")
@@ -1094,6 +1238,8 @@ def main():
     anniversaries_sent = 0
     for a in athletes:
         nm = a["name"]
+        if nm in bespoke_names:
+            continue
         first_log = first_log_by_name.get(nm)
         if not first_log:
             continue
@@ -1106,9 +1252,10 @@ def main():
             continue
         first = nm.split()[0]
         msg = (
-            f"Happy {milestone_label} training anniversary {first}! 🎉 "
-            f"You've been logging consistently since {first_log.strftime('%d %b %Y')} — "
-            f"that dedication is what makes the difference. Keep going!"
+            f"Hey {first} — {milestone_label} since your first log on "
+            f"{first_log.strftime('%d %b %Y')}. "
+            f"That consistency is exactly what makes the difference.\n\n"
+            f"Jak"
         )
         try:
             fitr.send_chat_message(room_id, msg)
@@ -1125,6 +1272,8 @@ def main():
     onboarding_sent = 0
     for a in athletes:
         nm = a["name"]
+        if nm in bespoke_names:
+            continue
         first_log = first_log_by_name.get(nm)
         if not first_log or first_log != TODAY:
             continue
@@ -1133,13 +1282,14 @@ def main():
             continue
         first = nm.split()[0]
         msg = (
-            f"Welcome to JST Compete, {first}! 👋 Your first log is in — you're officially on the board.\n\n"
-            f"Here's how to get the most from your coaching:\n"
-            f"1️⃣ Log every session as soon as you finish — 2 mins of data makes coaching infinitely better\n"
-            f"2️⃣ Submit your weekly recovery survey here: https://jstcompete.typeform.com/to/Q1tL7MmR\n"
-            f"   (takes 2 mins, helps me adjust your training load week to week)\n"
-            f"3️⃣ Message me here anytime — I'm watching your progress and will be in touch regularly\n\n"
-            f"Let's go! 🔥"
+            f"Hey {first} — first log is in. Good start.\n\n"
+            f"Two things worth doing from day one:\n\n"
+            f"1. Log every session as soon as you finish — even a quick note helps. "
+            f"Two minutes of data makes coaching a lot better.\n"
+            f"2. Weekly recovery check-in: https://jstcompete.typeform.com/to/Q1tL7MmR — "
+            f"takes 2 minutes, helps me manage your training load week to week.\n\n"
+            f"Message me here anytime.\n\n"
+            f"Jak"
         )
         try:
             fitr.send_chat_message(room_id, msg)
@@ -1156,32 +1306,36 @@ def main():
     # A comp milestones: send once on exact day (sync runs daily)
     _COMP_MSG_DAYS = {
         70: ("10 weeks out",
-             "Your 10-week competition prep block starts {today}. "
-             "Everything from here points to {comp} — I'll be switching your programme over. "
-             "Trust the process and let's build something special. 🏆"),
+             "Hey {first} — your 10-week competition prep block starts {today}. "
+             "Everything from here is pointed at {comp}. "
+             "I'll be switching your programme over — trust the process.\n\n"
+             "Jak"),
         21: ("3 weeks out",
-             "Three weeks to {comp}, {first}! 🗓️ "
-             "We're in the final stretch now — keep the quality high and manage your recovery. "
-             "Any questions about your prep, just ask."),
+             "Hey {first} — three weeks to {comp}. "
+             "We're in the final stretch. Keep the quality high and manage your recovery. "
+             "Any questions about your prep, just message.\n\n"
+             "Jak"),
         7:  ("race week",
-             "Race week is here, {first}! 🔥 "
-             "{comp} is 7 days away. "
+             "Hey {first} — {comp} is seven days away. "
              "Stick to the plan, trust your training, and stay sharp. "
-             "You've put the work in — now it's time to show it."),
+             "You've put the work in.\n\n"
+             "Jak"),
         1:  ("day before",
-             "Tomorrow is your day, {first}. 🏁 "
-             "{comp} — you're ready. "
-             "Good sleep tonight, good warm-up tomorrow, and go express what you've built. "
-             "We're behind you all the way. 💪"),
+             "Hey {first} — {comp} is tomorrow. You're ready. "
+             "Good sleep tonight, good warm-up in the morning, "
+             "and go show what you've built.\n\n"
+             "Jak"),
     }
     competition_rows = sheets.load_competitions()
     comp_msgs_sent = 0
     for row in competition_rows:
         nm = str(row.get("Athlete Name", "")).strip()
+        if not nm or nm in bespoke_names:
+            continue
         comp_nm = str(row.get("Competition Name", "")).strip() or "your competition"
         comp_type = str(row.get("Type", "A")).strip().upper()
         raw_date = str(row.get("Date", "")).strip()
-        if not nm or not raw_date:
+        if not raw_date:
             continue
         import datetime as _dt2
         comp_date = None
@@ -1236,10 +1390,12 @@ def main():
     post_comp_msgs_sent = 0
     for row in competition_rows:
         nm = str(row.get("Athlete Name", "")).strip()
+        if not nm or nm in bespoke_names:
+            continue
         comp_nm = str(row.get("Competition Name", "")).strip() or "your competition"
         comp_type = str(row.get("Type", "A")).strip().upper()
         raw_date = str(row.get("Date", "")).strip()
-        if not nm or not raw_date:
+        if not raw_date:
             continue
         import datetime as _dt4
         comp_date = None
@@ -1263,18 +1419,20 @@ def main():
         first = nm.split()[0]
         if comp_type in ("A", "B"):
             msg = (
-                f"Hey {first} — hope you're recovering well after {comp_nm}! 💪\n\n"
-                f"Would love to hear how it went. When you get a moment, can you share:\n"
-                f"1️⃣ What was your result / placing?\n"
-                f"2️⃣ What went well that you want to build on?\n"
-                f"3️⃣ What's one thing you'd do differently next time?\n"
-                f"4️⃣ How is your body feeling right now?\n\n"
-                f"Really proud of the work you put in to get here. 🏆"
+                f"Hey {first} — hope you're recovering well after {comp_nm}.\n\n"
+                f"When you get a chance, can you let me know:\n\n"
+                f"1. Your result / placing\n"
+                f"2. What went well — anything you want to build on\n"
+                f"3. One thing you'd do differently\n"
+                f"4. How your body's feeling right now\n\n"
+                f"Proud of what you put in to get there.\n\n"
+                f"Jak"
             )
         else:
             msg = (
-                f"Hey {first} — how did {comp_nm} go yesterday? "
-                f"Would love to hear your result and any thoughts from the day! 💪"
+                f"Hey {first} — how did {comp_nm} go? "
+                f"Would love to hear your result and any thoughts from the day.\n\n"
+                f"Jak"
             )
         try:
             fitr.send_chat_message(room_id, msg)
@@ -1292,9 +1450,11 @@ def main():
     comp_result_msgs_sent = 0
     for row in competition_rows:
         nm = str(row.get("Athlete Name", "")).strip()
+        if not nm or nm in bespoke_names:
+            continue
         result = str(row.get("Result", "")).strip()
         comp_nm = str(row.get("Competition Name", "")).strip()
-        if not nm or not result or not comp_nm:
+        if not result or not comp_nm:
             continue
         raw_date = str(row.get("Date", "")).strip()
         comp_date = None
@@ -1315,9 +1475,10 @@ def main():
             continue
         first = nm.split()[0]
         msg = (
-            f"Well done on {comp_nm}, {first}! 🏆 Result: {result}. "
-            f"Really proud of the effort you put in — let's debrief when you're ready "
-            f"and use this to plan the next block. 💪"
+            f"Hey {first} — well done at {comp_nm}. Result: {result}. "
+            f"Really proud of what you put in. "
+            f"Let's debrief when you're ready and use it to plan the next block.\n\n"
+            f"Jak"
         )
         try:
             fitr.send_chat_message(room_id, msg)
@@ -1342,8 +1503,9 @@ def main():
         for r in archetype_rows
         if str(r.get("Athlete Name", "")).strip()
     }
+    non_bespoke_email_by_name = {k: v for k, v in email_by_name.items() if k not in bespoke_names}
     emails_sent = notifier.send_all_athlete_progress_emails(
-        bench_rows, consistency_wins, competition_rows, email_by_name,  # competition_rows already loaded above
+        bench_rows, consistency_wins, competition_rows, non_bespoke_email_by_name,
         archetype_by_name=archetype_by_name,
     )
     if emails_sent:
@@ -1351,7 +1513,15 @@ def main():
 
     # ---- monthly athlete reports (fires on the 1st of each month) ----
     if TODAY.day == 1:
-        monthly_sent = notifier.send_monthly_athlete_reports(data_recs, email_by_name, pr_records)
+        monthly_data_recs = (
+            [r for r in data_recs if str(r.get("Full Name", "")).strip() in config.TEST_ATHLETES]
+            if config.TEST_ATHLETES else data_recs
+        )
+        monthly_data_recs = [
+            r for r in monthly_data_recs
+            if str(r.get("Full Name", "")).strip() not in bespoke_names
+        ]
+        monthly_sent = notifier.send_monthly_athlete_reports(monthly_data_recs, email_by_name, pr_records)
         if monthly_sent:
             print(f"Monthly athlete reports sent: {monthly_sent}")
 

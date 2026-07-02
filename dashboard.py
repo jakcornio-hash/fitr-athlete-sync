@@ -20,6 +20,7 @@ import config
 import message_templates as msg_tmpl
 import notifier
 import recovery as rec_mod
+import summariser
 
 _CHAT_DATE_RE = re.compile(r'\[(\d{4}-\d{2}-\d{2}) — chat\]')
 
@@ -352,7 +353,8 @@ def page_self_assess():
                     st.info(f"💡 **Tell your coach:** {tell}")
 
 
-def page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_wins, data_records=None):
+def page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_wins,
+                data_records=None, pr_records=None, athletes=None):
     flagged = [e for e in engagement_results if e["flag"]]
     concerns = [
         (athlete, s)
@@ -366,12 +368,84 @@ def page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_w
     def _prog(name):
         return str(data_by_name.get(name, {}).get("Programme", "")).strip()
 
+    # Multi-benchmark decline alerts
+    multi_decline = analytics.multi_benchmark_decline_alerts(trend_results, min_declining=3)
+
+    # Engagement momentum (early-warning before the 21d threshold)
+    momentum_alerts = []
+    if pr_records and athletes:
+        four_weeks_ago = TODAY - dt.timedelta(weeks=4)
+        week_sessions = {}
+        for r in pr_records:
+            nm = str(r.get("Athlete Name", "")).strip()
+            d = _parse_date(str(r.get("Date", "")))
+            if nm and d and d >= four_weeks_ago:
+                days_back = d.weekday()
+                ws = d - dt.timedelta(days=days_back)
+                week_sessions[(nm, ws)] = week_sessions.get((nm, ws), 0) + 1
+        athlete_weekly_avg = {}
+        for (nm, _ws), count in week_sessions.items():
+            athlete_weekly_avg[nm] = athlete_weekly_avg.get(nm, 0) + count / 4
+
+        try:
+            rec_all_ma = _load_recovery_all_cached()
+        except Exception:
+            rec_all_ma = {}
+
+        email_to_name_ma = {}
+        for r in pr_records:
+            nm = str(r.get("Athlete Name", "")).strip()
+            em = str(r.get("Email", "")).strip().lower()
+            if nm and em:
+                email_to_name_ma.setdefault(em, nm)
+
+        active_names = {a["name"] for a in athletes}
+        for e in engagement_results:
+            if e.get("flag"):
+                continue  # already in the main Inactive alert
+            nm = e["name"]
+            if nm not in active_names:
+                continue
+            days = e.get("days_since") or 0
+            reasons = []
+
+            if 10 <= days <= 27 and athlete_weekly_avg.get(nm, 0) >= 2.0:
+                reasons.append(
+                    f"{days}d since last log (usual: ~{athlete_weekly_avg[nm]:.1f}×/week)"
+                )
+
+            # Recovery downtrend: last 3 submissions all declining
+            athlete_email = next(
+                (em for em, n in email_to_name_ma.items() if n == nm), None
+            )
+            if athlete_email:
+                rec_history = rec_all_ma.get(athlete_email.lower(), [])
+                if len(rec_history) >= 3:
+                    last3 = sorted(rec_history, key=lambda r: str(r.get("Submitted At", "")))[-3:]
+                    scores = []
+                    for rr in last3:
+                        try:
+                            sv = float(str(rr.get("Soreness", "")).strip())
+                            stv = float(str(rr.get("Stress", "")).strip())
+                            mov = float(str(rr.get("Motivation", "")).strip())
+                            scores.append((10 - sv + 10 - stv + mov) / 3)
+                        except (ValueError, TypeError):
+                            break
+                    if len(scores) == 3 and scores[0] > scores[1] > scores[2]:
+                        reasons.append(
+                            f"Recovery declining 3 consecutive weeks (latest: {scores[-1]:.1f}/10)"
+                        )
+
+            if reasons:
+                momentum_alerts.append({"name": nm, "reasons": reasons})
+
     # Metric row
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("🔴 Recovery Flags", len(rec_alert_rows))
     c2.metric("⚠️ Inactive Athletes", len(flagged))
     c3.metric("📉 Performance Concerns", len(concerns))
     c4.metric("✅ Consistency Streaks", len(consistency_wins))
+    c5.metric("⚡ Multi-Decline", len(multi_decline))
 
     st.divider()
 
@@ -409,6 +483,43 @@ def page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_w
         st.dataframe(df, width='stretch', hide_index=True)
         st.write("")
 
+    if momentum_alerts:
+        st.subheader("⚡ Engagement Momentum — Early Warning")
+        st.caption(
+            "Athletes showing early disengagement signals before reaching the 21-day inactive threshold. "
+            "Act now before they go quiet."
+        )
+        mom_rows = []
+        for m in momentum_alerts:
+            prog = _prog(m["name"])
+            mom_rows.append({
+                "Athlete": m["name"],
+                "Signals": " · ".join(m["reasons"]),
+                "Programme": _prog_short(prog),
+                "Contact": _programme_contact(prog),
+            })
+        st.dataframe(pd.DataFrame(mom_rows), width='stretch', hide_index=True)
+        st.write("")
+
+    if multi_decline:
+        st.subheader("📉 Multi-Benchmark Decline")
+        st.caption(
+            "Athletes declining across 3+ benchmarks simultaneously — "
+            "possible overtraining, accumulated fatigue, or life stress. Stronger signal than any single decline."
+        )
+        md_rows = []
+        for nm, count, benches in multi_decline:
+            prog = _prog(nm)
+            md_rows.append({
+                "Athlete": nm,
+                "Declining": count,
+                "Benchmarks": ", ".join(benches[:5]),
+                "Programme": _prog_short(prog),
+                "Contact": _programme_contact(prog),
+            })
+        st.dataframe(pd.DataFrame(md_rows), width='stretch', hide_index=True)
+        st.write("")
+
     if concerns:
         st.subheader("📉 Performance Concerns")
         rows = []
@@ -429,7 +540,7 @@ def page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_w
         df = pd.DataFrame(consistency_wins, columns=["Athlete", "Consecutive Weeks"])
         st.dataframe(df, width='stretch', hide_index=True)
 
-    if not any([rec_alert_rows, flagged, concerns]):
+    if not any([rec_alert_rows, flagged, concerns, multi_decline, momentum_alerts]):
         st.success("Nothing to flag this week — all athletes on track.")
 
 
@@ -1142,7 +1253,7 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
     timeline = _parse_notes_timeline(notes_raw)
     st.markdown("**📝 Coaching Notes**")
     if timeline:
-        kind_icons = {"chat": "💬", "result": "🏆", "recovery": "💤"}
+        kind_icons = {"chat": "💬", "result": "🏆", "recovery": "💤", "weekly_digest": "🤖"}
         for entry in timeline:
             icon = kind_icons.get(entry["kind"], "📌")
             with st.expander(f"{icon} {entry['date']} — {entry['kind']}", expanded=False):
@@ -1172,6 +1283,122 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
                     st.cache_data.clear()
                 else:
                     st.warning("Note is empty.")
+
+    # ── Automated message history ─────────────────────────────────────────────
+    try:
+        all_msgs = _load_message_log_cached()
+        athlete_msgs = [
+            r for r in all_msgs
+            if str(r.get("Athlete Name", "")).strip() == name
+        ]
+        if athlete_msgs:
+            athlete_msgs.sort(key=lambda r: str(r.get("Date", "")), reverse=True)
+            _msg_type_labels = {
+                "congrats": "🏆 Congrats", "onboarding": "👋 Onboarding",
+                "anniversary": "🎉 Anniversary", "onboard_checklist": "👋 Onboarding",
+            }
+            with st.expander(f"📨 Message History ({len(athlete_msgs)} automated messages)", expanded=False):
+                msg_display = []
+                for m in athlete_msgs[:25]:
+                    mtype = str(m.get("Message Type", "")).strip()
+                    replied = str(m.get("Replied", "")).strip().lower()
+                    type_label = _msg_type_labels.get(mtype) or mtype.replace("_", " ").title()
+                    msg_display.append({
+                        "Date": str(m.get("Date", "")).strip(),
+                        "Message": type_label,
+                        "Replied": "✅ Yes" if replied == "yes" else ("—" if not replied else "⏳ Pending"),
+                    })
+                st.dataframe(pd.DataFrame(msg_display), width='stretch', hide_index=True)
+                if len(athlete_msgs) > 25:
+                    st.caption(f"Showing 25 of {len(athlete_msgs)} messages.")
+    except Exception:
+        pass
+
+    st.divider()
+
+    # ── Annual athlete review generator ──────────────────────────────────────
+    _first_log = None
+    for _r in pr_records:
+        if str(_r.get("Athlete Name", "")).strip() != name:
+            continue
+        _d = _parse_date(str(_r.get("Date", "")))
+        if _d and (_first_log is None or _d < _first_log):
+            _first_log = _d
+
+    if _first_log and (TODAY - _first_log).days >= 365:
+        _months_training = round((TODAY - _first_log).days / 30)
+        with st.expander(f"🎖️ Annual Review Generator ({_months_training} months of data)", expanded=False):
+            if "annual_review" not in st.session_state:
+                st.session_state["annual_review"] = {}
+            if st.button("Generate Annual Review with Claude", key=f"gen_review_{name}", type="primary"):
+                _year_ago = TODAY - dt.timedelta(days=365)
+                _year_prs = [
+                    _r for _r in pr_records
+                    if str(_r.get("Athlete Name", "")).strip() == name
+                    and (_parse_date(str(_r.get("Date", ""))) or _year_ago) >= _year_ago
+                ]
+                _pr_lines = [
+                    f"{str(_r.get('Date', '')).strip()}: "
+                    f"{str(_r.get('Benchmark Name', '')).strip()} — "
+                    f"{str(_r.get('Value', '')).strip()}"
+                    for _r in sorted(_year_prs, key=lambda x: str(x.get("Date", "")))
+                ]
+                _pr_summary = "\n".join(_pr_lines[:25]) or "(no benchmarks this year)"
+
+                _comp_lines = []
+                if competition_rows:
+                    _year_ago_ts = _year_ago
+                    for _cr in competition_rows:
+                        if str(_cr.get("Athlete Name", "")).strip() != name:
+                            continue
+                        _cd = _parse_date(str(_cr.get("Date", "")).strip())
+                        if _cd and _cd >= _year_ago_ts:
+                            _res = str(_cr.get("Result", "")).strip()
+                            _comp_lines.append(
+                                f"{_cd.strftime('%d %b')}: "
+                                f"{str(_cr.get('Competition Name', '')).strip()}"
+                                + (f" — {_res}" if _res else "")
+                            )
+                _comp_summary = "\n".join(_comp_lines) or "(no competitions this year)"
+
+                with st.spinner("Generating annual review with Claude…"):
+                    _review = summariser.annual_athlete_review(
+                        name, _months_training, _pr_summary, _comp_summary,
+                        str(profile.get("North Star Goal", "")).strip(),
+                        str(profile.get("Programme", "")).strip(),
+                    )
+                if _review:
+                    st.session_state["annual_review"][name] = _review
+                else:
+                    st.warning("Could not generate — check that ANTHROPIC_API_KEY is configured.")
+
+            _cached_review = st.session_state.get("annual_review", {}).get(name)
+            if _cached_review:
+                st.text_area(
+                    "Annual Review Copy", value=_cached_review, height=320,
+                    key=f"review_text_{name}",
+                    help="Edit before sending. Click 'Send' to email directly to the athlete.",
+                )
+                _athlete_email = str(profile.get("Email", "")).strip()
+                if _athlete_email:
+                    if st.button(f"📧 Email to {name.split()[0]}", key=f"send_review_{name}"):
+                        try:
+                            _review_to_send = st.session_state.get(f"review_text_{name}", _cached_review)
+                            _smtp_from = str(st.secrets.get("SMTP_FROM", "") or "").strip() or config.SMTP_FROM
+                            _smtp_pw = str(st.secrets.get("SMTP_PASSWORD", "") or "").strip() or config.SMTP_PASSWORD
+                            if not _smtp_from or not _smtp_pw:
+                                st.warning("SMTP credentials not configured (set SMTP_FROM and SMTP_PASSWORD in secrets).")
+                            else:
+                                notifier._send_html_email_to(
+                                    _smtp_from, _smtp_pw,
+                                    _athlete_email,
+                                    "Your Year in Training — JST Compete",
+                                    _review_to_send,
+                                    f"<pre style='font-family:sans-serif;white-space:pre-wrap'>{_review_to_send}</pre>",
+                                )
+                                st.success(f"Annual review sent to {_athlete_email}")
+                        except Exception as _exc:
+                            st.error(f"Send failed: {_exc}")
 
     st.divider()
 
@@ -1925,7 +2152,7 @@ _PHASE_EMOJI = {
 _COMP_TYPE_LABEL = {"A": "🥇 A", "B": "🥈 B", "C": "🥉 C"}
 
 
-def page_competitions(comp_results, athletes, data_records, competition_rows=None):
+def page_competitions(comp_results, athletes, data_records, competition_rows=None, pr_records=None):
     data_by_name = {str(r.get("Full Name", "")).strip(): r for r in (data_records or [])}
     all_names = {a["name"] for a in athletes}
 
@@ -2098,6 +2325,8 @@ def page_competitions(comp_results, athletes, data_records, competition_rows=Non
                 f"📬 {len(feedback_rows)} post-competition response{'s' if len(feedback_rows) > 1 else ''} received",
                 expanded=True,
             ):
+                if "comp_analyses" not in st.session_state:
+                    st.session_state["comp_analyses"] = {}
                 for _row in sorted(feedback_rows, key=lambda r: r.get("Date", ""), reverse=True):
                     _nm = str(_row.get("Athlete Name", "")).strip()
                     _comp = str(_row.get("Competition Name", "")).strip()
@@ -2110,6 +2339,47 @@ def page_competitions(comp_results, athletes, data_records, competition_rows=Non
                     st.markdown(_response)
                     if not _result:
                         st.caption("↑ Read the response above and enter the result in the Competitions sheet.")
+
+                    _analysis_key = f"{_nm}|{_comp}"
+                    _ca1, _ca2 = st.columns([1, 4])
+                    with _ca1:
+                        if st.button("🤖 Analyse", key=f"comp_analyse_{_nm}_{_comp[:20]}"):
+                            _data_row = data_by_name.get(_nm, {})
+                            _eight_weeks_ago = TODAY - dt.timedelta(weeks=8)
+                            _comp_pr_lines = []
+                            if pr_records:
+                                _comp_pr_lines = [
+                                    f"{str(r.get('Date','')).strip()}: "
+                                    f"{str(r.get('Benchmark Name','')).strip()} — "
+                                    f"{str(r.get('Value','')).strip()}"
+                                    for r in pr_records
+                                    if str(r.get("Athlete Name", "")).strip() == _nm
+                                    and (_parse_date(str(r.get("Date", ""))) or _eight_weeks_ago) >= _eight_weeks_ago
+                                ]
+                            if not _comp_pr_lines:
+                                _comp_pr_lines = [
+                                    f"{str(r.get('Date','')).strip()}: "
+                                    f"{str(r.get('Competition Name','')).strip()} — "
+                                    f"{str(r.get('Result','')).strip()}"
+                                    for r in (competition_rows or [])
+                                    if str(r.get("Athlete Name", "")).strip() == _nm
+                                    and str(r.get("Result", "")).strip()
+                                ]
+                            with st.spinner("Analysing with Claude…"):
+                                _analysis = summariser.analyse_competition_result(
+                                    _nm, _comp, _result, _response,
+                                    _comp_pr_lines,
+                                    str(_data_row.get("Programme", "")).strip(),
+                                    str(_data_row.get("North Star Goal", "")).strip(),
+                                )
+                            if _analysis:
+                                st.session_state["comp_analyses"][_analysis_key] = _analysis
+                            else:
+                                st.warning("Could not generate — check ANTHROPIC_API_KEY.")
+                    _cached_analysis = st.session_state["comp_analyses"].get(_analysis_key)
+                    if _cached_analysis:
+                        with _ca2:
+                            st.info(_cached_analysis)
                     st.divider()
 
     # Athletes without any competition planned
@@ -2504,95 +2774,104 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
 
     rows.sort(key=lambda x: x["_order"])
 
-    # ── This week's wins board ────────────────────────────────────────────────
-    celebrate_rows = [r for r in rows if r["Priority"] == "🏆 Celebrate"]
-    streak_rows = [r for r in rows if r["Priority"] == "✅ Positive"]
-    if celebrate_rows or streak_rows:
-        n_pr = len(celebrate_rows)
-        n_st = len(streak_rows)
-        label = (
-            f"🏆 {n_pr} new result{'s' if n_pr != 1 else ''}"
-            + (f" · ✅ {n_st} streak{'s' if n_st != 1 else ''}" if streak_rows else "")
-        )
-        with st.expander(label, expanded=True):
-            for r in celebrate_rows:
-                st.markdown(f"🏆 **{r['Athlete']}** — {r['Reason']}")
-            if celebrate_rows and streak_rows:
-                st.divider()
-            for r in streak_rows:
-                st.markdown(f"✅ **{r['Athlete']}** — {r['Reason']}")
+    # Tag each row: does Ed need to act, or has the system auto-sent this?
+    _AUTO_PRIORITIES = {"🏆 Celebrate", "🟣 Post-Comp", "🏁 Comp Prep", "⚠️ Re-engage"}
+    for r in rows:
+        r["_auto"] = r["Priority"] in _AUTO_PRIORITIES
+
+    ed_rows = [r for r in rows if not r["_auto"]]
+    auto_rows = [r for r in rows if r["_auto"]]
 
     if not rows:
         st.success("Nothing to action this week — all athletes on track.")
         return
 
-    # ── Summary table ────────────────────────────────────────────────────────
-    display_cols = ["Priority", "Athlete", "Programme", "Contact", "Reason", "Action"]
-    table_rows = []
-    for r in rows:
-        p = r.get("_programme", "")
-        table_rows.append({
-            "Priority": r["Priority"],
-            "Athlete": r["Athlete"],
-            "Programme": _prog_short(p),
-            "Contact": _programme_contact(p),
-            "Reason": r["Reason"],
-            "Action": r["Action"],
-        })
-    df = pd.DataFrame(table_rows)
-
-    st.caption(f"{len(rows)} athletes to contact this week")
+    def _make_table(row_list):
+        out = []
+        for r in row_list:
+            p = r.get("_programme", "")
+            out.append({
+                "Priority": r["Priority"],
+                "Athlete": r["Athlete"],
+                "Programme": _prog_short(p),
+                "Reason": r["Reason"],
+                "Action": r["Action"],
+            })
+        return pd.DataFrame(out) if out else pd.DataFrame()
 
     def _row_colour(row):
         colours = {
             "🔴 Contact Today":    "background-color: #ffe5e5",
-            "🏆 Celebrate":        "background-color: #fff8e1",
             "✅ Positive":         "background-color: #e8f5e9",
             "⚠️ Re-engage":        "background-color: #fff3e0",
             "⚠️ Check In":         "background-color: #fff3e0",
             "📉 Performance":      "background-color: #fce4ec",
-            "🟣 Post-Comp":        "background-color: #f3e5f5",
             "🚨 Programme Switch": "background-color: #fff3e0",
-            "🏁 Comp Prep":        "background-color: #e8eaf6",
             "📝 Remind to Log":    "background-color: #e3f2fd",
+            "🏆 Celebrate":        "background-color: #fff8e1",
+            "🟣 Post-Comp":        "background-color: #f3e5f5",
+            "🏁 Comp Prep":        "background-color: #e8eaf6",
         }
         colour = colours.get(row["Priority"], "")
         return [colour] * len(row)
 
-    styled = df.style.apply(_row_colour, axis=1)
-    st.dataframe(styled, width='stretch', hide_index=True, height=500)
+    # ── Ed's action queue ────────────────────────────────────────────────────
+    st.subheader(f"👤 Ed's Action Queue — {len(ed_rows)} to contact")
+    st.caption("These athletes need a personal message from Ed. The system has NOT sent anything to them.")
+    if ed_rows:
+        df_ed = _make_table(ed_rows)
+        styled_ed = df_ed.style.apply(_row_colour, axis=1)
+        st.dataframe(styled_ed, use_container_width=True, hide_index=True)
+    else:
+        st.success("Nothing for Ed to action right now.")
 
-    # ── Bulk export ───────────────────────────────────────────────────────────
+    # ── Auto-sent by system ───────────────────────────────────────────────────
+    st.divider()
+    with st.expander(f"🤖 Auto-sent by system — {len(auto_rows)} messages ({len([r for r in auto_rows if r['Priority'] == '🏆 Celebrate'])} PR congrats, {len([r for r in auto_rows if r['Priority'] in ('🏁 Comp Prep','🟣 Post-Comp')])} comp messages)", expanded=False):
+        st.caption("The system sent Fitr messages to these athletes automatically during the last sync. No action needed — shown here for your awareness.")
+        if auto_rows:
+            df_auto = _make_table(auto_rows)
+            styled_auto = df_auto.style.apply(_row_colour, axis=1)
+            st.dataframe(styled_auto, use_container_width=True, hide_index=True)
+        else:
+            st.info("No automated messages sent in this sync.")
+
+    # ── Bulk export (Ed's queue only) ─────────────────────────────────────────
     st.divider()
     def _build_export(rows, archetype_by_name):
         import io
         buf = io.StringIO()
-        buf.write(f"# JST Compete — Outreach List\n")
+        buf.write(f"# JST Compete — Ed's Outreach Queue\n")
         buf.write(f"Generated: {dt.datetime.now().strftime('%d %b %Y %H:%M')}\n")
-        buf.write(f"{len(rows)} athletes to contact\n\n---\n\n")
-        for r in rows:
-            name = r["Athlete"]
-            arch_row = (archetype_by_name or {}).get(name)
-            arch_id = str(arch_row.get("Primary Archetype", "")).strip() if arch_row else None
-            reason_type = r.get("_reason_type")
-            ctx = r.get("_ctx", {})
-            comp_msg = r.get("_comp_msg")
-            if comp_msg and not reason_type:
-                msg = comp_msg
-            elif reason_type:
-                msg = msg_tmpl.generate_message(name, reason_type, ctx, arch_id)
-            else:
-                msg = ""
-            prog = r.get("_programme", "")
-            buf.write(f"## {name}\n")
-            buf.write(f"**Priority:** {r['Priority']}  \n")
-            if prog:
-                buf.write(f"**Programme:** {prog} · Contact: {_programme_contact(prog)}  \n")
-            buf.write(f"**Reason:** {r['Reason']}  \n")
-            buf.write(f"**Action:** {r['Action']}  \n")
-            if msg:
-                buf.write(f"\n**Message:**\n\n> {msg}\n")
-            buf.write("\n---\n\n")
+        ed_only = [r for r in rows if not r.get("_auto")]
+        auto_only = [r for r in rows if r.get("_auto")]
+        buf.write(f"{len(ed_only)} personal messages needed · {len(auto_only)} auto-sent by system\n\n---\n\n")
+        if ed_only:
+            buf.write("## 👤 Ed's Personal Messages\n\n")
+            for r in ed_only:
+                name = r["Athlete"]
+                arch_row = (archetype_by_name or {}).get(name)
+                arch_id = str(arch_row.get("Primary Archetype", "")).strip() if arch_row else None
+                reason_type = r.get("_reason_type")
+                ctx = r.get("_ctx", {})
+                msg = msg_tmpl.generate_message(name, reason_type, ctx, arch_id) if reason_type else ""
+                prog = r.get("_programme", "")
+                buf.write(f"### {name}\n")
+                buf.write(f"**Priority:** {r['Priority']}  \n")
+                if prog:
+                    buf.write(f"**Programme:** {prog}  \n")
+                buf.write(f"**Reason:** {r['Reason']}  \n")
+                if msg:
+                    buf.write(f"\n**Suggested message:**\n\n> {msg}\n")
+                buf.write("\n---\n\n")
+        if auto_only:
+            buf.write("## 🤖 Auto-sent by System (FYI only)\n\n")
+            for r in auto_only:
+                name = r["Athlete"]
+                comp_msg = r.get("_comp_msg", "")
+                buf.write(f"- **{name}** — {r['Priority']} — {r['Reason']}\n")
+                if comp_msg:
+                    buf.write(f"  > {comp_msg[:120]}{'…' if len(comp_msg) > 120 else ''}\n")
         return buf.getvalue()
 
     export_md = _build_export(rows, archetype_by_name)
@@ -4159,6 +4438,133 @@ From the next sync onwards, each time an athlete logs a result, their coach gets
     """)
 
 
+def page_coaching_playbook():
+    """Coaching Playbook — searchable reference hub coaches can read and add to."""
+    import coaching_voice as _cv
+
+    st.markdown("## Coaching Playbook")
+    st.caption(
+        "Scenarios, coaching notes, and example messages compiled from JST resources. "
+        "Add rows directly in the Google Sheet 'Coaching Playbook' tab, or use the form below. "
+        "This hub is what the AI uses when generating messages — better notes = better drafts."
+    )
+
+    # ── Load rows ─────────────────────────────────────────────────────────────
+    try:
+        rows = sheets.read_records("Coaching Playbook")
+    except Exception as exc:
+        st.error(f"Could not load Coaching Playbook tab: {exc}")
+        rows = []
+
+    # ── Filters ───────────────────────────────────────────────────────────────
+    col_f1, col_f2 = st.columns([1, 3])
+    with col_f1:
+        scenario_opts = ["All"] + sorted({str(r.get("Scenario", "")).strip() for r in rows if r.get("Scenario")})
+        selected_scenario = st.selectbox("Filter by scenario", scenario_opts)
+    with col_f2:
+        search_term = st.text_input("Search subjects and notes", placeholder="e.g. snatch, mindset, recovery…")
+
+    filtered = rows
+    if selected_scenario != "All":
+        filtered = [r for r in filtered if str(r.get("Scenario", "")).strip().lower() == selected_scenario.lower()]
+    if search_term:
+        term = search_term.lower()
+        filtered = [
+            r for r in filtered
+            if term in str(r.get("Subject", "")).lower()
+            or term in str(r.get("Notes", "")).lower()
+            or term in str(r.get("Example", "")).lower()
+        ]
+
+    st.caption(f"{len(filtered)} of {len(rows)} entries shown")
+
+    # ── Display entries ───────────────────────────────────────────────────────
+    if not filtered:
+        st.info("No entries match your filters. Run `python3 setup_coaching_playbook.py` to populate initial content.")
+    else:
+        for r in filtered:
+            scenario = str(r.get("Scenario", "")).strip()
+            subject = str(r.get("Subject", "")).strip()
+            notes = str(r.get("Notes", "")).strip()
+            example = str(r.get("Example", "")).strip()
+            source = str(r.get("Source", "")).strip()
+            label = f"**{subject}**" if subject else "(no subject)"
+            badge = f"`{scenario}`" if scenario else ""
+            with st.expander(f"{badge} {label}", expanded=False):
+                if notes:
+                    st.markdown(f"**Notes:** {notes}")
+                if example:
+                    st.markdown("**Example message:**")
+                    st.code(example, language=None)
+                if source:
+                    st.caption(f"Source: {source}")
+
+    st.divider()
+
+    # ── Add new entry form ────────────────────────────────────────────────────
+    with st.expander("+ Add new entry to the playbook", expanded=False):
+        with st.form("playbook_add_form", clear_on_submit=True):
+            new_scenario = st.selectbox("Scenario", _cv.SCENARIOS)
+            new_subject = st.text_input("Subject (brief topic)", placeholder="e.g. responding to a missed training week")
+            new_notes = st.text_area(
+                "Notes (coaching principles, cues, approach)",
+                placeholder="What should a coach know or do in this situation?",
+                height=120,
+            )
+            new_example = st.text_area(
+                "Example message (optional)",
+                placeholder="Hey [Name] — …",
+                height=80,
+            )
+            new_source = st.text_input("Source", value="Coach experience", placeholder="e.g. Jak, Ed, JST Community Reference")
+            submitted = st.form_submit_button("Add to Playbook")
+            if submitted:
+                if not new_subject.strip():
+                    st.warning("Please enter a subject.")
+                else:
+                    try:
+                        ws = sheets.sh.worksheet("Coaching Playbook")
+                        ws.append_row(
+                            [new_scenario, new_subject.strip(), new_notes.strip(),
+                             new_example.strip(), new_source.strip()],
+                            value_input_option="RAW",
+                        )
+                        st.success(f"Added: {new_subject.strip()}")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Could not save: {exc}")
+
+    st.divider()
+
+    # ── Tone of voice quick reference ─────────────────────────────────────────
+    with st.expander("JST Tone of Voice — quick reference", expanded=False):
+        st.markdown("""
+**Opener:** `Hey [First Name],`
+**Sign-off:** `Jak` (Fitr / DM) or `Jak` on its own line in emails.
+
+**Always:**
+- Contractions: you're, don't, we've, it's
+- UK spellings: programme, practising, dialled, prioritising
+- Lead with something specific — a result, a name, a date
+- Explain the WHY behind any instruction
+- One clear next action at the end
+
+**Never:**
+- Emojis in Fitr messages or DMs
+- Numbered emoji lists (1️⃣ 2️⃣ 3️⃣) — use plain numbers
+- "Let's get to work" / "Let's go!" / "Time to level up"
+- "Unlock", "elevate", "transform", "journey", "game-changer"
+- "Moreover", "Furthermore", "Additionally"
+- "It's important to note that…"
+- "Really looking forward to…" / "So excited to…"
+
+**16-Year-Old Rule:** Would a smart 16-year-old understand this without Googling it?
+If not, simplify.
+
+**Read it out loud.** If you'd feel like a knobhead saying it at the gym, rewrite it.
+""")
+
+
 def page_leaderboard(pr_records, athletes):
     """Squad leaderboard — overall composite percentile + per-category ranked tables."""
     lb = analytics.leaderboard_data(pr_records)
@@ -4373,13 +4779,15 @@ def main():
     tabs = st.tabs([
         "📋 Outreach List", "🚨 Alerts", "🃏 Squad", "👥 Athletes",
         "🗓️ Week Plan", "🏁 Competitions", "📊 Programmes", "🏋️ Load",
-        "📈 Trends", "🏆 Leaderboard", "💤 Recovery", "🌐 CRM", "⚙️ Sync", "❓ Help",
+        "📈 Trends", "🏆 Leaderboard", "💤 Recovery", "🌐 CRM",
+        "📚 Playbook", "⚙️ Sync", "❓ Help",
     ])
 
     with tabs[0]:
         page_outreach(engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins, comp_results, archetype_by_name=archetype_by_name, data_records=data_records)
     with tabs[1]:
-        page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_wins, data_records=data_records)
+        page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_wins,
+                    data_records=data_records, pr_records=pr_records, athletes=athletes)
     with tabs[2]:
         page_squad(athletes, engagement_results, rec_by_name, data_records=data_records, archetype_by_name=archetype_by_name, pr_records=pr_records)
     with tabs[3]:
@@ -4387,7 +4795,7 @@ def main():
     with tabs[4]:
         page_week_planner(engagement_results, rec_alert_rows, comp_results, consistency_wins, milestones, data_records=data_records)
     with tabs[5]:
-        page_competitions(comp_results, athletes, data_records, competition_rows=competition_rows)
+        page_competitions(comp_results, athletes, data_records, competition_rows=competition_rows, pr_records=pr_records)
     with tabs[6]:
         page_programmes(athletes, pr_records, trend_results, data_records, load_results=load_results, engagement_results=engagement_results)
     with tabs[7]:
@@ -4401,8 +4809,10 @@ def main():
     with tabs[11]:
         page_crm(athletes, engagement_results, data_records, pr_records=pr_records)
     with tabs[12]:
-        page_sync_health()
+        page_coaching_playbook()
     with tabs[13]:
+        page_sync_health()
+    with tabs[14]:
         page_help()
 
 
