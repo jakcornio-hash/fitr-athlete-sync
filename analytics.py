@@ -1193,6 +1193,20 @@ def training_load(pr_records, weeks=12):
     return results
 
 
+def multi_benchmark_decline_alerts(trend_results, min_declining=3):
+    """Athletes with min_declining+ benchmarks simultaneously declining.
+
+    Returns list of (athlete_name, declining_count, [benchmark_names]) sorted by count desc.
+    """
+    alerts = []
+    for athlete, signals in trend_results.items():
+        declining = [s["benchmark"] for s in signals if s["trend"] == "declining"]
+        if len(declining) >= min_declining:
+            alerts.append((athlete, len(declining), declining))
+    alerts.sort(key=lambda x: -x[1])
+    return alerts
+
+
 def duplicate_candidates(athletes, data_records, pr_records, threshold=0.82):
     """Detect suspiciously similar athlete names across Benchmarks, _DATA, and PR Log.
 
@@ -1256,4 +1270,208 @@ def duplicate_candidates(athletes, data_records, pr_records, threshold=0.82):
                 })
 
     results.sort(key=lambda x: -x["score"])
+    return results
+
+
+# ── Grandslam retention scoring ───────────────────────────────────────────────
+
+def grandslam_score(athletes, pr_records, data_records, today=None):
+    """Score each athlete for LTV potential and assign a journey stage.
+
+    Whale score (0–100) combines four signals:
+      Tenure     (0–25) — days since first log, 365 days = full score
+      Recency    (0–25) — days since last log (≤14 = 25, ≤28 = 15, ≤44 = 5, else 0)
+      Engagement (0–25) — sessions in last 90 days, 45 sessions = full score
+      Plan tier  (0–25) — Bespoke=25, named plan=15, unknown=5
+
+    Journey stages (checked in order):
+      🏆 Elite      — Bespoke subscription (any tenure/activity)
+      ☠️ Churned    — 60+ days since last log
+      ⚠️ Drifting   — 28–59 days since last log
+      💎 Lifer      — 180+ days tenure, logged within 27 days
+      ⭐ Established — 90–179 days tenure, logged within 44 days
+      🔥 Active     — 30–89 days tenure
+      🌱 New        — < 30 days tenure
+
+    Returns list of dicts sorted by whale_score descending:
+        name, days_tenure, sessions_90d, days_since_log,
+        plan, whale_score, journey_stage, status_label
+    """
+    if today is None:
+        today = dt.date.today()
+
+    first_log_by_nm = {}
+    last_log_by_nm = {}
+    sessions_90d = {}
+    cutoff_90 = today - dt.timedelta(days=90)
+
+    for r in (pr_records or []):
+        nm = str(r.get("Athlete Name", "")).strip()
+        if not nm:
+            continue
+        d = _parse_date(str(r.get("Date", "")))
+        if not d:
+            continue
+        if nm not in first_log_by_nm or d < first_log_by_nm[nm]:
+            first_log_by_nm[nm] = d
+        if nm not in last_log_by_nm or d > last_log_by_nm[nm]:
+            last_log_by_nm[nm] = d
+        if d >= cutoff_90:
+            sessions_90d[nm] = sessions_90d.get(nm, 0) + 1
+
+    data_by_nm = {str(r.get("Full Name", "")).strip(): r for r in (data_records or [])}
+
+    results = []
+    for a in (athletes or []):
+        nm = str(a.get("name", "")).strip() if isinstance(a, dict) else str(a).strip()
+        if not nm:
+            continue
+
+        dr = data_by_nm.get(nm, {})
+        plan = str(dr.get("Subscription Plan", "")).strip().lower()
+        plan_score = 25 if plan == "bespoke" else (15 if plan else 5)
+
+        first = first_log_by_nm.get(nm)
+        days_tenure = (today - first).days if first else 0
+        tenure_score = min(25, round(days_tenure / 365 * 25, 1))
+
+        last = last_log_by_nm.get(nm)
+        days_since = (today - last).days if last else 999
+        if days_since <= 14:
+            recency_score = 25
+        elif days_since <= 28:
+            recency_score = 15
+        elif days_since <= 44:
+            recency_score = 5
+        else:
+            recency_score = 0
+
+        s90 = sessions_90d.get(nm, 0)
+        engagement_score = min(25, round(s90 / 45 * 25, 1))
+
+        whale_score = int(tenure_score + recency_score + engagement_score + plan_score)
+
+        if plan == "bespoke":
+            stage = "🏆 Elite"
+            label = "Elite"
+        elif days_since >= 60:
+            stage = "☠️ Churned"
+            label = "Inactive"
+        elif days_since >= 28:
+            stage = "⚠️ Drifting"
+            label = "At Risk"
+        elif days_tenure >= 180:
+            stage = "💎 Lifer"
+            label = "Lifer"
+        elif days_tenure >= 90:
+            stage = "⭐ Established"
+            label = "Active"
+        elif days_tenure >= 30:
+            stage = "🔥 Active"
+            label = "Active"
+        else:
+            stage = "🌱 New"
+            label = "Active"
+
+        results.append({
+            "name": nm,
+            "days_tenure": days_tenure,
+            "sessions_90d": s90,
+            "days_since_log": days_since,
+            "plan": plan,
+            "whale_score": whale_score,
+            "journey_stage": stage,
+            "status_label": label,
+        })
+
+    results.sort(key=lambda x: -x["whale_score"])
+    return results
+
+
+def cohort_retention(pr_records, today=None):
+    """Group athletes by first-log month and compute retention.
+
+    Retention = still active (logged within last 44 days) / cohort size.
+
+    Returns list of dicts sorted oldest cohort first:
+        cohort (YYYY-MM), cohort_size, still_active, pct_retained
+    """
+    if today is None:
+        today = dt.date.today()
+
+    active_cutoff = today - dt.timedelta(days=44)
+    first_log = {}
+    last_log = {}
+
+    for r in (pr_records or []):
+        nm = str(r.get("Athlete Name", "")).strip()
+        if not nm:
+            continue
+        d = _parse_date(str(r.get("Date", "")))
+        if not d:
+            continue
+        if nm not in first_log or d < first_log[nm]:
+            first_log[nm] = d
+        if nm not in last_log or d > last_log[nm]:
+            last_log[nm] = d
+
+    cohort_members = {}
+    for nm, fl in first_log.items():
+        key = fl.strftime("%Y-%m")
+        cohort_members.setdefault(key, []).append(nm)
+
+    results = []
+    for cohort_key in sorted(cohort_members.keys()):
+        members = cohort_members[cohort_key]
+        cohort_size = len(members)
+        still_active = sum(
+            1 for nm in members
+            if last_log.get(nm, dt.date.min) >= active_cutoff
+        )
+        pct = round(100 * still_active / cohort_size) if cohort_size else 0
+        results.append({
+            "cohort": cohort_key,
+            "cohort_size": cohort_size,
+            "still_active": still_active,
+            "pct_retained": pct,
+        })
+
+    return results
+
+
+def activation_scores(pr_records, athletes):
+    """Measure how broadly each athlete has engaged across available benchmarks.
+
+    Activation pct = unique benchmarks logged by athlete /
+                     total distinct benchmarks ever logged by anyone.
+
+    Highly activated athletes are more invested and less likely to churn.
+
+    Returns {athlete_name: {unique_benchmarks, total_benchmarks, activation_pct}}
+    """
+    all_benchmarks = set()
+    athlete_benchmarks = {}
+
+    for r in (pr_records or []):
+        nm = str(r.get("Athlete Name", "")).strip()
+        bench = str(r.get("Benchmark Name", "")).strip()
+        if not nm or not bench:
+            continue
+        all_benchmarks.add(bench)
+        athlete_benchmarks.setdefault(nm, set()).add(bench)
+
+    total = len(all_benchmarks)
+    results = {}
+    for a in (athletes or []):
+        nm = str(a.get("name", "")).strip() if isinstance(a, dict) else str(a).strip()
+        if not nm:
+            continue
+        unique = len(athlete_benchmarks.get(nm, set()))
+        pct = round(100 * unique / total) if total else 0
+        results[nm] = {
+            "unique_benchmarks": unique,
+            "total_benchmarks": total,
+            "activation_pct": pct,
+        }
+
     return results

@@ -31,49 +31,18 @@ def _fmt_date(d):
 
 def build_digest(date, engagement_results, trend_results,
                  rec_alert_rows, milestones, consistency_wins):
-    """Returns (plain_text, slack_text)."""
+    """Returns (plain_text, slack_text) — action-focused, fits ~1 hour of coaching work."""
     sections_plain = []
     sections_slack = []
 
-    # ---- recovery flags ----
+    # ---- recovery flags — always show, usually small ----
     if rec_alert_rows:
         lines_p = [f"  • {r[0]} — {r[1]} (submitted {r[2]})" for r in rec_alert_rows]
         lines_s = [f"  • *{r[0]}* — {r[1]} (submitted {r[2]})" for r in rec_alert_rows]
-        sections_plain.append(("🔴 RECOVERY FLAGS", lines_p))
-        sections_slack.append(("🔴 *RECOVERY FLAGS*", lines_s))
+        sections_plain.append(("🔴 RECOVERY FLAGS — message these athletes", lines_p))
+        sections_slack.append(("🔴 *RECOVERY FLAGS* — message these athletes", lines_s))
 
-    # ---- engagement / dropout ----
-    flagged = [e for e in engagement_results if e["flag"]]
-    if flagged:
-        lines_p, lines_s = [], []
-        for e in flagged:
-            if e["last_logged"] == "never":
-                line = f"  • {e['name']} — never logged"
-            else:
-                line = f"  • {e['name']} — {e['days_since']} days inactive (last: {_fmt_date(e['last_logged'])})"
-            lines_p.append(line)
-            lines_s.append(line.replace(f"  • {e['name']}", f"  • *{e['name']}*", 1))
-        sections_plain.append(("⚠️ ENGAGEMENT / DROPOUT", lines_p))
-        sections_slack.append(("⚠️ *ENGAGEMENT / DROPOUT*", lines_s))
-
-    # ---- performance concerns ----
-    concerns_p, concerns_s = [], []
-    for athlete, signals in sorted(trend_results.items()):
-        for s in signals:
-            if s["trend"] == "declining" or s["peak_drop_flag"]:
-                parts = []
-                if s["trend"] == "declining":
-                    parts.append(f"declining ({s['trend_pct']:+.1f}%/entry)")
-                if s["peak_drop_flag"]:
-                    parts.append(f"{s['peak_drop_pct']:.0f}% below peak")
-                line = f"  • {athlete} — {s['benchmark']}: {', '.join(parts)}"
-                concerns_p.append(line)
-                concerns_s.append(line.replace(f"  • {athlete}", f"  • *{athlete}*", 1))
-    if concerns_p:
-        sections_plain.append(("📉 PERFORMANCE CONCERNS", concerns_p))
-        sections_slack.append(("📉 *PERFORMANCE CONCERNS*", concerns_s))
-
-    # ---- milestones / new PBs ----
+    # ---- new PRs to celebrate ----
     if milestones:
         lines_p, lines_s = [], []
         for m in milestones:
@@ -84,20 +53,68 @@ def build_digest(date, engagement_results, trend_results,
                 line = f"  • {name} — {bench}: {val} (was: {prev})"
             lines_p.append(line)
             lines_s.append(line.replace(f"  • {name}", f"  • *{name}*", 1))
-        sections_plain.append(("🏆 MILESTONES / NEW PBs", lines_p))
-        sections_slack.append(("🏆 *MILESTONES / NEW PBs*", lines_s))
+        sections_plain.append(("🏆 CELEBRATE TODAY — send congrats", lines_p))
+        sections_slack.append(("🏆 *CELEBRATE TODAY* — send congrats", lines_s))
 
-    # ---- consistency wins ----
+    # ---- consistency streaks to acknowledge ----
     if consistency_wins:
         lines_p = [f"  • {n} — {w} consecutive weeks logging" for n, w in consistency_wins]
         lines_s = [f"  • *{n}* — {w} consecutive weeks logging" for n, w in consistency_wins]
-        sections_plain.append(("✅ CONSISTENCY WINS", lines_p))
-        sections_slack.append(("✅ *CONSISTENCY WINS*", lines_s))
+        sections_plain.append(("✅ CONSISTENCY STREAKS — give a shout out", lines_p))
+        sections_slack.append(("✅ *CONSISTENCY STREAKS* — give a shout out", lines_s))
 
-    header = f"JST Compete — Weekly Coaching Digest | {date}"
+    # ---- engagement: newly flagged this week (28–35 days) + approaching (14–27 days, top 5) ----
+    newly_flagged, approaching = [], []
+    for e in engagement_results:
+        days = e.get("days_since")
+        if not isinstance(days, int):
+            continue
+        if 28 <= days <= 35:
+            newly_flagged.append(e)
+        elif 14 <= days <= 27:
+            approaching.append(e)
+
+    approaching_top = sorted(approaching, key=lambda e: -e["days_since"])[:5]
+
+    if newly_flagged:
+        lines_p, lines_s = [], []
+        for e in newly_flagged:
+            line = f"  • {e['name']} — just hit {e['days_since']} days inactive"
+            lines_p.append(line)
+            lines_s.append(line.replace(f"  • {e['name']}", f"  • *{e['name']}*", 1))
+        sections_plain.append(("⚠️ NEWLY INACTIVE THIS WEEK — reach out now", lines_p))
+        sections_slack.append(("⚠️ *NEWLY INACTIVE THIS WEEK* — reach out now", lines_s))
+
+    if approaching_top:
+        lines_p, lines_s = [], []
+        for e in approaching_top:
+            line = f"  • {e['name']} — {e['days_since']} days inactive"
+            lines_p.append(line)
+            lines_s.append(line.replace(f"  • {e['name']}", f"  • *{e['name']}*", 1))
+        sections_plain.append(("🟡 APPROACHING DROPOUT — worth a quick message (top 5)", lines_p))
+        sections_slack.append(("🟡 *APPROACHING DROPOUT* — worth a quick message (top 5)", lines_s))
+
+    # ---- multi-benchmark declines: top 5 athletes with 3+ benchmarks declining ----
+    multi_decline = []
+    for athlete, signals in trend_results.items():
+        declining = [s["benchmark"] for s in signals if s["trend"] == "declining"]
+        if len(declining) >= 3:
+            multi_decline.append((athlete, len(declining), declining))
+    multi_decline.sort(key=lambda x: -x[1])
+
+    if multi_decline:
+        lines_p, lines_s = [], []
+        for name, count, benches in multi_decline[:5]:
+            line = f"  • {name} — {count} benchmarks declining ({', '.join(benches[:3])}{'…' if len(benches) > 3 else ''})"
+            lines_p.append(line)
+            lines_s.append(line.replace(f"  • {name}", f"  • *{name}*", 1))
+        sections_plain.append(("📉 MULTI-BENCHMARK DECLINE — check in on training quality", lines_p))
+        sections_slack.append(("📉 *MULTI-BENCHMARK DECLINE* — check in on training quality", lines_s))
+
+    header = f"JST Compete — Today's Coaching Actions | {date}"
 
     if not sections_plain:
-        msg = f"{header}\n\nNothing to flag this week — all athletes on track."
+        msg = f"{header}\n\nNothing to action today — all athletes on track. 💪"
         return msg, msg
 
     # plain text
@@ -106,7 +123,7 @@ def build_digest(date, engagement_results, trend_results,
         plain_parts.append(f"{heading} ({len(lines)})")
         plain_parts.extend(lines)
         plain_parts.append("")
-    plain_parts.append("Automated weekly digest — JST Compete Coaching Platform")
+    plain_parts.append("JST Compete Coaching Platform")
     plain = "\n".join(plain_parts)
 
     # slack text
@@ -205,6 +222,9 @@ def send_coach_notifications(bench_rows, chal_rows, programme_by_name, coach_cha
 
 
 def send_email(subject, plain_text):
+    if config.DRY_RUN:
+        print(f"[DRY_RUN] Would send email: {subject}")
+        return
     if not config.SMTP_FROM or not config.SMTP_PASSWORD:
         print("  ! Email not configured (SMTP_FROM / SMTP_PASSWORD missing)")
         return
@@ -313,6 +333,8 @@ def send_all_athlete_progress_emails(bench_rows, consistency_wins, competition_r
     email_by_name: {athlete_name: email_address}
     Returns count of emails sent.
     """
+    if config.DRY_RUN:
+        return 0
     if not config.SMTP_FROM or not config.SMTP_PASSWORD:
         return 0
 
@@ -489,6 +511,8 @@ def send_monthly_athlete_reports(data_recs, email_by_name, pr_records):
     Skips athletes with no activity in the previous calendar month.
     Returns count of emails sent.
     """
+    if config.DRY_RUN:
+        return 0
     if not config.SMTP_FROM or not config.SMTP_PASSWORD:
         return 0
 

@@ -1121,6 +1121,19 @@ def main():
     print(f"Engagement flags: {flagged_count}  |  Performance concerns: {concern_count}")
     print(f"Milestones: {len(milestones)}  |  Consistency streaks: {len(consistency_wins)}")
 
+    # ---- grandslam scores — update Journey Stage + Status Label in _DATA ----
+    grandslam_results = analytics.grandslam_score(athletes, pr_records, data_records)
+    if not config.DRY_RUN and grandslam_results:
+        stage_updates = {
+            r["name"]: {"Journey Stage": r["journey_stage"], "Status Label": r["status_label"]}
+            for r in grandslam_results
+        }
+        try:
+            sheets.batch_update_by_name(config.TAB_DATA, "Full Name", stage_updates)
+            print(f"Grandslam stages updated in _DATA: {len(stage_updates)}")
+        except Exception as exc:
+            print(f"  ! Failed to write grandslam stages to _DATA: {exc}")
+
     alert_rows = analytics.build_coach_alerts_rows(
         engagement_results, trend_results, rec_by_name, milestones, consistency_wins
     )
@@ -1248,11 +1261,21 @@ def main():
         if not room_id or config.DRY_RUN:
             continue
         first = nm.split()[0]
-        msg = (
-            f"Hey {first} — {milestone_label} since your first log on "
-            f"{first_log.strftime('%d %b %Y')}. "
-            f"That consistency is exactly what makes the difference."
-        )
+        if days_training == 180:
+            msg = (
+                f"Hey {first} — six months since your first log on "
+                f"{first_log.strftime('%d %b %Y')}.\n\n"
+                f"That's the Lifer mark. Most people who start don't get here — you have.\n\n"
+                f"The athletes who reach six months are the ones who actually build the fitness "
+                f"they came for. It's not talent. It's not time. It's just not stopping.\n\n"
+                f"Keep going."
+            )
+        else:
+            msg = (
+                f"Hey {first} — {milestone_label} since your first log on "
+                f"{first_log.strftime('%d %b %Y')}. "
+                f"That consistency is exactly what makes the difference."
+            )
         try:
             fitr.send_chat_message(room_id, msg)
             anniversaries_sent += 1

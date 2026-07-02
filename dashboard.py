@@ -4548,6 +4548,26 @@ The Playbook is used by the AI to generate message drafts — better notes = bet
 
 The **JST Tone of Voice quick reference** panel at the bottom covers the key rules for all coach-to-athlete messages.
 """),
+        ("💎 Grandslam", """
+**Retention pipeline** based on the Grandslam retention framework.
+
+- **Journey Pipeline** — How many athletes are at each stage (New → Active → Established → Lifer → Elite, or Drifting / Churned).
+- **Business Snapshot** — MRR, active Lifers, Elite count, at-risk headcount.
+- **Whale Board** — Top 20% of athletes by LTV score. These are your highest-retention athletes.
+- **Stage Distribution** — Bar chart of the full squad across stages.
+- **Full Squad Scores** — Every athlete's stage, score, tenure, and activity — filterable by stage.
+
+**Journey stages:**
+- 🌱 **New** — < 30 days
+- 🔥 **Active** — 30–89 days, training consistently
+- ⭐ **Established** — 90–179 days
+- 💎 **Lifer** — 180+ days, still active (gets a ceremony message from the system)
+- 🏆 **Elite** — Bespoke subscription
+- ⚠️ **Drifting** — 28–59 days since last log — priority for outreach
+- ☠️ **Churned** — 60+ days without logging
+
+The system writes each athlete's Journey Stage and Status Label to the *_DATA* tab daily.
+"""),
         ("⚙️ Sync", """
 Sync history and message log.
 
@@ -4875,6 +4895,674 @@ def page_leaderboard(pr_records, athletes):
         _render_category("Conditioning")
 
 
+# ── Grandslam retention ───────────────────────────────────────────────────────
+
+_GRANDSLAM_STAGE_ORDER = [
+    "🌱 New", "🔥 Active", "⭐ Established", "💎 Lifer",
+    "🏆 Elite", "⚠️ Drifting", "☠️ Churned",
+]
+
+_STAGE_COLOURS = {
+    "🌱 New": "#4CAF50",
+    "🔥 Active": "#FF9800",
+    "⭐ Established": "#2196F3",
+    "💎 Lifer": "#9C27B0",
+    "🏆 Elite": "#F44336",
+    "⚠️ Drifting": "#FFC107",
+    "☠️ Churned": "#9E9E9E",
+}
+
+
+def page_grandslam(grandslam_results, data_records, pr_records=None, athletes=None, competition_rows=None):
+    """Retention pipeline — journey stages, whale scores, opportunities, analytics."""
+    st.header("💎 Grandslam Retention")
+    st.caption(
+        "Avatar scoring, journey pipeline, and retention analytics "
+        "based on the Grandslam retention framework."
+    )
+
+    if not grandslam_results:
+        st.info("No data. Grandslam scores are computed from PR Log entries.")
+        return
+
+    # ── Shared pre-computation ───────────────────────────────────────────────
+    data_by_nm = {str(r.get("Full Name", "")).strip(): r for r in (data_records or [])}
+    prices = getattr(config, "SUBSCRIPTION_PRICES", {})
+
+    stage_counts = {}
+    for r in grandslam_results:
+        stage_counts[r["journey_stage"]] = stage_counts.get(r["journey_stage"], 0) + 1
+
+    mrr = sum(
+        prices.get(str(dr.get("Subscription Plan", "")).strip(), 0)
+        for dr in data_by_nm.values()
+    )
+    active_lifers = sum(1 for r in grandslam_results if r["journey_stage"] == "💎 Lifer")
+    elite_count   = sum(1 for r in grandslam_results if r["journey_stage"] == "🏆 Elite")
+    drifting      = sum(1 for r in grandslam_results if r["journey_stage"] == "⚠️ Drifting")
+    churned       = sum(1 for r in grandslam_results if r["journey_stage"] == "☠️ Churned")
+
+    # Squad Health Score — average whale_score of non-churned athletes
+    non_churned = [r for r in grandslam_results if r["journey_stage"] != "☠️ Churned"]
+    if non_churned:
+        _shs = round(sum(r["whale_score"] for r in non_churned) / len(non_churned))
+        if _shs >= 75:
+            _shs_label = "Strong"
+        elif _shs >= 55:
+            _shs_label = "Healthy"
+        elif _shs >= 35:
+            _shs_label = "Developing"
+        else:
+            _shs_label = "At Risk"
+    else:
+        _shs, _shs_label = 0, "No data"
+
+    # Net MRR Movement — new MRR this month minus MRR lost this month
+    import datetime as _dt
+    _today = _dt.date.today()
+    _new_mrr = sum(
+        prices.get(str(data_by_nm.get(r["name"], {}).get("Subscription Plan", "")).strip(), 0)
+        for r in grandslam_results if r.get("days_tenure", 999) <= 30
+    )
+    _lost_mrr = sum(
+        prices.get(str(data_by_nm.get(r["name"], {}).get("Subscription Plan", "")).strip(), 0)
+        for r in grandslam_results if 60 <= r.get("days_since_log", 0) <= 89
+    )
+    _net_mrr = _new_mrr - _lost_mrr
+
+    # Founding member cutoff
+    try:
+        _fm_cutoff = _dt.date.fromisoformat(getattr(config, "FOUNDING_MEMBER_CUTOFF", "2024-12-31"))
+    except (ValueError, AttributeError):
+        _fm_cutoff = None
+
+    gs_tabs = st.tabs(["📊 Overview", "🎯 Opportunities", "🚨 At Risk", "📈 Analytics"])
+
+    # ════════════════════════════════════════════════════════════════════════
+    # TAB 0 — OVERVIEW
+    # ════════════════════════════════════════════════════════════════════════
+    with gs_tabs[0]:
+        # Squad Health Score — prominent headline metric
+        shs_col, _ = st.columns([1, 3])
+        shs_col.metric(
+            "Squad Health Score",
+            f"{_shs} / 100 — {_shs_label}",
+            help="Average whale score of non-churned athletes. Strong ≥75 · Healthy 55–74 · Developing 35–54 · At Risk <35",
+        )
+
+        st.subheader("Journey Pipeline")
+        pipeline_cols = st.columns(len(_GRANDSLAM_STAGE_ORDER))
+        for i, stage in enumerate(_GRANDSLAM_STAGE_ORDER):
+            pipeline_cols[i].metric(stage, stage_counts.get(stage, 0))
+
+        st.divider()
+
+        snap_cols = st.columns(5)
+        if mrr:
+            snap_cols[0].metric("MRR", f"£{mrr:,}")
+        snap_cols[1].metric("Net MRR Movement",
+                            f"{'+'if _net_mrr >= 0 else ''}£{_net_mrr:,}",
+                            delta=f"+£{_new_mrr:,} new · -£{_lost_mrr:,} at-risk",
+                            delta_color="normal" if _net_mrr >= 0 else "inverse")
+        snap_cols[2].metric("💎 Lifers", active_lifers)
+        snap_cols[3].metric("🏆 Elite", elite_count)
+        snap_cols[4].metric("⚠️ At Risk / ☠️ Churned", drifting + churned,
+                            delta=f"{drifting} drifting · {churned} churned",
+                            delta_color="inverse")
+
+        st.divider()
+
+        st.subheader("Whale Board — Top 20%")
+        st.caption("Score = tenure (max 25) + recency (max 25) + sessions 90d (max 25) + plan tier (max 25).")
+        top_n = max(1, len(grandslam_results) // 5)
+        df_whale = pd.DataFrame([{
+            "Athlete": r["name"],
+            "Stage": r["journey_stage"],
+            "Score": r["whale_score"],
+            "Tenure (days)": r["days_tenure"],
+            "Sessions (90d)": r["sessions_90d"],
+            "Last log (days ago)": r["days_since_log"] if r["days_since_log"] < 900 else "—",
+            "Plan": r["plan"].title() if r["plan"] else "—",
+        } for r in grandslam_results[:top_n]])
+        st.dataframe(df_whale, use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        st.subheader("Stage Distribution")
+        chart_data = pd.DataFrame([
+            {"Stage": s, "Athletes": stage_counts.get(s, 0),
+             "Colour": _STAGE_COLOURS.get(s, "#888")}
+            for s in _GRANDSLAM_STAGE_ORDER if stage_counts.get(s, 0) > 0
+        ])
+        if not chart_data.empty:
+            bar = (
+                alt.Chart(chart_data)
+                .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+                .encode(
+                    x=alt.X("Stage:N", sort=_GRANDSLAM_STAGE_ORDER,
+                             axis=alt.Axis(labelAngle=-20, title=None)),
+                    y=alt.Y("Athletes:Q", axis=alt.Axis(title="Athletes")),
+                    color=alt.Color("Colour:N", scale=None, legend=None),
+                    tooltip=["Stage", "Athletes"],
+                )
+                .properties(height=200)
+            )
+            st.altair_chart(bar, use_container_width=True)
+
+        st.divider()
+
+        st.subheader("Full Squad")
+        stage_filter = st.selectbox(
+            "Filter by stage", ["All"] + _GRANDSLAM_STAGE_ORDER,
+            key="gs_stage_filter",
+        )
+        filtered = grandslam_results if stage_filter == "All" else [
+            r for r in grandslam_results if r["journey_stage"] == stage_filter
+        ]
+        df_all = pd.DataFrame([{
+            "Athlete": r["name"],
+            "Stage": r["journey_stage"],
+            "Score": r["whale_score"],
+            "Tenure (days)": r["days_tenure"],
+            "Sessions (90d)": r["sessions_90d"],
+            "Last log (days ago)": r["days_since_log"] if r["days_since_log"] < 900 else "—",
+            "Plan": r["plan"].title() if r["plan"] else "—",
+        } for r in filtered])
+        st.dataframe(df_all, use_container_width=True, hide_index=True)
+
+    # ════════════════════════════════════════════════════════════════════════
+    # TAB 1 — OPPORTUNITIES
+    # ════════════════════════════════════════════════════════════════════════
+    with gs_tabs[1]:
+
+        # ── Upsell candidates ────────────────────────────────────────────────
+        st.subheader("Upsell Candidates")
+        st.caption(
+            "Lifers and Established athletes on a standard plan with a high whale score — "
+            "most likely to benefit from a Bespoke 1:1 conversation."
+        )
+        upsell = [
+            r for r in grandslam_results
+            if r["journey_stage"] in ("💎 Lifer", "⭐ Established")
+            and r["plan"] != "bespoke"
+            and r["whale_score"] >= 55
+        ]
+        if upsell:
+            df_up = pd.DataFrame([{
+                "Athlete": r["name"],
+                "Stage": r["journey_stage"],
+                "Score": r["whale_score"],
+                "Tenure (days)": r["days_tenure"],
+                "Plan": r["plan"].title() if r["plan"] else "—",
+            } for r in upsell])
+            st.dataframe(df_up, use_container_width=True, hide_index=True)
+            st.info(
+                f"**Suggested action:** {len(upsell)} athlete(s) flagged. "
+                "Book a 15-minute check-in call. Lead with their progression, "
+                "then ask if they'd benefit from 1:1 programming."
+            )
+        else:
+            st.success("No upsell candidates right now — either everyone's already on Bespoke or scores are below threshold.")
+
+        st.divider()
+
+        # ── Founding Members ─────────────────────────────────────────────────
+        st.subheader("Founding Members")
+        st.caption(
+            f"Athletes who first logged before {_fm_cutoff.strftime('%d %b %Y') if _fm_cutoff else 'the cutoff date'}. "
+            "These are your original cohort — never let them drift without a personal touchpoint."
+        )
+        if _fm_cutoff and pr_records:
+            # Re-derive first_log from pr_records for the founding member check
+            _fl_map = {}
+            for _r in pr_records:
+                _nm = str(_r.get("Athlete Name", "")).strip()
+                _d = _parse_date(str(_r.get("Date", "")))
+                if _nm and _d:
+                    if _nm not in _fl_map or _d < _fl_map[_nm]:
+                        _fl_map[_nm] = _d
+
+            founding = [
+                r for r in grandslam_results
+                if _fl_map.get(r["name"]) and _fl_map[r["name"]] <= _fm_cutoff
+            ]
+            if founding:
+                df_fm = pd.DataFrame([{
+                    "Athlete": r["name"],
+                    "Stage": r["journey_stage"],
+                    "Score": r["whale_score"],
+                    "First log": _fl_map[r["name"]].strftime("%d %b %Y"),
+                    "Tenure (days)": r["days_tenure"],
+                    "Last log (days ago)": r["days_since_log"] if r["days_since_log"] < 900 else "—",
+                } for r in founding])
+                st.dataframe(df_fm, use_container_width=True, hide_index=True)
+                at_risk_founding = [r for r in founding if r["journey_stage"] in ("⚠️ Drifting", "☠️ Churned")]
+                if at_risk_founding:
+                    st.warning(
+                        f"⚠️ {len(at_risk_founding)} Founding Member(s) are currently Drifting or Churned. "
+                        "Priority personal outreach — these athletes predate most of the squad."
+                    )
+            else:
+                st.info(f"No athletes have first logs on or before {_fm_cutoff.strftime('%d %b %Y')}. "
+                        "Adjust FOUNDING_MEMBER_CUTOFF in config.py or your env vars.")
+        else:
+            st.info("Set FOUNDING_MEMBER_CUTOFF in config.py and ensure pr_records are loaded.")
+
+        st.divider()
+
+        # ── Upcoming Lifer milestones ─────────────────────────────────────────
+        st.subheader("Upcoming Lifer Milestones")
+        st.caption(
+            "Athletes 150–179 days in who are still actively logging — "
+            "they'll hit the Lifer mark within 30 days. "
+            "A proactive touchpoint now builds the relationship before the ceremony message fires."
+        )
+        upcoming_lifers = [
+            r for r in grandslam_results
+            if 150 <= r["days_tenure"] <= 179
+            and r["days_since_log"] < 28
+        ]
+        if upcoming_lifers:
+            df_ul = pd.DataFrame([{
+                "Athlete": r["name"],
+                "Days to Lifer": 180 - r["days_tenure"],
+                "Current tenure": r["days_tenure"],
+                "Sessions (90d)": r["sessions_90d"],
+                "Score": r["whale_score"],
+            } for r in sorted(upcoming_lifers, key=lambda x: x["days_tenure"], reverse=True)])
+            st.dataframe(df_ul, use_container_width=True, hide_index=True)
+        else:
+            st.success("No athletes approaching the Lifer milestone right now.")
+
+        st.divider()
+
+        # ── Upcoming Established milestones ──────────────────────────────────
+        st.subheader("Upcoming Established Milestones")
+        st.caption(
+            "Athletes 85–89 days in who are still actively logging — "
+            "they'll hit the Established (90-day) mark within a week. "
+            "A proactive check-in now reinforces the habit before the stage transition."
+        )
+        upcoming_established = [
+            r for r in grandslam_results
+            if 85 <= r["days_tenure"] <= 89
+            and r["days_since_log"] < 28
+        ]
+        if upcoming_established:
+            df_ue = pd.DataFrame([{
+                "Athlete": r["name"],
+                "Days to Established": 90 - r["days_tenure"],
+                "Current tenure": r["days_tenure"],
+                "Sessions (90d)": r["sessions_90d"],
+                "Score": r["whale_score"],
+            } for r in sorted(upcoming_established, key=lambda x: x["days_tenure"], reverse=True)])
+            st.dataframe(df_ue, use_container_width=True, hide_index=True)
+            st.info(
+                f"**Suggested action:** {len(upcoming_established)} athlete(s) about to hit 90 days. "
+                "A short personal message now — acknowledging their consistency — "
+                "anchors them at the Established stage."
+            )
+        else:
+            st.success("No athletes approaching the Established milestone right now.")
+
+        st.divider()
+
+        # ── Second product candidates ─────────────────────────────────────────
+        st.subheader("Second Product Candidates")
+        st.caption(
+            "Athletes with 2+ completed competitions on a standard plan — "
+            "high competitive investment signals readiness for Bespoke 1:1 or a competition-specific track."
+        )
+        if competition_rows:
+            _comp_counts = {}
+            for _cr in competition_rows:
+                _nm = str(_cr.get("Athlete Name", "")).strip()
+                _result = str(_cr.get("Result", "")).strip()
+                if _nm and _result:
+                    _comp_counts[_nm] = _comp_counts.get(_nm, 0) + 1
+
+            second_product = [
+                r for r in grandslam_results
+                if _comp_counts.get(r["name"], 0) >= 2
+                and r["plan"] != "bespoke"
+            ]
+            if second_product:
+                df_sp = pd.DataFrame([{
+                    "Athlete": r["name"],
+                    "Stage": r["journey_stage"],
+                    "Score": r["whale_score"],
+                    "Completed comps": _comp_counts.get(r["name"], 0),
+                    "Plan": r["plan"].title() if r["plan"] else "—",
+                    "Tenure (days)": r["days_tenure"],
+                } for r in sorted(second_product, key=lambda x: -x["whale_score"])])
+                st.dataframe(df_sp, use_container_width=True, hide_index=True)
+                st.info(
+                    f"**Suggested action:** {len(second_product)} athlete(s) flagged. "
+                    "Frame the conversation around their competition history: "
+                    "'You've competed X times — a Bespoke programme would build your peak specifically around your calendar.'"
+                )
+            else:
+                st.success("No second product candidates right now — athletes either have <2 completed comps or are already on Bespoke.")
+        else:
+            st.info("Competition data not loaded — second product candidates unavailable.")
+
+    # ════════════════════════════════════════════════════════════════════════
+    # TAB 2 — AT RISK
+    # ════════════════════════════════════════════════════════════════════════
+    with gs_tabs[2]:
+
+        # ── Re-engagement priority ───────────────────────────────────────────
+        st.subheader("Re-engagement Priority")
+        st.caption(
+            "Drifting athletes ranked by whale score — highest former value first. "
+            "The window is 28–59 days since last log. After 60 days the probability of return drops sharply."
+        )
+        drifting_ranked = sorted(
+            [r for r in grandslam_results if r["journey_stage"] == "⚠️ Drifting"],
+            key=lambda x: -x["whale_score"],
+        )
+        if drifting_ranked:
+            df_dr = pd.DataFrame([{
+                "Athlete": r["name"],
+                "Score": r["whale_score"],
+                "Days since log": r["days_since_log"],
+                "Tenure (days)": r["days_tenure"],
+                "Sessions (90d)": r["sessions_90d"],
+                "Plan": r["plan"].title() if r["plan"] else "—",
+            } for r in drifting_ranked])
+            st.dataframe(df_dr, use_container_width=True, hide_index=True)
+            st.info(
+                "**Action:** Work top-to-bottom. High-score drifting athletes are your biggest "
+                "immediate retention loss. Message personally — ask how they're doing, not why they stopped."
+            )
+        else:
+            st.success("No drifting athletes right now.")
+
+        st.divider()
+
+        # ── Lost Whales ──────────────────────────────────────────────────────
+        st.subheader("Lost Whales")
+        st.caption(
+            "Churned athletes who had a high whale score before going inactive — "
+            "worth a personal re-engagement attempt."
+        )
+        lost_whales = sorted(
+            [r for r in grandslam_results
+             if r["journey_stage"] == "☠️ Churned" and r["whale_score"] >= 50],
+            key=lambda x: -x["whale_score"],
+        )
+        if lost_whales:
+            df_lw = pd.DataFrame([{
+                "Athlete": r["name"],
+                "Score (at churn)": r["whale_score"],
+                "Days since log": r["days_since_log"],
+                "Tenure (days)": r["days_tenure"],
+                "Plan": r["plan"].title() if r["plan"] else "—",
+            } for r in lost_whales])
+            st.dataframe(df_lw, use_container_width=True, hide_index=True)
+        else:
+            st.success("No high-value churned athletes.")
+
+        st.divider()
+
+        # ── Lost Momentum ────────────────────────────────────────────────────
+        st.subheader("Lost Momentum")
+        st.caption(
+            "Lifers and Established athletes who are still technically active but logging "
+            "very infrequently (fewer than 6 sessions in 90 days). "
+            "These athletes may have achieved their original goal and have nothing to chase next — "
+            "the 'Finish Line' problem. Ask what they want to build toward."
+        )
+        lost_momentum = [
+            r for r in grandslam_results
+            if r["journey_stage"] in ("💎 Lifer", "⭐ Established")
+            and r["sessions_90d"] < 6
+            and r["days_since_log"] < 60
+        ]
+        if lost_momentum:
+            df_lm = pd.DataFrame([{
+                "Athlete": r["name"],
+                "Stage": r["journey_stage"],
+                "Sessions (90d)": r["sessions_90d"],
+                "Tenure (days)": r["days_tenure"],
+                "Score": r["whale_score"],
+            } for r in sorted(lost_momentum, key=lambda x: -x["days_tenure"])])
+            st.dataframe(df_lm, use_container_width=True, hide_index=True)
+            st.info(
+                "**Suggested question:** 'You've been here a while — what's the next big thing "
+                "you want to chase?' A clear goal reactivates training motivation."
+            )
+        else:
+            st.success("No lost momentum cases right now.")
+
+    # ════════════════════════════════════════════════════════════════════════
+    # TAB 3 — ANALYTICS
+    # ════════════════════════════════════════════════════════════════════════
+    with gs_tabs[3]:
+
+        # ── Cohort retention ─────────────────────────────────────────────────
+        st.subheader("Cohort Retention")
+        st.caption(
+            "Athletes grouped by the month of their first log. "
+            "Retention = still logging within the last 44 days. "
+            "Shows exactly where in the journey athletes are dropping off."
+        )
+        if pr_records:
+            cohorts = analytics.cohort_retention(pr_records)
+            if cohorts:
+                df_cohort = pd.DataFrame([{
+                    "Cohort": c["cohort"],
+                    "Started": c["cohort_size"],
+                    "Still active": c["still_active"],
+                    "Retention %": c["pct_retained"],
+                } for c in cohorts])
+                st.dataframe(df_cohort, use_container_width=True, hide_index=True)
+
+                # Retention chart
+                chart_c = (
+                    alt.Chart(pd.DataFrame(cohorts))
+                    .mark_line(point=True)
+                    .encode(
+                        x=alt.X("cohort:N", axis=alt.Axis(labelAngle=-45, title="Cohort")),
+                        y=alt.Y("pct_retained:Q",
+                                axis=alt.Axis(title="Retention %"),
+                                scale=alt.Scale(domain=[0, 100])),
+                        tooltip=["cohort", "cohort_size", "still_active", "pct_retained"],
+                    )
+                    .properties(height=200, title="Retention % by Start Month")
+                )
+                st.altair_chart(chart_c, use_container_width=True)
+
+                worst = min(cohorts, key=lambda c: c["pct_retained"])
+                best = max(cohorts, key=lambda c: c["pct_retained"])
+                st.caption(
+                    f"Lowest retention: **{worst['cohort']}** ({worst['pct_retained']}% of {worst['cohort_size']}). "
+                    f"Highest: **{best['cohort']}** ({best['pct_retained']}% of {best['cohort_size']})."
+                )
+        else:
+            st.info("PR records not loaded — cohort data unavailable.")
+
+        st.divider()
+
+        # ── Churn by programme ───────────────────────────────────────────────
+        st.subheader("Churn by Programme")
+        st.caption(
+            "Which programmes have the most Drifting or Churned athletes? "
+            "A programme with disproportionate churn may need a content or expectation review."
+        )
+        prog_stage = {}
+        for r in grandslam_results:
+            nm = r["name"]
+            prog = str(data_by_nm.get(nm, {}).get("Programme", "")).strip() or "Unknown"
+            if prog not in prog_stage:
+                prog_stage[prog] = {s: 0 for s in _GRANDSLAM_STAGE_ORDER}
+            prog_stage[prog][r["journey_stage"]] = prog_stage[prog].get(r["journey_stage"], 0) + 1
+
+        if prog_stage:
+            rows_prog = []
+            for prog, counts in sorted(prog_stage.items()):
+                total_in_prog = sum(counts.values())
+                at_risk = counts.get("⚠️ Drifting", 0) + counts.get("☠️ Churned", 0)
+                rows_prog.append({
+                    "Programme": prog,
+                    "Total": total_in_prog,
+                    "💎 Lifer": counts.get("💎 Lifer", 0),
+                    "⭐ Established": counts.get("⭐ Established", 0),
+                    "🔥 Active": counts.get("🔥 Active", 0),
+                    "🌱 New": counts.get("🌱 New", 0),
+                    "⚠️ Drifting": counts.get("⚠️ Drifting", 0),
+                    "☠️ Churned": counts.get("☠️ Churned", 0),
+                    "At Risk %": f"{round(100 * at_risk / total_in_prog)}%" if total_in_prog else "—",
+                })
+            df_prog = pd.DataFrame(rows_prog).sort_values("At Risk %", ascending=False)
+            st.dataframe(df_prog, use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        # ── Activation scores ─────────────────────────────────────────────────
+        st.subheader("Activation Scores")
+        st.caption(
+            "How broadly each athlete has engaged across all available benchmarks. "
+            "Higher activation = more invested in the programme = less likely to churn. "
+            "Low activation on an Established or Lifer athlete signals passive engagement."
+        )
+        if pr_records and athletes:
+            act_scores = analytics.activation_scores(pr_records, athletes)
+            if act_scores:
+                act_rows = []
+                for r in grandslam_results:
+                    nm = r["name"]
+                    act = act_scores.get(nm, {})
+                    act_rows.append({
+                        "Athlete": nm,
+                        "Stage": r["journey_stage"],
+                        "Activation %": act.get("activation_pct", 0),
+                        "Benchmarks logged": act.get("unique_benchmarks", 0),
+                        "Total available": act.get("total_benchmarks", 0),
+                        "Whale score": r["whale_score"],
+                    })
+                act_rows.sort(key=lambda x: -x["Activation %"])
+                df_act = pd.DataFrame(act_rows)
+                st.dataframe(df_act, use_container_width=True, hide_index=True)
+
+                low_act_lifers = [
+                    x for x in act_rows
+                    if x["Stage"] in ("💎 Lifer", "⭐ Established")
+                    and x["Activation %"] < 20
+                ]
+                if low_act_lifers:
+                    st.warning(
+                        f"⚠️ {len(low_act_lifers)} Lifer/Established athlete(s) have activation below 20%. "
+                        "Consider a goal-setting conversation to unlock more of the programme."
+                    )
+        else:
+            st.info("PR records or athlete list not loaded.")
+
+        st.divider()
+
+        # ── Message response rate ─────────────────────────────────────────────
+        st.subheader("Message Response Rate")
+        st.caption(
+            "Reply rate per automated message type over the last 90 days. "
+            "Low response on a message type means the message isn't landing — revisit tone or timing."
+        )
+        try:
+            _msg_records = get_sheets().read_records(config.TAB_MESSAGE_LOG)
+        except Exception:
+            _msg_records = []
+
+        if _msg_records:
+            import datetime as _dt2
+            _cutoff_90 = _dt2.date.today() - _dt2.timedelta(days=90)
+            _msg_by_type = {}
+            for _mr in _msg_records:
+                _d = _parse_date(str(_mr.get("Date", "")))
+                if not _d or _d < _cutoff_90:
+                    continue
+                _mtype = str(_mr.get("Message Type", "")).strip() or "Unknown"
+                if _mtype not in _msg_by_type:
+                    _msg_by_type[_mtype] = {"sent": 0, "replied": 0}
+                _msg_by_type[_mtype]["sent"] += 1
+                if str(_mr.get("Replied", "")).strip().lower() == "yes":
+                    _msg_by_type[_mtype]["replied"] += 1
+
+            if _msg_by_type:
+                _mrr_rows = []
+                for _mtype, _counts in sorted(_msg_by_type.items()):
+                    _pct = round(100 * _counts["replied"] / _counts["sent"]) if _counts["sent"] else 0
+                    _mrr_rows.append({
+                        "Message Type": _mtype,
+                        "Sent (90d)": _counts["sent"],
+                        "Replied": _counts["replied"],
+                        "Reply Rate %": _pct,
+                    })
+                _mrr_rows.sort(key=lambda x: -x["Reply Rate %"])
+                df_mrr = pd.DataFrame(_mrr_rows)
+                st.dataframe(df_mrr, use_container_width=True, hide_index=True)
+
+                _low_types = [r for r in _mrr_rows if r["Sent (90d)"] >= 5 and r["Reply Rate %"] < 20]
+                if _low_types:
+                    st.warning(
+                        f"⚠️ {len(_low_types)} message type(s) have a reply rate below 20% (min 5 sent): "
+                        + ", ".join(r["Message Type"] for r in _low_types)
+                        + ". Consider reviewing the message content or timing."
+                    )
+                _total_sent = sum(r["Sent (90d)"] for r in _mrr_rows)
+                _total_replied = sum(r["Replied"] for r in _mrr_rows)
+                _overall_pct = round(100 * _total_replied / _total_sent) if _total_sent else 0
+                st.caption(f"Overall reply rate: **{_overall_pct}%** ({_total_replied} of {_total_sent} messages replied to in last 90 days).")
+            else:
+                st.info("No messages found in the last 90 days.")
+        else:
+            st.info("Message Log not available or empty.")
+
+        st.divider()
+
+        # ── Framework reference ───────────────────────────────────────────────
+        with st.expander("Grandslam Framework — full reference"):
+            st.markdown("""
+**Avatar Selection — the top 20% are your Whales**
+Focus coaching attention and relationship investment on your highest-score athletes.
+They stay longest, pay most, and refer. Repelling low-fit prospects by tightening
+avatar criteria prevents the churn that drags down cohort retention.
+
+**Journey Stage guide**
+| Stage | Criteria | Primary action |
+|-------|----------|----------------|
+| 🌱 New | < 30 days | Onboarding, intake form, first-log check-in |
+| 🔥 Active | 30–89 days | Build logging habit, competition calendar |
+| ⭐ Established | 90–179 days | Programme alignment, goal clarity |
+| 💎 Lifer | 180+ days, active | Ceremony message auto-fires. Public recognition. |
+| 🏆 Elite | Bespoke sub | Personal coaching only — zero automation |
+| ⚠️ Drifting | 28–59 days no log | Personal message within 48 hours — still recoverable |
+| ☠️ Churned | 60+ days no log | Re-engagement or graceful offboard |
+
+**The Finish Line Problem (Lost Momentum)**
+Athletes who've achieved their original goal but haven't set a new one lose motivation fast.
+Established and Lifer athletes with < 6 sessions in 90 days are showing this pattern.
+The fix: ask what they want to chase next. A clear goal restarts the engine.
+
+**Upsell (Value Grid)**
+The document calls this moving from a 'Stair-Step' to a 'Grid' model.
+Athletes who've been on a standard programme for 6+ months with high engagement are
+natural candidates for Bespoke 1:1 coaching. The conversation is: 'You've outgrown the group programme.'
+
+**Cohort Retention**
+This is the single most diagnostic view in the tab. If month-1 retention is < 70%,
+onboarding is the problem. If month-3 drops sharply, athletes are hitting a plateau or
+finishing their initial goal (Finish Line problem). If month-6 drops, there's no second product to move them into.
+
+**Activation**
+Activation = breadth of benchmark engagement. The Grandslam framework calls this
+'Activation Points' — every benchmark logged is a psychological vote for staying.
+Athletes who only ever log one or two benchmarks are underinvested and churn more easily.
+
+**Price Protection (future)**
+Founding Member pricing forfeited on cancellation creates a permanent switching cost.
+The subscription becomes a valued asset, not just a recurring charge.
+            """)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -4942,12 +5630,13 @@ def main():
             import importlib
             importlib.reload(analytics)
         load_results = analytics.load_analysis(pr_records, rec_by_name=rec_by_name, data_records=data_records)
+        grandslam_results = analytics.grandslam_score(athletes, pr_records, data_records)
 
     tabs = st.tabs([
         "✅ Actions", "📋 Outreach List", "🚨 Alerts", "🃏 Squad", "👥 Athletes",
         "🗓️ Week Plan", "🏁 Competitions", "📊 Programmes", "🏋️ Load",
         "📈 Trends", "🏆 Leaderboard", "💤 Recovery", "🌐 CRM",
-        "📚 Playbook", "⚙️ Sync", "❓ Help",
+        "📚 Playbook", "💎 Grandslam", "⚙️ Sync", "❓ Help",
     ])
 
     with tabs[0]:
@@ -4980,8 +5669,10 @@ def main():
     with tabs[13]:
         page_coaching_playbook()
     with tabs[14]:
-        page_sync_health()
+        page_grandslam(grandslam_results, data_records, pr_records=pr_records, athletes=athletes, competition_rows=competition_rows)
     with tabs[15]:
+        page_sync_health()
+    with tabs[16]:
         page_help()
 
 

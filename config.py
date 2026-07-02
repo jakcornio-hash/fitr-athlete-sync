@@ -34,6 +34,8 @@ ANTHROPIC_MODEL = _get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 LOOKBACK_DAYS = int(_get("LOOKBACK_DAYS", "7"))
 MAX_CHAT_SUMMARIES = int(_get("MAX_CHAT_SUMMARIES", "40"))
 DRY_RUN = _get("DRY_RUN", "0") == "1"
+# Comma-separated athlete names to restrict sync to (e.g. for testing). Empty = all athletes.
+TEST_ATHLETES = [n.strip() for n in _get("TEST_ATHLETES", "").split(",") if n.strip()]
 
 # Tab names in the sheet
 TAB_PR_LOG = "PR Log"
@@ -206,6 +208,10 @@ BENCHMARK_NAME_MAP = {
     "jackie": "Jackie",
     "elizabeth": "Elizabeth",
 }
+
+# Grandslam retention: athletes who joined on/before this date are Founding Members.
+# Format: YYYY-MM-DD. Override via FOUNDING_MEMBER_CUTOFF env var.
+FOUNDING_MEMBER_CUTOFF = _get("FOUNDING_MEMBER_CUTOFF", "2024-12-31")
 
 # Monthly subscription prices by plan name — update to match your actual plans/prices.
 # Keys must exactly match the values stored in the "Subscription Plan" column of _DATA.
