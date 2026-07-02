@@ -1265,7 +1265,7 @@ def main():
             msg = (
                 f"Hey {first} — ninety days since your first log on "
                 f"{first_log.strftime('%d %b %Y')}.\n\n"
-                f"That's the Established mark. Most people who were going to stop have stopped by now.\n\n"
+                f"Most people who were going to stop have stopped by now.\n\n"
                 f"You haven't. That's what three months means.\n\n"
                 f"Keep going."
             )
