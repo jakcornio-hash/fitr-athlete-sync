@@ -4375,30 +4375,79 @@ def page_sync_health():
 
 
 def page_help():
-    """Coach guide — explains each tab and how to use the dashboard."""
+    """Coach guide — explains the dashboard, what runs automatically, and how to use each tab."""
     st.markdown("## Dashboard Guide")
     st.caption(
-        "A quick reference for coaches. "
-        "This dashboard pulls live data from Google Sheets every 15 minutes. "
-        "To force a reload: Streamlit menu (⋮) → Rerun."
+        "This dashboard pulls live data from Fitr and Google Sheets throughout the day. "
+        "To force a reload: Streamlit menu (⋮, top right) → Rerun."
     )
     st.divider()
 
+    # ── What the system does automatically ───────────────────────────────────
+    st.markdown("### What the system handles automatically")
+    st.caption("These run on the daily sync. You don't need to do anything for them.")
+    st.markdown("""
+| Message type | When it sends | Notes |
+|---|---|---|
+| New athlete welcome | Added to Fitr | Sends intake form link + recovery check-in instructions |
+| First log message | Athlete's first training log | "First log is in. Good start." |
+| New PB / result | Benchmark result logged | Short, specific congrats |
+| North Star goal hit | Logged result matches their stated goal | Celebration + "time to set the next one" |
+| Competition countdown | 10 weeks, 3 weeks, race week, day before (A races) | Phase-appropriate motivation |
+| Post-competition | Day after a competition | Asks for result, reflection, and how they're feeling |
+| Training anniversary | 90 days, 6 months, 1 year, 18 months, 2 years | Consistency acknowledgement |
+| 60-day inactive | 60 days without a log | Soft check-in, no pressure |
+| Weekly progress emails | Every Monday | Results, consistency, competition updates |
+
+**Bespoke athletes** receive **no** automated messages — every message to them is personal.
+""")
+
+    st.divider()
+    st.markdown("### What you do")
+    st.markdown("""
+The system handles volume. Your job is the human stuff the system can't — flagged athletes, recovery issues, the relationships that matter.
+
+**Daily (5–10 minutes):**
+1. Open the **✅ Actions** tab — your to-do list for the day
+2. Work through the cards. Each one has the message drafted
+3. Copy, tweak if needed, and send (Fitr, email, or WhatsApp)
+4. Hit **Mark Done** on each card as you go
+
+Most days that's it.
+""")
+
+    st.divider()
+    st.markdown("### Tab reference")
+
     tabs_info = [
+        ("✅ Actions", """
+**Ed's daily working interface.** Every athlete that needs a personal message from you, in order of priority. The system has not sent anything to these athletes.
+
+Each card shows:
+- Priority and reason for contact
+- Pre-drafted message (editable — it's a text box)
+- **Email**, **WhatsApp**, and **Fitr** send buttons
+- **Mark Done** — removes the item from the queue and moves it to a collapsed Completed section
+
+Progress bar at the top tracks how many you've cleared.
+Completed items reset each browser session (i.e. next day).
+
+**Priority types:**
+- 🔴 **Contact Today** — Recovery survey flagged high soreness or stress. Message today.
+- ✅ **Positive** — Consistency streak. Quick acknowledgement.
+- ⚠️ **Check In** — 28–44 days without logging. Light nudge.
+- ⚠️ **Re-engage** — 45+ days. More direct — they may be about to cancel.
+- 📉 **Performance** — A benchmark is declining or significantly below peak.
+- 🚨 **Programme Switch** — A-race is 10 weeks out. Confirm you've updated their programme.
+- 📝 **Remind to Log** — In contact but not recording sessions.
+"""),
         ("📋 Outreach List", """
-Your daily starting point. Every athlete who needs contact appears here, sorted by urgency.
+The full overview table — same data as the Actions tab but in table format with export.
 
-- **🔴 Contact Today** — Recovery flags. Address these before anything else.
-- **🏆 Celebrate** — Athlete logged a new result this week. Send a quick win message.
-- **✅ Positive** — Consistency streak. Acknowledge the discipline.
-- **⚠️ Re-engage** — 45+ days without logging. Direct personal reach-out needed.
-- **📉 Performance** — A benchmark is declining or well below peak.
-- **⚠️ Check In** — 28–44 days without logging. Friendly nudge.
-- **🏁 Comp Prep** — Competition approaching or just passed. Phase-specific action required.
-- **📝 Remind to Log** — Athlete is in contact but not recording results.
+**Ed's Action Queue** (top section) — athletes needing a personal message from you.
+**Auto-sent by system** (collapsed section) — what the system sent this cycle, for your awareness.
 
-**Generate Message** at the bottom gives a ready-to-send, archetype-aware message for each athlete.
-Use **Export Outreach List** to download the full list with messages as Markdown.
+Use **Export Outreach List** to download everything with drafted messages as Markdown — useful for planning ahead or sharing.
 """),
         ("🚨 Alerts", """
 Aggregate view of all flags across the squad.
@@ -4408,48 +4457,47 @@ Aggregate view of all flags across the squad.
 - **Performance Concerns** — Benchmarks with a declining trend or a big drop from peak.
 - **Consistency Wins** — Positive streaks worth acknowledging.
 
-Use this tab to check the squad's health at a glance before planning your week.
+Good for a quick squad health check before planning your week.
 """),
         ("🃏 Squad", """
 Card grid showing every athlete's current status.
 
-- **🟢 Active** — Logged within the last 14 days, no recovery concerns.
-- **🟡 Check in** — 15–44 days since logging, or a recovery concern.
-- **🔴 Urgent** — 45+ days inactive, never logged, or high soreness/stress.
+- 🟢 **Active** — Logged within the last 14 days, no recovery concerns.
+- 🟡 **Check in** — 15–44 days since logging, or a recovery concern.
+- 🔴 **Urgent** — 45+ days inactive, never logged, or high soreness/stress.
 
 Filter by Programme or Status to focus on a subset.
-The **Quick note** button on each card lets you log a coaching note without navigating away.
+**Quick note** on each card logs a coaching interaction without leaving the tab.
 """),
         ("👥 Athletes", """
-Full roster with filters. Click any row to open the athlete's profile panel.
+Full roster. Click any row to open the athlete's profile.
 
-The profile shows: physical stats, programme, injuries, competitions, benchmark snapshots, recovery, archetype, and full coaching notes timeline.
+Profile includes: stats, programme, injuries, competitions, benchmark snapshots, recovery history, archetype, coaching notes, and conversation summaries.
 
-**Risk column** — Composite churn risk score (🔴 Critical / 🟡 Elevated / 🟠 Moderate / 🟢 Low) based on days since last log, declining trends, recovery flags, and time since last coach contact. Use the Risk filter to instantly surface your highest-risk athletes.
+**Risk column** — Composite churn risk score based on days since last log, declining trends, recovery flags, and time since last contact. Use the Risk filter to instantly surface who needs attention.
 
-**Archetype Assessment** — Run the 10-question forced-choice instrument inside a profile.
-Share the **Self-Assessment Link** with the athlete so they can fill it in themselves.
-**Add Note** — Log a chat, result, or recovery entry directly to the athlete's profile.
+**Archetype Assessment** — 10-question instrument inside a profile. Share the **Self-Assessment Link** with the athlete to fill it in themselves.
+**Add Note** — Log a call, check-in, or recovery entry directly to their profile.
 """),
         ("🗓️ Week Plan", """
-Your coaching week as a prioritised action list with inline note-taking.
+Coaching week as a prioritised action list.
 
-- **🔴 Do today** — Recovery flags and programme switches that can't wait.
-- **📋 This week** — Check-ins and comp prep reminders.
-- **🏆 Celebrate** — PRs and consistency wins to acknowledge.
+- 🔴 **Do today** — Recovery flags and programme switches that can't wait.
+- 📋 **This week** — Check-ins and comp prep.
+- 🏆 **Celebrate** — PRs and consistency wins.
 
-Each item has a quick note button so you can log a coaching interaction without switching tabs.
+Each item has a quick note button to log the interaction without switching tabs.
 """),
         ("🏁 Competitions", """
-All athlete competitions in one place.
+All competitions across the squad.
 
-- **Upcoming & Recent** — Full squad comp schedule with phase and required action.
-- **A-Race Actions** — Expanded view of athletes needing a programme switch or taper.
-- **Annual Calendar** — Visual scatter plot of the whole competitive year.
+- **Upcoming & Recent** — Full schedule with phase and required action.
+- **A-Race Actions** — Athletes needing a programme switch or taper.
+- **Annual Calendar** — Visual scatter plot of the full competitive year.
 
-Add a competition inside any athlete's profile (Athletes → click athlete → Competition Calendar → Add Competition).
+Add a competition: Athletes → click athlete → Competition Calendar → Add Competition.
 
-**A / B / C competition types:**
+**Competition types:**
 - 🥇 **A** — Primary goal. Full 10-week prep + 2-week peak. 1–3 per year max.
 - 🥈 **B** — Secondary race. Race hard, no programme change.
 - 🥉 **C** — Training day. Compete without taper.
@@ -4457,39 +4505,56 @@ Add a competition inside any athlete's profile (Athletes → click athlete → C
         ("📊 Programmes", """
 Breakdown of athletes by programme track.
 
-**Programme Breakdown** — Headcount, active rate (logged in the last 28 days), average days since logging, load spikes, and declining trends per track. Spot which tracks have low engagement or need attention.
+- **Programme Breakdown** — Headcount, active rate (logged in the last 28 days), days since last log, load spikes, and declining trends per track.
+- **Coach Capacity** — Active athletes, average days since log, and athletes needing attention per coach.
 
-**Coach Capacity** — Bespoke athlete count, active athletes, average days since log, and number needing attention per coach. Use this to identify who's stretched and whether any coach has capacity for new clients.
-
-Assign or change an athlete's programme inside their profile in the Athletes tab.
+Assign or change a programme inside any athlete's profile.
 """),
         ("📈 Trends", """
 Progress chart for any athlete and benchmark.
 
-Select an athlete, then a benchmark, to see their results plotted over time.
-Tick **Compare with another athlete** to overlay a second athlete on the same chart — useful for peer benchmarking within a programme group.
+Select athlete → then benchmark → results plotted over time.
+Tick **Compare with another athlete** to overlay a second athlete — useful for peer benchmarking within a track.
+"""),
+        ("🏆 Leaderboard", """
+Squad rankings across benchmark categories (strength, engine, gymnastics, etc.).
+
+Shows composite percentile score and per-category ranked tables. Useful for identifying standouts and programme-level patterns.
 """),
         ("💤 Recovery", """
 Latest recovery survey responses for every athlete who has submitted one.
 
-**Soreness** and **Stress** cells are highlighted red (≥ 7/10) or amber (≥ 5/10). These athletes appear in the Alerts and Outreach tabs.
+Soreness and Stress cells are highlighted red (≥ 7/10) or amber (≥ 5/10). These athletes also appear in Alerts and Actions.
 
 Recovery surveys are collected via Typeform. The link is in your coach onboarding notes.
 """),
         ("🌐 CRM", """
-Five views for managing the coach-athlete mapping between the CRM and Fitr. Fitr is the single source of truth for athlete data; the CRM is used for coach-athlete mapping and onboarding.
+Coach-athlete mapping between the CRM and Fitr.
 
-**🔄 Lifecycle** — Full status table for every bespoke athlete: CRM coach, whether they're syncing, last logged date, and engagement status. Filter by coach or status. This is your "are they still with us?" view.
+- **🔄 Lifecycle** — Full status for every bespoke athlete: coach, sync status, last logged, engagement.
+- **🚀 Pipeline** — CRM athletes not yet syncing.
+- **👥 Rosters** — CRM roster vs. actively syncing athletes per coach. Flags gaps and surprises.
+- **⚠️ Discrepancies** — Duplicate CRM entries and Programme field mismatches.
+- **✏️ Bulk Reassign** — Move multiple athletes to a different coach or programme.
+"""),
+        ("📚 Playbook", """
+**Coaching reference hub.** Scenarios, example messages, and coaching notes compiled from JST resources.
 
-**🚀 Pipeline** — CRM athletes not yet in Benchmarks (not yet syncing). These will be auto-added when they appear in Fitr chat rooms, or manually via `onboard_bespoke_athletes.py`.
+Currently covers: coaching methodology, mindset principles (Atomic Habits, Chimp Paradox), missed sessions, competition scenarios, weightlifting cues (snatch, clean, jerk), gymnastics cues, conditioning principles, recovery management, and the three athlete avatars (Grit/Grunt/Grime).
 
-**👥 Rosters** — Per-coach comparison of CRM roster vs. actively syncing athletes. Flags gaps (in CRM but no Fitr data) and surprises (syncing but not in CRM), with an engagement summary per coach.
+**Adding to it:** Use the **+ Add new entry** form at the bottom of the tab, or add rows directly to the **Coaching Playbook** tab in the Google Sheet.
 
-**⚠️ Discrepancies** — Duplicate CRM entries (same athlete under multiple coaches) and mismatches between CRM coach and the _DATA Programme field. Fix these by updating the CRM or running the backfill script.
+The Playbook is used by the AI to generate message drafts — better notes = better drafts. Add anything that works.
 
-**✏️ Bulk Reassign** — Move multiple athletes to a different coach or programme in one action. Filter by current programme, select athletes, pick the new assignment, and click Apply.
+The **JST Tone of Voice quick reference** panel at the bottom covers the key rules for all coach-to-athlete messages.
+"""),
+        ("⚙️ Sync", """
+Sync history and message log.
 
-The **Sync Status** header at the top shows the last sync run date, new PR results pulled, conversations summarised, and any athletes auto-onboarded.
+- **Last sync run** date and what was pulled.
+- **Message Log** — Every automated Fitr message sent by the system, by type.
+
+If a sync looks stale or messages aren't sending, check Streamlit Cloud logs for errors.
 """),
     ]
 
@@ -4500,11 +4565,11 @@ The **Sync Status** header at the top shows the last sync run date, new PR resul
     st.divider()
     st.markdown("### Quick tips")
     st.markdown("""
-- **Coaching notes** are stored as `[YYYY-MM-DD — kind] text` entries in the Google Sheet *_DATA* tab → Coaching Notes column. You can edit them directly in the sheet.
-- **Self-assessment links** — Each athlete has a unique URL. Find it in their profile under Archetype → Share Self-Assessment Link.
-- **Archetype messaging** — Outreach messages are tailored to the athlete's communication cluster. Athletes without an archetype get a generic message.
+- **Coaching notes** are stored in the Google Sheet *_DATA* tab → Coaching Notes column. You can edit them directly in the sheet.
+- **Archetype messaging** — Drafted messages are tailored to the athlete's communication archetype. Athletes without one get a generic message.
 - **Adding competitions** — Athletes tab → click athlete → Competition Calendar → Add Competition.
-- **Refreshing data** — Streamlit menu (⋮, top right) → Rerun, or wait up to 15 minutes for the automatic cache refresh.
+- **Refreshing data** — Streamlit menu (⋮, top right) → Rerun, or wait up to 15 minutes for the automatic refresh.
+- **Bespoke athletes** — No automated messages are sent to Bespoke subscription athletes. Everything for them goes through you personally.
     """)
 
     st.divider()
