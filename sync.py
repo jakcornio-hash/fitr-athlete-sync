@@ -1263,13 +1263,11 @@ def main():
         first = nm.split()[0]
         if days_training == 90:
             msg = (
-                f"Hey {first} — three months since your first log on "
+                f"Hey {first} — ninety days since your first log on "
                 f"{first_log.strftime('%d %b %Y')}.\n\n"
-                f"That's the Established mark. Most people who start a programme don't make it here.\n\n"
-                f"At three months the habit is real. The fitness you've built in that time "
-                f"doesn't disappear — it compounds. Every session from here is on top of a base "
-                f"that didn't exist ninety days ago.\n\n"
-                f"Keep building."
+                f"That's the Established mark. Most people who were going to stop have stopped by now.\n\n"
+                f"You haven't. That's what three months means.\n\n"
+                f"Keep going."
             )
         elif days_training == 180:
             msg = (
