@@ -2564,6 +2564,275 @@ def page_programmes(athletes, pr_records, trend_results, data_records, load_resu
         st.dataframe(cohort_df, width='stretch', hide_index=True)
 
 
+def _build_outreach_rows(engagement_results, trend_results, rec_alert_rows, milestones,
+                          consistency_wins, comp_results, data_records):
+    """Build the full prioritised outreach row list shared by page_outreach and page_action_list."""
+    data_by_name = {str(r.get("Full Name", "")).strip(): r for r in (data_records or [])}
+
+    def _prog(name):
+        return str(data_by_name.get(name, {}).get("Programme", "")).strip()
+
+    rows = []
+
+    for alert in rec_alert_rows:
+        nm = alert[0]
+        rows.append({
+            "Priority": "🔴 Contact Today", "Athlete": nm,
+            "Reason": alert[1], "Action": "Recovery check-in",
+            "_order": 0, "_reason_type": "recovery_flag",
+            "_ctx": {"issue": alert[1]}, "_programme": _prog(nm),
+        })
+
+    for m in milestones:
+        name, bench, val = m[0], m[1], m[2]
+        prev = m[3] if len(m) > 3 else ""
+        reason = (f"New result — {bench}: {val} (was {prev})" if prev and prev != "first entry"
+                  else f"Logged this week — {bench}: {val}")
+        rows.append({
+            "Priority": "🏆 Celebrate", "Athlete": name,
+            "Reason": reason, "Action": "Congratulate",
+            "_order": 1, "_reason_type": "celebrate",
+            "_ctx": {"result": reason}, "_programme": _prog(name),
+        })
+
+    for name, weeks in consistency_wins:
+        rows.append({
+            "Priority": "✅ Positive", "Athlete": name,
+            "Reason": f"{weeks} consecutive weeks logging", "Action": "Acknowledge streak",
+            "_order": 2, "_reason_type": "consistency",
+            "_ctx": {"weeks": weeks}, "_programme": _prog(name),
+        })
+
+    for e in engagement_results:
+        if not e["flag"]:
+            continue
+        days = e["days_since"]
+        never = e["last_logged"] == "never"
+        if never or (days and days >= 45):
+            reason = "Never logged" if never else f"{days} days inactive"
+            rows.append({
+                "Priority": "⚠️ Re-engage", "Athlete": e["name"],
+                "Reason": reason, "Action": "Re-engagement message",
+                "_order": 3, "_reason_type": "never_logged" if never else "re_engage",
+                "_ctx": {} if never else {"days": days}, "_programme": _prog(e["name"]),
+            })
+
+    for athlete, signals in sorted(trend_results.items()):
+        for s in signals:
+            if s["trend"] == "declining" or s["peak_drop_flag"]:
+                parts = []
+                if s["trend"] == "declining":
+                    parts.append(f"declining ({s['trend_pct']:+.1f}%/entry)")
+                if s["peak_drop_flag"]:
+                    parts.append(f"{s['peak_drop_pct']:.0f}% below peak")
+                rows.append({
+                    "Priority": "📉 Performance", "Athlete": athlete,
+                    "Reason": f"{s['benchmark']}: {', '.join(parts)}",
+                    "Action": "Performance check-in",
+                    "_order": 4, "_reason_type": "performance_concern",
+                    "_ctx": {"bench": s["benchmark"]}, "_programme": _prog(athlete),
+                })
+
+    for e in engagement_results:
+        if not e["flag"]:
+            continue
+        days = e["days_since"]
+        if days and 28 <= days < 45:
+            rows.append({
+                "Priority": "⚠️ Check In", "Athlete": e["name"],
+                "Reason": f"{days} days inactive (last: {e['last_logged']})",
+                "Action": "Check-in message",
+                "_order": 5, "_reason_type": "re_engage",
+                "_ctx": {"days": days}, "_programme": _prog(e["name"]),
+            })
+
+    for c in (comp_results or []):
+        if not c["action"]:
+            continue
+        phase = c["phase"]
+        ct = c.get("comp_type", "A")
+        w, d = divmod(max(c["days_out"], 0), 7)
+        time_str = f"{abs(c['days_out'])}d ago" if c["days_out"] < 0 else f"{w}w {d}d out"
+        badge = _COMP_TYPE_LABEL.get(ct, ct)
+        if ct == "A":
+            if phase == "Post-Competition":
+                priority, order = "🟣 Post-Comp", 0
+            elif "Switch" in phase:
+                priority, order = "🚨 Programme Switch", 1
+            elif phase == "Pre-Peak":
+                priority, order = "🏁 Comp Prep", 2
+            else:
+                priority, order = "🏁 Comp Prep", 3
+        else:
+            priority, order = ("🟣 Post-Comp", 0) if phase == "Post-Competition" else ("🏁 Comp Prep", 3)
+        rows.append({
+            "Priority": priority, "Athlete": c["name"],
+            "Reason": f"{badge} {c['comp_name']} — {time_str}",
+            "Action": c["action"],
+            "_order": order, "_reason_type": "post_comp" if phase == "Post-Competition" else None,
+            "_ctx": {"comp": c["comp_name"]},
+            "_comp_msg": c["message_template"], "_programme": _prog(c["name"]),
+        })
+
+    for e in engagement_results:
+        if not e.get("nudge_flag"):
+            continue
+        days = e["days_since"]
+        last_contact = e.get("last_contact", "recently")
+        reason = (
+            f"No results logged ({days} days) — last contact {last_contact}"
+            if days else f"Never logged — but in contact (last {last_contact})"
+        )
+        rows.append({
+            "Priority": "📝 Remind to Log", "Athlete": e["name"],
+            "Reason": reason, "Action": "Ask them to record their results",
+            "_order": 6, "_reason_type": "nudge_to_log",
+            "_ctx": {}, "_programme": _prog(e["name"]),
+        })
+
+    rows.sort(key=lambda x: x["_order"])
+
+    _AUTO_PRIORITIES = {"🏆 Celebrate", "🟣 Post-Comp", "🏁 Comp Prep", "⚠️ Re-engage"}
+    for r in rows:
+        r["_auto"] = r["Priority"] in _AUTO_PRIORITIES
+
+    return rows
+
+
+def page_action_list(engagement_results, trend_results, rec_alert_rows, milestones,
+                     consistency_wins, comp_results=None, archetype_by_name=None, data_records=None):
+    """Ed's daily task list — checkable action cards with messages ready to copy or send."""
+    import hashlib
+
+    rows = _build_outreach_rows(
+        engagement_results, trend_results, rec_alert_rows, milestones,
+        consistency_wins, comp_results or [], data_records or [],
+    )
+    # Ed's queue only — exclude auto-sent items
+    ed_rows = [r for r in rows if not r.get("_auto")]
+
+    # ── Done-item tracking ────────────────────────────────────────────────────
+    # Keyed by stable hash of athlete + priority + reason, stored in session_state.
+    # Resets automatically each new browser session (i.e. each work day).
+    def _item_key(r):
+        raw = f"{r['Athlete']}|{r['Priority']}|{r['Reason']}"
+        return "action_done_" + hashlib.md5(raw.encode()).hexdigest()[:10]
+
+    done_keys = {_item_key(r) for r in ed_rows if st.session_state.get(_item_key(r))}
+    active = [r for r in ed_rows if not st.session_state.get(_item_key(r))]
+    completed = [r for r in ed_rows if st.session_state.get(_item_key(r))]
+
+    total = len(ed_rows)
+    n_done = len(completed)
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    if total == 0:
+        st.success("Nothing in Ed's queue right now — all athletes on track.")
+        return
+
+    col_h1, col_h2 = st.columns([3, 1])
+    with col_h1:
+        st.markdown(f"## Ed's Action List")
+        st.caption(
+            "Everything that needs a personal message from Ed today. "
+            "Read the draft, copy it, send it — then mark it done."
+        )
+    with col_h2:
+        if n_done == total:
+            st.success(f"All {total} done")
+        else:
+            st.metric("Done", f"{n_done} / {total}")
+
+    if total > 0:
+        st.progress(n_done / total)
+
+    if n_done == total:
+        st.balloons()
+        st.success("All done for today. Good work.")
+
+    st.divider()
+
+    # ── Priority colour mapping ───────────────────────────────────────────────
+    _BORDER_COLOUR = {
+        "🔴 Contact Today":    "#e53935",
+        "✅ Positive":         "#43a047",
+        "⚠️ Re-engage":        "#fb8c00",
+        "⚠️ Check In":         "#fb8c00",
+        "📉 Performance":      "#e91e63",
+        "🚨 Programme Switch": "#fb8c00",
+        "📝 Remind to Log":    "#1e88e5",
+    }
+
+    # ── Active items ──────────────────────────────────────────────────────────
+    for i, r in enumerate(active):
+        name = r["Athlete"]
+        priority = r["Priority"]
+        reason = r["Reason"]
+        reason_type = r.get("_reason_type")
+        ctx = r.get("_ctx", {})
+        arch_row = (archetype_by_name or {}).get(name)
+        arch_id = str(arch_row.get("Primary Archetype", "")).strip() if arch_row else None
+        comp_msg = r.get("_comp_msg")
+        item_key = _item_key(r)
+        border_col = _BORDER_COLOUR.get(priority, "#888")
+
+        # Card container
+        with st.container(border=True):
+            # Header row: priority badge + athlete name + done button
+            hcol1, hcol2 = st.columns([5, 1])
+            with hcol1:
+                prog = r.get("_programme", "")
+                prog_str = f" · {prog}" if prog else ""
+                st.markdown(f"**{priority}** — **{name}**{prog_str}")
+                st.caption(reason)
+            with hcol2:
+                if st.button("✅ Done", key=f"done_{item_key}", use_container_width=True):
+                    st.session_state[item_key] = True
+                    st.rerun()
+
+            # Message draft
+            if comp_msg and not reason_type:
+                msg = comp_msg
+            elif reason_type:
+                msg = msg_tmpl.generate_message(name, reason_type, ctx, arch_id)
+            else:
+                msg = ""
+
+            if msg:
+                st.text_area(
+                    "Message draft",
+                    value=msg,
+                    height=110,
+                    key=f"msg_draft_{item_key}",
+                    label_visibility="collapsed",
+                )
+                # Action buttons
+                bcol1, bcol2, bcol3, _ = st.columns([1, 1, 1, 4])
+                encoded = urllib.parse.quote(msg)
+                with bcol1:
+                    st.link_button("✉️ Email", f"mailto:?subject=Training+Update&body={encoded}")
+                with bcol2:
+                    st.link_button("💬 WhatsApp", f"https://wa.me/?text={encoded}")
+                with bcol3:
+                    _fitr_send_widget(name, msg, idx=i)
+            else:
+                st.caption("No message template for this item — action manually.")
+
+    # ── Completed section ─────────────────────────────────────────────────────
+    if completed:
+        st.divider()
+        with st.expander(f"✅ Completed ({n_done})", expanded=False):
+            for r in completed:
+                item_key = _item_key(r)
+                col_a, col_b = st.columns([5, 1])
+                with col_a:
+                    st.markdown(f"~~{r['Priority']} — **{r['Athlete']}**~~ — {r['Reason']}")
+                with col_b:
+                    if st.button("Undo", key=f"undo_{item_key}", use_container_width=True):
+                        st.session_state[item_key] = False
+                        st.rerun()
+
+
 def _outreach_send_buttons(msg):
     """Render email and WhatsApp send links below an outreach message."""
     encoded = urllib.parse.quote(msg)
@@ -2601,186 +2870,19 @@ def _fitr_send_widget(name, msg, idx=0):
 
 def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
                   consistency_wins, comp_results=None, archetype_by_name=None, data_records=None):
-    """Prioritised list of every athlete who needs contact this week."""
+    """Prioritised overview table of every athlete who needs contact this week."""
+    rows = _build_outreach_rows(
+        engagement_results, trend_results, rec_alert_rows, milestones,
+        consistency_wins, comp_results or [], data_records or [],
+    )
+
     data_by_name = {str(r.get("Full Name", "")).strip(): r for r in (data_records or [])}
 
     def _prog(name):
         return str(data_by_name.get(name, {}).get("Programme", "")).strip()
 
-    rows = []
-
-    # 1. Recovery flags — most urgent
-    for alert in rec_alert_rows:
-        nm = alert[0]; p = _prog(nm)
-        rows.append({
-            "Priority": "🔴 Contact Today",
-            "Athlete": nm,
-            "Reason": alert[1],
-            "Action": "Recovery check-in",
-            "_order": 0,
-            "_reason_type": "recovery_flag",
-            "_ctx": {"issue": alert[1]},
-            "_programme": p,
-        })
-
-    # 2. Milestones — quick win to celebrate
-    for m in milestones:
-        name, bench, val = m[0], m[1], m[2]
-        prev = m[3] if len(m) > 3 else ""
-        reason = (f"New result — {bench}: {val} (was {prev})" if prev and prev != "first entry"
-                  else f"Logged this week — {bench}: {val}")
-        p = _prog(name)
-        rows.append({
-            "Priority": "🏆 Celebrate",
-            "Athlete": name,
-            "Reason": reason,
-            "Action": "Congratulate",
-            "_order": 1,
-            "_reason_type": "celebrate",
-            "_ctx": {"result": reason},
-            "_programme": p,
-        })
-
-    # 3. Consistency streaks — acknowledge
-    for name, weeks in consistency_wins:
-        p = _prog(name)
-        rows.append({
-            "Priority": "✅ Positive",
-            "Athlete": name,
-            "Reason": f"{weeks} consecutive weeks logging",
-            "Action": "Acknowledge streak",
-            "_order": 2,
-            "_reason_type": "consistency",
-            "_ctx": {"weeks": weeks},
-            "_programme": p,
-        })
-
-    # 4. Long-term dropout (45+ days) — urgent re-engage
-    for e in engagement_results:
-        if not e["flag"]:
-            continue
-        days = e["days_since"]
-        never = e["last_logged"] == "never"
-        if never or (days and days >= 45):
-            reason = "Never logged" if never else f"{days} days inactive"
-            p = _prog(e["name"])
-            rows.append({
-                "Priority": "⚠️ Re-engage",
-                "Athlete": e["name"],
-                "Reason": reason,
-                "Action": "Re-engagement message",
-                "_order": 3,
-                "_reason_type": "never_logged" if never else "re_engage",
-                "_ctx": {} if never else {"days": days},
-                "_programme": p,
-            })
-
-    # 5. Performance concerns
-    for athlete, signals in sorted(trend_results.items()):
-        for s in signals:
-            if s["trend"] == "declining" or s["peak_drop_flag"]:
-                parts = []
-                if s["trend"] == "declining":
-                    parts.append(f"declining ({s['trend_pct']:+.1f}%/entry)")
-                if s["peak_drop_flag"]:
-                    parts.append(f"{s['peak_drop_pct']:.0f}% below peak")
-                p = _prog(athlete)
-                rows.append({
-                    "Priority": "📉 Performance",
-                    "Athlete": athlete,
-                    "Reason": f"{s['benchmark']}: {', '.join(parts)}",
-                    "Action": "Performance check-in",
-                    "_order": 4,
-                    "_reason_type": "performance_concern",
-                    "_ctx": {"bench": s["benchmark"]},
-                    "_programme": p,
-                })
-
-    # 6. Standard inactive (28-44 days)
-    for e in engagement_results:
-        if not e["flag"]:
-            continue
-        days = e["days_since"]
-        if days and 28 <= days < 45:
-            p = _prog(e["name"])
-            rows.append({
-                "Priority": "⚠️ Check In",
-                "Athlete": e["name"],
-                "Reason": f"{days} days inactive (last: {e['last_logged']})",
-                "Action": "Check-in message",
-                "_order": 5,
-                "_reason_type": "re_engage",
-                "_ctx": {"days": days},
-                "_programme": p,
-            })
-
-    # 7. Competition prep — phase transitions
-    for c in (comp_results or []):
-        if not c["action"]:
-            continue
-        phase = c["phase"]
-        ct = c.get("comp_type", "A")
-        w, d = divmod(max(c["days_out"], 0), 7)
-        time_str = f"{abs(c['days_out'])}d ago" if c["days_out"] < 0 else f"{w}w {d}d out"
-        badge = _COMP_TYPE_LABEL.get(ct, ct)
-        if ct == "A":
-            if phase == "Post-Competition":
-                priority, order = "🟣 Post-Comp", 0
-            elif "Switch" in phase:
-                priority, order = "🚨 Programme Switch", 1
-            elif phase == "Pre-Peak":
-                priority, order = "🏁 Comp Prep", 2
-            else:
-                priority, order = "🏁 Comp Prep", 3
-        else:
-            if phase == "Post-Competition":
-                priority, order = "🟣 Post-Comp", 0
-            else:
-                priority, order = "🏁 Comp Prep", 3
-        p = _prog(c["name"])
-        rows.append({
-            "Priority": priority,
-            "Athlete": c["name"],
-            "Reason": f"{badge} {c['comp_name']} — {time_str}",
-            "Action": c["action"],
-            "_order": order,
-            "_reason_type": "post_comp" if phase == "Post-Competition" else None,
-            "_ctx": {"comp": c["comp_name"]},
-            "_comp_msg": c["message_template"],  # use pre-built comp message
-            "_programme": p,
-        })
-
-    # 8. In contact but not logging — monthly nudge
-    for e in engagement_results:
-        if not e.get("nudge_flag"):
-            continue
-        days = e["days_since"]
-        last_contact = e.get("last_contact", "recently")
-        reason = (
-            f"No results logged ({days} days) — last contact {last_contact}"
-            if days else f"Never logged — but in contact (last {last_contact})"
-        )
-        p = _prog(e["name"])
-        rows.append({
-            "Priority": "📝 Remind to Log",
-            "Athlete": e["name"],
-            "Reason": reason,
-            "Action": "Ask them to record their results",
-            "_order": 6,
-            "_reason_type": "nudge_to_log",
-            "_ctx": {},
-            "_programme": p,
-        })
-
-    rows.sort(key=lambda x: x["_order"])
-
-    # Tag each row: does Ed need to act, or has the system auto-sent this?
-    _AUTO_PRIORITIES = {"🏆 Celebrate", "🟣 Post-Comp", "🏁 Comp Prep", "⚠️ Re-engage"}
-    for r in rows:
-        r["_auto"] = r["Priority"] in _AUTO_PRIORITIES
-
-    ed_rows = [r for r in rows if not r["_auto"]]
-    auto_rows = [r for r in rows if r["_auto"]]
+    ed_rows = [r for r in rows if not r.get("_auto")]
+    auto_rows = [r for r in rows if r.get("_auto")]
 
     if not rows:
         st.success("Nothing to action this week — all athletes on track.")
@@ -4777,42 +4879,44 @@ def main():
         load_results = analytics.load_analysis(pr_records, rec_by_name=rec_by_name, data_records=data_records)
 
     tabs = st.tabs([
-        "📋 Outreach List", "🚨 Alerts", "🃏 Squad", "👥 Athletes",
+        "✅ Actions", "📋 Outreach List", "🚨 Alerts", "🃏 Squad", "👥 Athletes",
         "🗓️ Week Plan", "🏁 Competitions", "📊 Programmes", "🏋️ Load",
         "📈 Trends", "🏆 Leaderboard", "💤 Recovery", "🌐 CRM",
         "📚 Playbook", "⚙️ Sync", "❓ Help",
     ])
 
     with tabs[0]:
-        page_outreach(engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins, comp_results, archetype_by_name=archetype_by_name, data_records=data_records)
+        page_action_list(engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins, comp_results, archetype_by_name=archetype_by_name, data_records=data_records)
     with tabs[1]:
+        page_outreach(engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins, comp_results, archetype_by_name=archetype_by_name, data_records=data_records)
+    with tabs[2]:
         page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_wins,
                     data_records=data_records, pr_records=pr_records, athletes=athletes)
-    with tabs[2]:
-        page_squad(athletes, engagement_results, rec_by_name, data_records=data_records, archetype_by_name=archetype_by_name, pr_records=pr_records)
     with tabs[3]:
-        page_athletes(pr_records, athletes, trend_results, engagement_results, rec_by_name, data_records, archetype_by_name=archetype_by_name, competition_rows=competition_rows)
+        page_squad(athletes, engagement_results, rec_by_name, data_records=data_records, archetype_by_name=archetype_by_name, pr_records=pr_records)
     with tabs[4]:
-        page_week_planner(engagement_results, rec_alert_rows, comp_results, consistency_wins, milestones, data_records=data_records)
+        page_athletes(pr_records, athletes, trend_results, engagement_results, rec_by_name, data_records, archetype_by_name=archetype_by_name, competition_rows=competition_rows)
     with tabs[5]:
-        page_competitions(comp_results, athletes, data_records, competition_rows=competition_rows, pr_records=pr_records)
+        page_week_planner(engagement_results, rec_alert_rows, comp_results, consistency_wins, milestones, data_records=data_records)
     with tabs[6]:
-        page_programmes(athletes, pr_records, trend_results, data_records, load_results=load_results, engagement_results=engagement_results)
+        page_competitions(comp_results, athletes, data_records, competition_rows=competition_rows, pr_records=pr_records)
     with tabs[7]:
-        page_load(load_results)
+        page_programmes(athletes, pr_records, trend_results, data_records, load_results=load_results, engagement_results=engagement_results)
     with tabs[8]:
-        page_trends(pr_records, athletes)
+        page_load(load_results)
     with tabs[9]:
-        page_leaderboard(pr_records, athletes)
+        page_trends(pr_records, athletes)
     with tabs[10]:
-        page_recovery(rec_by_name, pr_records=pr_records)
+        page_leaderboard(pr_records, athletes)
     with tabs[11]:
-        page_crm(athletes, engagement_results, data_records, pr_records=pr_records)
+        page_recovery(rec_by_name, pr_records=pr_records)
     with tabs[12]:
-        page_coaching_playbook()
+        page_crm(athletes, engagement_results, data_records, pr_records=pr_records)
     with tabs[13]:
-        page_sync_health()
+        page_coaching_playbook()
     with tabs[14]:
+        page_sync_health()
+    with tabs[15]:
         page_help()
 
 
