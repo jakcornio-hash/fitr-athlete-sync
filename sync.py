@@ -708,8 +708,7 @@ def auto_onboard_new_athletes(sheets, rooms, fitr=None, room_id_by_name=None,
                 f"https://jstcompete.typeform.com/to/Q1tL7MmR\n\n"
                 f"2. Weekly recovery check-in — same link. Once you're training, do this each week. "
                 f"It takes 2 minutes and is how I manage your load week to week.\n\n"
-                f"Message me here anytime.\n\n"
-                f"Jak"
+                f"Message me here anytime."
             )
             try:
                 fitr.send_chat_message(room_id, intake_msg)
@@ -1040,13 +1039,12 @@ def main():
                     f"Hey {first} — you just hit your North Star Goal. "
                     f"{bench}: {value}. That's what we've been building towards.\n\n"
                     f"Really proud of what you've put in to get there. "
-                    f"Time to set the next one.\n\n"
-                    f"Jak"
+                    f"Time to set the next one."
                 )
             elif prev and prev not in ("", "first entry"):
-                msg = f"Hey {first} — {bench}: {value}. New PB (was {prev}). Good work.\n\nJak"
+                msg = f"Hey {first} — {bench}: {value}. New PB (was {prev}). Good work."
             else:
-                msg = f"Hey {first} — first result in for {bench}: {value}. Good start — we'll build from there.\n\nJak"
+                msg = f"Hey {first} — first result in for {bench}: {value}. Good start — we'll build from there."
             try:
                 fitr.send_chat_message(room_id, msg)
                 congrats_sent += 1
@@ -1166,8 +1164,7 @@ def main():
                 f"Hey {first} — it's been a while since I've seen you in the logs. "
                 f"Hope everything's okay.\n\n"
                 f"If life's got in the way or you want to adjust something with the programme, "
-                f"just drop me a message. No pressure.\n\n"
-                f"Jak"
+                f"just drop me a message. No pressure."
             )
             try:
                 fitr.send_chat_message(room_id, msg)
@@ -1254,8 +1251,7 @@ def main():
         msg = (
             f"Hey {first} — {milestone_label} since your first log on "
             f"{first_log.strftime('%d %b %Y')}. "
-            f"That consistency is exactly what makes the difference.\n\n"
-            f"Jak"
+            f"That consistency is exactly what makes the difference."
         )
         try:
             fitr.send_chat_message(room_id, msg)
@@ -1288,8 +1284,7 @@ def main():
             f"Two minutes of data makes coaching a lot better.\n"
             f"2. Weekly recovery check-in: https://jstcompete.typeform.com/to/Q1tL7MmR — "
             f"takes 2 minutes, helps me manage your training load week to week.\n\n"
-            f"Message me here anytime.\n\n"
-            f"Jak"
+            f"Message me here anytime."
         )
         try:
             fitr.send_chat_message(room_id, msg)
@@ -1308,23 +1303,19 @@ def main():
         70: ("10 weeks out",
              "Hey {first} — your 10-week competition prep block starts {today}. "
              "Everything from here is pointed at {comp}. "
-             "I'll be switching your programme over — trust the process.\n\n"
-             "Jak"),
+             "I'll be switching your programme over — trust the process."),
         21: ("3 weeks out",
              "Hey {first} — three weeks to {comp}. "
              "We're in the final stretch. Keep the quality high and manage your recovery. "
-             "Any questions about your prep, just message.\n\n"
-             "Jak"),
+             "Any questions about your prep, just message."),
         7:  ("race week",
              "Hey {first} — {comp} is seven days away. "
              "Stick to the plan, trust your training, and stay sharp. "
-             "You've put the work in.\n\n"
-             "Jak"),
+             "You've put the work in."),
         1:  ("day before",
              "Hey {first} — {comp} is tomorrow. You're ready. "
              "Good sleep tonight, good warm-up in the morning, "
-             "and go show what you've built.\n\n"
-             "Jak"),
+             "and go show what you've built."),
     }
     competition_rows = sheets.load_competitions()
     comp_msgs_sent = 0
@@ -1425,14 +1416,12 @@ def main():
                 f"2. What went well — anything you want to build on\n"
                 f"3. One thing you'd do differently\n"
                 f"4. How your body's feeling right now\n\n"
-                f"Proud of what you put in to get there.\n\n"
-                f"Jak"
+                f"Proud of what you put in to get there."
             )
         else:
             msg = (
                 f"Hey {first} — how did {comp_nm} go? "
-                f"Would love to hear your result and any thoughts from the day.\n\n"
-                f"Jak"
+                f"Would love to hear your result and any thoughts from the day."
             )
         try:
             fitr.send_chat_message(room_id, msg)
@@ -1477,8 +1466,7 @@ def main():
         msg = (
             f"Hey {first} — well done at {comp_nm}. Result: {result}. "
             f"Really proud of what you put in. "
-            f"Let's debrief when you're ready and use it to plan the next block.\n\n"
-            f"Jak"
+            f"Let's debrief when you're ready and use it to plan the next block."
         )
         try:
             fitr.send_chat_message(room_id, msg)
