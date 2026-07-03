@@ -1257,17 +1257,22 @@ def main():
         milestone_label = _ANNIVERSARY_MILESTONES.get(days_training)
         if not milestone_label:
             continue
+        # Bespoke athletes get the 90-day reward message; skip all other milestones for them
+        if nm in bespoke_names and days_training != 90:
+            continue
         room_id = room_id_by_name.get(nm)
         if not room_id or config.DRY_RUN:
             continue
         first = nm.split()[0]
+        _form_url = getattr(config, "NINETY_DAY_FORM_URL", "")
         if days_training == 90:
             msg = (
                 f"Hey {first} — ninety days since your first log on "
                 f"{first_log.strftime('%d %b %Y')}.\n\n"
                 f"Most people who were going to stop have stopped by now.\n\n"
                 f"You haven't. That's what three months means.\n\n"
-                f"Keep going."
+                f"We send a JST t-shirt to everyone who hits ninety days. "
+                f"Drop your address and size here and we'll get it posted: {_form_url}"
             )
         elif days_training == 180:
             msg = (
