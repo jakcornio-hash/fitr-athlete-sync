@@ -2597,13 +2597,17 @@ def _build_outreach_rows(engagement_results, trend_results, rec_alert_rows, mile
 
     rows = []
 
+    # Group recovery alerts by athlete — one card per athlete even if multiple issues flagged
+    _rec_issues: dict = {}
     for alert in rec_alert_rows:
-        nm = alert[0]
+        _rec_issues.setdefault(alert[0], []).append(alert[1])
+    for nm, issues in _rec_issues.items():
+        combined = " · ".join(issues)
         rows.append({
             "Priority": "🔴 Contact Today", "Athlete": nm,
-            "Reason": alert[1], "Action": "Recovery check-in",
+            "Reason": combined, "Action": "Recovery check-in",
             "_order": 0, "_reason_type": "recovery_flag",
-            "_ctx": {"issue": alert[1]}, "_programme": _prog(nm),
+            "_ctx": {"issue": combined}, "_programme": _prog(nm),
         })
 
     for m in milestones:
