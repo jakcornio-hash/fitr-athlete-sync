@@ -82,14 +82,20 @@ def _fmt_value(v):
     if val is None:
         return ""
     # Fitr returns time benchmarks with symbol='mm:ss' and units='second' (value in seconds).
+    # The value may come back as a string ("1200") rather than an int, so coerce before checking.
     is_time = sym.lower() in ("secs", "sec", "seconds", "s", "mm:ss") or units in ("second", "seconds")
-    if is_time and isinstance(val, (int, float)) and val >= 0:
-        total = int(round(val))
-        mins, secs = divmod(total, 60)
-        if mins >= 60:
-            hrs, mins = divmod(mins, 60)
-            return f"{hrs}:{mins:02d}:{secs:02d}"
-        return f"{mins}:{secs:02d}"
+    if is_time:
+        try:
+            num_val = float(val)
+        except (TypeError, ValueError):
+            num_val = None
+        if num_val is not None and num_val >= 0:
+            total = int(round(num_val))
+            mins, secs = divmod(total, 60)
+            if mins >= 60:
+                hrs, mins = divmod(mins, 60)
+                return f"{hrs}:{mins:02d}:{secs:02d}"
+            return f"{mins}:{secs:02d}"
     return f"{val} {sym}".strip() if sym else str(val)
 
 
@@ -1034,6 +1040,8 @@ def main():
                 continue
             first = name.split()[0]
             goal = goals_by_name.get(name, "")
+            import re as _re_msg
+            _is_time_val = bool(_re_msg.match(r'^\d+:\d{2}', str(value or "")))
             if goal and _goal_achieved(goal, bench, value):
                 msg = (
                     f"Hey {first} — you just hit your North Star Goal. "
@@ -1042,9 +1050,21 @@ def main():
                     f"Time to set the next one."
                 )
             elif prev and prev not in ("", "first entry"):
-                msg = f"Hey {first} — {bench}: {value}. New PB (was {prev}). Good work."
+                if _is_time_val:
+                    msg = (
+                        f"Great work, {first}. That {bench} dropping from {prev} to {value} — "
+                        f"that's real progress. Looking forward to seeing where we can take it."
+                    )
+                else:
+                    msg = (
+                        f"Great work, {first}. {bench} up from {prev} to {value} — "
+                        f"that's the direction we want. Keep building on it."
+                    )
             else:
-                msg = f"Hey {first} — first result in for {bench}: {value}. Good start — we'll build from there."
+                msg = (
+                    f"Good first result, {first}. {bench}: {value}. "
+                    f"We'll build from here."
+                )
             try:
                 fitr.send_chat_message(room_id, msg)
                 congrats_sent += 1
