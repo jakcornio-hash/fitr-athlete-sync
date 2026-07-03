@@ -774,14 +774,37 @@ def _athlete_profile_panel(name, data_by_name, pr_records, trend_results,
     profile = data_by_name.get(name, {})
 
     # ── Header row ────────────────────────────────────────────────────────────
-    h1, h2, h3, h4 = st.columns([3, 1, 1, 2])
+    # Compute tenure from first PR log entry
+    _fl = None
+    for _r in pr_records:
+        if str(_r.get("Athlete Name", "")).strip() != name:
+            continue
+        _d = _parse_date(str(_r.get("Date", "")))
+        if _d and (_fl is None or _d < _fl):
+            _fl = _d
+    if _fl:
+        _td = (TODAY - _fl).days
+        _ty, _tr = divmod(_td, 365)
+        _tm = _tr // 30
+        if _ty >= 1:
+            _tenure_str = f"{_ty}y {_tm}m" if _tm else f"{_ty}y"
+        elif _tm >= 1:
+            _tenure_str = f"{_tm}m"
+        else:
+            _tenure_str = f"{_td}d"
+    else:
+        _fl, _tenure_str = None, "—"
+
+    h1, h2, h3, h4, h5 = st.columns([3, 1, 1, 1, 2])
     h1.markdown(f"### {name}")
     age = str(profile.get("Age", "")).strip()
     h2.metric("Age", age if age else "—")
     tier = str(profile.get("Tier", "")).strip()
     h3.metric("Tier", tier if tier else "—")
+    h4.metric("With JST", _tenure_str,
+              help=f"First log: {_fl.strftime('%d %b %Y') if _fl else '—'}")
     email = str(profile.get("Email", "")).strip()
-    h4.markdown(f"**Email**  \n{email or '—'}")
+    h5.markdown(f"**Email**  \n{email or '—'}")
 
     st.divider()
 
@@ -5611,6 +5634,327 @@ The subscription becomes a valued asset, not just a recurring charge.
             """)
 
 
+# ── Marketing ─────────────────────────────────────────────────────────────────
+
+def page_marketing(pr_records, grandslam_results, data_records, athletes,
+                   competition_rows=None, consistency_wins=None, milestones=None):
+    """Marketing assets — avatar profile, performance proof, assets queue, squad tenure."""
+    st.header("📣 Marketing")
+    st.caption(
+        "Proof capture, avatar intelligence, and performance deltas "
+        "for content, referrals, and lead qualification."
+    )
+
+    if not pr_records:
+        st.info("No PR records loaded.")
+        return
+
+    data_by_nm = {str(r.get("Full Name", "")).strip(): r for r in (data_records or [])}
+
+    # Pre-compute first log and tenure for all athletes
+    first_log_by_nm = {}
+    for rec in pr_records:
+        nm = str(rec.get("Athlete Name", "")).strip()
+        d = _parse_date(str(rec.get("Date", "")))
+        if nm and d:
+            if nm not in first_log_by_nm or d < first_log_by_nm[nm]:
+                first_log_by_nm[nm] = d
+
+    def _tenure_label(days):
+        y, r = divmod(days, 365)
+        m = r // 30
+        if y >= 1:
+            return f"{y}y {m}m" if m else f"{y}y"
+        if m >= 1:
+            return f"{m} months"
+        return f"{days} days"
+
+    mkt_tabs = st.tabs([
+        "📅 Squad Tenure", "🏆 Avatar Profile",
+        "📊 Performance Proof", "📋 Assets Queue",
+    ])
+
+    # ════════════════════════════════════════════════════════════════════════
+    # TAB 0 — SQUAD TENURE
+    # ════════════════════════════════════════════════════════════════════════
+    with mkt_tabs[0]:
+        st.subheader("Time with JST — Full Squad")
+        st.caption("Sorted longest-serving first. Derived from each athlete's first logged benchmark.")
+
+        tenure_rows = []
+        for r in (grandslam_results or []):
+            fl = first_log_by_nm.get(r["name"])
+            if not fl:
+                continue
+            days = (TODAY - fl).days
+            tenure_rows.append({
+                "Athlete": r["name"],
+                "First Log": fl.strftime("%d %b %Y"),
+                "Tenure": _tenure_label(days),
+                "Days": days,
+                "Stage": r["journey_stage"],
+                "Plan": r["plan"].title() if r["plan"] else "—",
+                "Score": r["whale_score"],
+            })
+        tenure_rows.sort(key=lambda x: -x["Days"])
+
+        if tenure_rows:
+            df_t = pd.DataFrame([{k: v for k, v in row.items() if k != "Days"}
+                                  for row in tenure_rows])
+            st.dataframe(df_t, use_container_width=True, hide_index=True)
+            st.caption(
+                f"Longest-serving: **{tenure_rows[0]['Athlete']}** "
+                f"({tenure_rows[0]['Tenure']}). "
+                f"Average tenure: **{_tenure_label(round(sum(r['Days'] for r in tenure_rows) / len(tenure_rows)))}**."
+            )
+        else:
+            st.info("No data — PR records needed to compute tenure.")
+
+    # ════════════════════════════════════════════════════════════════════════
+    # TAB 1 — AVATAR PROFILE
+    # ════════════════════════════════════════════════════════════════════════
+    with mkt_tabs[1]:
+        st.subheader("High-Value Avatar Profile")
+        st.caption(
+            "Top 20% of the squad by whale score — your highest-LTV athletes. "
+            "These are the people your marketing should attract more of."
+        )
+        if grandslam_results:
+            top_n = max(1, len(grandslam_results) // 5)
+            top = grandslam_results[:top_n]
+
+            avg_score = round(sum(r["whale_score"] for r in top) / len(top))
+            avg_tenure_days = round(sum(r["days_tenure"] for r in top) / len(top))
+            lifer_pct = round(100 * sum(1 for r in top if r["journey_stage"] in
+                                        ("💎 Lifer", "🏆 Elite")) / len(top))
+
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            mc1.metric("Athletes in top 20%", len(top))
+            mc2.metric("Avg whale score", avg_score)
+            mc3.metric("Avg tenure", _tenure_label(avg_tenure_days))
+            mc4.metric("Lifer / Elite %", f"{lifer_pct}%")
+
+            st.divider()
+
+            # Programme breakdown
+            from collections import Counter
+            prog_counts = Counter(
+                str(data_by_nm.get(r["name"], {}).get("Programme", "")).strip() or "Unknown"
+                for r in top
+            )
+            tier_counts = Counter(
+                str(data_by_nm.get(r["name"], {}).get("Tier", "")).strip() or "Unknown"
+                for r in top
+            )
+
+            bc1, bc2 = st.columns(2)
+            with bc1:
+                st.markdown("**Programme breakdown**")
+                for prog, cnt in prog_counts.most_common():
+                    pct = round(100 * cnt / len(top))
+                    st.markdown(f"- {prog}: {cnt} ({pct}%)")
+            with bc2:
+                st.markdown("**Competitive tier breakdown**")
+                for tier, cnt in tier_counts.most_common():
+                    pct = round(100 * cnt / len(top))
+                    st.markdown(f"- {tier}: {cnt} ({pct}%)")
+
+            st.divider()
+
+            st.markdown("**Individual top 20%**")
+            df_av = pd.DataFrame([{
+                "Athlete": r["name"],
+                "Stage": r["journey_stage"],
+                "Score": r["whale_score"],
+                "Tenure": _tenure_label(r["days_tenure"]),
+                "Programme": str(data_by_nm.get(r["name"], {}).get("Programme", "")).strip() or "—",
+                "Tier": str(data_by_nm.get(r["name"], {}).get("Tier", "")).strip() or "—",
+                "Sessions (90d)": r["sessions_90d"],
+            } for r in top])
+            st.dataframe(df_av, use_container_width=True, hide_index=True)
+        else:
+            st.info("Grandslam scores not loaded.")
+
+    # ════════════════════════════════════════════════════════════════════════
+    # TAB 2 — PERFORMANCE PROOF
+    # ════════════════════════════════════════════════════════════════════════
+    with mkt_tabs[2]:
+        st.subheader("Performance Deltas — Before & After")
+        st.caption(
+            "First recorded result vs best result per athlete per benchmark. "
+            "Sorted by biggest % improvement — these are your strongest proof assets."
+        )
+
+        lb_data = analytics.leaderboard_data(pr_records)
+        lib = lb_data.get("lower_is_better", {})
+
+        # Build per-(athlete, benchmark) series
+        series = {}
+        for rec in pr_records:
+            nm   = str(rec.get("Athlete Name", "")).strip()
+            bench = str(rec.get("Benchmark Name", "")).strip()
+            v_str = str(rec.get("Value", "")).strip()
+            d     = _parse_date(str(rec.get("Date", "")))
+            if not nm or not bench or not d:
+                continue
+            # parse numeric inline (mirrors analytics._parse_numeric)
+            import re as _re
+            _m = _re.search(r"[\d]+(?:[:.]\d+)*", v_str.replace(",", ""))
+            if not _m:
+                continue
+            raw = _m.group(0)
+            try:
+                if ":" in raw:
+                    parts = raw.split(":")
+                    v_num = int(parts[0]) * 60 + float(parts[1])
+                else:
+                    v_num = float(raw)
+            except ValueError:
+                continue
+            series.setdefault((nm, bench), []).append((d, v_num, v_str))
+
+        deltas = []
+        for (nm, bench), pts in series.items():
+            if len(pts) < 2:
+                continue
+            pts.sort(key=lambda x: x[0])
+            first_d, first_num, first_str = pts[0]
+            is_lib = lib.get(bench, False)
+            best = min(pts, key=lambda x: x[1]) if is_lib else max(pts, key=lambda x: x[1])
+            best_d, best_num, best_str = best
+            if first_d == best_d or first_num == 0:
+                continue
+            improved = best_num < first_num if is_lib else best_num > first_num
+            if not improved:
+                continue
+            pct = round(100 * abs(best_num - first_num) / first_num)
+            if pct < 1:
+                continue
+            deltas.append({
+                "Athlete": nm,
+                "Benchmark": bench,
+                "First Result": first_str,
+                "Best Result": best_str,
+                "Improvement": f"+{pct}%" if not is_lib else f"-{pct}%",
+                "Pct": pct,
+                "Days to Best": (best_d - first_d).days,
+            })
+
+        # Filter controls
+        bench_filter = st.selectbox(
+            "Filter by benchmark",
+            ["All"] + sorted({d["Benchmark"] for d in deltas}),
+            key="mkt_bench_filter",
+        )
+        filtered_deltas = deltas if bench_filter == "All" else [
+            d for d in deltas if d["Benchmark"] == bench_filter
+        ]
+        filtered_deltas.sort(key=lambda x: -x["Pct"])
+
+        if filtered_deltas:
+            df_d = pd.DataFrame([{k: v for k, v in d.items() if k != "Pct"}
+                                  for d in filtered_deltas])
+            st.dataframe(df_d, use_container_width=True, hide_index=True)
+            st.caption(
+                f"{len(filtered_deltas)} improvements shown. "
+                f"Biggest: **{filtered_deltas[0]['Athlete']}** on "
+                f"**{filtered_deltas[0]['Benchmark']}** ({filtered_deltas[0]['Improvement']})."
+            )
+        else:
+            st.info("Not enough data to compute deltas yet — need at least 2 results per athlete per benchmark.")
+
+    # ════════════════════════════════════════════════════════════════════════
+    # TAB 3 — ASSETS QUEUE
+    # ════════════════════════════════════════════════════════════════════════
+    with mkt_tabs[3]:
+        st.subheader("This Week's Marketing Assets")
+        st.caption(
+            "Ready-made social proof from the last 7 days — new benchmark results, "
+            "competition outcomes, and consistency milestones."
+        )
+
+        cutoff_7d  = TODAY - dt.timedelta(days=7)
+        cutoff_30d = TODAY - dt.timedelta(days=30)
+
+        # ── New benchmark results this week ──────────────────────────────────
+        st.markdown("#### New Benchmark Results (last 7 days)")
+        recent_prs = [
+            {
+                "Athlete": str(r.get("Athlete Name", "")).strip(),
+                "Benchmark": str(r.get("Benchmark Name", "")).strip(),
+                "Result": str(r.get("Value", "")).strip(),
+                "Date": str(r.get("Date", "")).strip(),
+            }
+            for r in pr_records
+            if _parse_date(str(r.get("Date", ""))) and
+               _parse_date(str(r.get("Date", ""))) >= cutoff_7d
+        ]
+        recent_prs.sort(key=lambda x: x["Date"], reverse=True)
+        if recent_prs:
+            st.dataframe(pd.DataFrame(recent_prs), use_container_width=True, hide_index=True)
+        else:
+            st.info("No new benchmark results in the last 7 days.")
+
+        st.divider()
+
+        # ── Competition results (last 30 days) ───────────────────────────────
+        st.markdown("#### Competition Results (last 30 days)")
+        if competition_rows:
+            comp_proof = []
+            for cr in competition_rows:
+                result = str(cr.get("Result", "")).strip()
+                if not result:
+                    continue
+                d = _parse_date(str(cr.get("Date", "")))
+                if d and d >= cutoff_30d:
+                    comp_proof.append({
+                        "Athlete": str(cr.get("Athlete Name", "")).strip(),
+                        "Competition": str(cr.get("Competition Name", "")).strip(),
+                        "Date": d.strftime("%d %b %Y"),
+                        "Result": result,
+                    })
+            comp_proof.sort(key=lambda x: x["Date"], reverse=True)
+            if comp_proof:
+                st.dataframe(pd.DataFrame(comp_proof), use_container_width=True, hide_index=True)
+            else:
+                st.info("No competition results in the last 30 days.")
+        else:
+            st.info("Competition data not loaded.")
+
+        st.divider()
+
+        # ── Consistency milestones ───────────────────────────────────────────
+        st.markdown("#### Consistency Streaks")
+        st.caption("Athletes logging consistently every week — strong social proof for showing up.")
+        if consistency_wins:
+            streak_rows = sorted(
+                [{"Athlete": nm, "Consecutive Weeks": wks} for nm, wks in consistency_wins],
+                key=lambda x: -x["Consecutive Weeks"],
+            )
+            st.dataframe(pd.DataFrame(streak_rows), use_container_width=True, hide_index=True)
+            best = streak_rows[0]
+            st.info(
+                f"**{best['Athlete']}** has logged every week for "
+                f"**{best['Consecutive Weeks']} consecutive weeks** — "
+                f"strongest consistency story in the squad right now."
+            )
+        else:
+            st.info("No consistency streaks to show.")
+
+        st.divider()
+
+        # ── Milestone PRs from this sync ─────────────────────────────────────
+        st.markdown("#### Recent Personal Bests")
+        st.caption("PRs and first results flagged by the system in the last sync.")
+        if milestones:
+            df_ms = pd.DataFrame([{
+                "Athlete": nm, "Benchmark": bench, "Result": val,
+            } for nm, bench, val in milestones])
+            st.dataframe(df_ms, use_container_width=True, hide_index=True)
+        else:
+            st.info("No milestones from the last sync.")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -5684,7 +6028,7 @@ def main():
         "✅ Actions", "📋 Outreach List", "🚨 Alerts", "🃏 Squad", "👥 Athletes",
         "🗓️ Week Plan", "🏁 Competitions", "📊 Programmes", "🏋️ Load",
         "📈 Trends", "🏆 Leaderboard", "💤 Recovery", "🌐 CRM",
-        "📚 Playbook", "💎 Grandslam", "⚙️ Sync", "❓ Help",
+        "📚 Playbook", "💎 Grandslam", "📣 Marketing", "⚙️ Sync", "❓ Help",
     ])
 
     with tabs[0]:
@@ -5719,8 +6063,12 @@ def main():
     with tabs[14]:
         page_grandslam(grandslam_results, data_records, pr_records=pr_records, athletes=athletes, competition_rows=competition_rows)
     with tabs[15]:
-        page_sync_health()
+        page_marketing(pr_records, grandslam_results, data_records, athletes,
+                       competition_rows=competition_rows, consistency_wins=consistency_wins,
+                       milestones=milestones)
     with tabs[16]:
+        page_sync_health()
+    with tabs[17]:
         page_help()
 
 
