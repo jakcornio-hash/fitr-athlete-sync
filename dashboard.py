@@ -6141,12 +6141,67 @@ def page_marketing(pr_records, grandslam_results, data_records, athletes,
     with mkt_tabs[3]:
         st.subheader("This Week's Marketing Assets")
         st.caption(
-            "Ready-made social proof from the last 7 days — new benchmark results, "
+            "Ready-made social proof — improvements to capture, new results, "
             "competition outcomes, and consistency milestones."
         )
 
         cutoff_7d  = TODAY - dt.timedelta(days=7)
+        cutoff_14d = TODAY - dt.timedelta(days=14)
         cutoff_30d = TODAY - dt.timedelta(days=30)
+
+        # ── Recent improvements (before → after pairs) ────────────────────
+        st.markdown("#### 📸 Recent Improvements (last 14 days)")
+        st.caption(
+            "Athletes who beat a previous result — your strongest content material. "
+            "Each row is a before/after story ready to capture."
+        )
+        import re as _re_rt
+        from collections import defaultdict as _ddict
+
+        _hist: dict = _ddict(list)
+        for _r in pr_records:
+            _nm  = str(_r.get("Athlete Name", "")).strip()
+            _bn  = str(_r.get("Benchmark Name", "")).strip()
+            _val = str(_r.get("Value", "")).strip()
+            _d   = _parse_date(str(_r.get("Date", "")).strip())
+            if _nm and _bn and _val and _d:
+                _hist[(_nm, _bn)].append((_d, _val))
+        for _k in _hist:
+            _hist[_k].sort()
+
+        _improvements = []
+        for (_nm, _bn), _recs in _hist.items():
+            for _i, (_d, _val) in enumerate(_recs):
+                if _d >= cutoff_14d and _i > 0:
+                    _prev_d, _prev_val = _recs[_i - 1]
+                    _improvements.append({
+                        "Athlete": _nm,
+                        "Benchmark": _bn,
+                        "Before": _prev_val,
+                        "After": _val,
+                        "Date": _d.strftime("%d %b %Y"),
+                        "_d": _d,
+                    })
+        _improvements.sort(key=lambda x: x["_d"], reverse=True)
+
+        if _improvements:
+            for _imp in _improvements:
+                with st.container(border=True):
+                    _ic1, _ic2 = st.columns([4, 3])
+                    _ic1.markdown(
+                        f"**{_imp['Athlete']}** — {_imp['Benchmark']}\n\n"
+                        f"{_imp['Before']} → **{_imp['After']}**"
+                    )
+                    _story = (
+                        f"Before: {_imp['Before']}. After: {_imp['After']}. "
+                        f"{_imp['Athlete']} on {_imp['Benchmark']}."
+                    )
+                    _ic2.code(_story, language=None)
+            st.caption(f"{len(_improvements)} improvement(s) in the last 14 days.")
+        else:
+            st.info("No improvements detected in the last 14 days.")
+
+        st.divider()
 
         # ── New benchmark results this week ──────────────────────────────────
         st.markdown("#### New Benchmark Results (last 7 days)")
@@ -6225,6 +6280,89 @@ def page_marketing(pr_records, grandslam_results, data_records, athletes,
             st.dataframe(df_ms, use_container_width=True, hide_index=True)
         else:
             st.info("No milestones from the last sync.")
+
+        st.divider()
+
+        # ── Retest tracker ────────────────────────────────────────────────────
+        st.markdown("#### 🔁 Retest Tracker")
+        st.caption(
+            "Benchmarks and challenges where a baseline result exists but no retest has been logged yet. "
+            "Create a '[Name] Retest' challenge in Fitr for each one — once the retest is logged "
+            "the before/after comparison will appear in Recent Improvements above."
+        )
+
+        # Build: (athlete, base_name) → {has_baseline, has_retest, first_result, first_date}
+        _rt_map: dict = {}
+        for _r in pr_records:
+            _nm  = str(_r.get("Athlete Name", "")).strip()
+            _bn  = str(_r.get("Benchmark Name", "")).strip()
+            _val = str(_r.get("Value", "")).strip()
+            _d   = _parse_date(str(_r.get("Date", "")).strip())
+            if not (_nm and _bn and _val and _d):
+                continue
+            # Detect retest: name contains the word "retest" (case-insensitive)
+            _is_rt = bool(_re_rt.search(r'\bretest\b', _bn, _re_rt.IGNORECASE))
+            # Derive base name
+            _base = _re_rt.sub(r'\s*[-–—]?\s*\bretest\b\s*', '', _bn, flags=_re_rt.IGNORECASE).strip()
+            _key = (_nm, _base)
+            if _key not in _rt_map:
+                _rt_map[_key] = {"has_baseline": False, "has_retest": False,
+                                  "first_result": None, "first_date": None}
+            _entry = _rt_map[_key]
+            if _is_rt:
+                _entry["has_retest"] = True
+            else:
+                _entry["has_baseline"] = True
+                if _entry["first_date"] is None or _d < _entry["first_date"]:
+                    _entry["first_date"] = _d
+                    _entry["first_result"] = _val
+
+        _needs_rt = sorted(
+            [
+                {
+                    "Athlete": k[0],
+                    "Benchmark": k[1],
+                    "Baseline": v["first_result"],
+                    "Date": v["first_date"].strftime("%d %b %Y") if v["first_date"] else "",
+                    "Create in Fitr": f"{k[1]} Retest",
+                }
+                for k, v in _rt_map.items()
+                if v["has_baseline"] and not v["has_retest"]
+            ],
+            key=lambda x: (x["Athlete"], x["Benchmark"]),
+        )
+        _completed_rt = sorted(
+            [
+                {
+                    "Athlete": k[0],
+                    "Benchmark": k[1],
+                }
+                for k, v in _rt_map.items()
+                if v["has_baseline"] and v["has_retest"]
+            ],
+            key=lambda x: (x["Athlete"], x["Benchmark"]),
+        )
+
+        if _needs_rt:
+            st.dataframe(
+                pd.DataFrame(_needs_rt),
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.caption(
+                f"{len(_needs_rt)} benchmark(s) need a retest challenge created in Fitr. "
+                f"Use the 'Create in Fitr' name exactly so the system can auto-match them."
+            )
+        else:
+            st.success("All logged benchmarks have a corresponding retest — nothing outstanding.")
+
+        if _completed_rt:
+            with st.expander(f"✅ Completed retests ({len(_completed_rt)})", expanded=False):
+                st.dataframe(
+                    pd.DataFrame(_completed_rt),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────

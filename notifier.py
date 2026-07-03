@@ -173,12 +173,12 @@ def send_slack_message(channel, text):
 def send_coach_notifications(bench_rows, chal_rows, programme_by_name, coach_channel_map):
     """Send one Slack message per athlete to the relevant coach's channel.
 
-    bench_rows / chal_rows: new PR log rows [date, name, email, bench, value, type, ...]
+    bench_rows / chal_rows: new PR log rows [date, name, email, bench, value, type, prev, ...]
     programme_by_name:  {athlete_name: programme_string}
     coach_channel_map:  {programme_string: slack_channel_id}  — from the Coaches sheet tab
 
-    Only fires if SLACK_BOT_TOKEN is set and the athlete's programme has a
-    channel mapping. Silently skips athletes with no channel configured.
+    Improvements (bench_rows where prev is non-empty) are flagged as 📸 marketing captures.
+    Only fires if SLACK_BOT_TOKEN is set and the athlete's programme has a channel mapping.
     Returns count of messages sent.
     """
     if not config.SLACK_BOT_TOKEN:
@@ -187,17 +187,18 @@ def send_coach_notifications(bench_rows, chal_rows, programme_by_name, coach_cha
     from collections import defaultdict
     entries_by_athlete = defaultdict(list)
     for row in bench_rows:
-        name = row[1] if len(row) > 1 else ""
+        name  = row[1] if len(row) > 1 else ""
         bench = row[3] if len(row) > 3 else ""
         value = row[4] if len(row) > 4 else ""
+        prev  = row[6] if len(row) > 6 else ""
         if name:
-            entries_by_athlete[name].append((bench, value, "Benchmark"))
+            entries_by_athlete[name].append((bench, value, "Benchmark", str(prev).strip()))
     for row in chal_rows:
-        name = row[1] if len(row) > 1 else ""
+        name  = row[1] if len(row) > 1 else ""
         bench = row[3] if len(row) > 3 else ""
         value = row[4] if len(row) > 4 else ""
         if name:
-            entries_by_athlete[name].append((bench, value, "Challenge"))
+            entries_by_athlete[name].append((bench, value, "Challenge", ""))
 
     sent = 0
     for athlete, entries in sorted(entries_by_athlete.items()):
@@ -207,9 +208,16 @@ def send_coach_notifications(bench_rows, chal_rows, programme_by_name, coach_cha
             continue
         count = len(entries)
         lines = [f"🏋️ *{athlete}* logged {count} new result{'s' if count > 1 else ''}:"]
-        for bench, value, kind in entries:
+        marketing_captures = []
+        for bench, value, kind, prev in entries:
             icon = "🏆" if kind == "Benchmark" else "🎯"
-            lines.append(f"  {icon} *{bench}*: {value}")
+            if prev and kind == "Benchmark":
+                lines.append(f"  {icon} *{bench}*: {prev} → *{value}* 📸")
+                marketing_captures.append(f"{bench}: {prev} → {value}")
+            else:
+                lines.append(f"  {icon} *{bench}*: {value}")
+        if marketing_captures:
+            lines.append(f"  _📸 Marketing capture{'s' if len(marketing_captures) > 1 else ''} — consider capturing the before/after story_")
         if prog:
             lines.append(f"  _{prog}_")
         try:
