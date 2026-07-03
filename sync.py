@@ -1288,15 +1288,28 @@ def main():
                 f"Drop your address and size here: {_tshirt_url}\n\n"
                 f"If you know someone who trains and would benefit from this — send them our way."
             )
+        elif days_training == 270:
+            msg = (
+                f"Hey {first} — nine months since your first log on "
+                f"{first_log.strftime('%d %b %Y')}.\n\n"
+                f"Still showing up. That's the whole thing."
+            )
         elif days_training == 365:
             summit_flag_names.append(nm)
             msg = (
                 f"Hey {first} — a year since your first log on "
                 f"{first_log.strftime('%d %b %Y')}.\n\n"
-                f"Twelve months. That's not common.\n\n"
+                f"Twelve months. Most people who start a training programme never make it to one.\n\n"
                 f"You've built something most people talk about but never actually do. "
                 f"We want to get you to our next training summit — on us. "
                 f"I'll send you the details when the next one's confirmed."
+            )
+        elif days_training == 730:
+            msg = (
+                f"Hey {first} — two years since your first log on "
+                f"{first_log.strftime('%d %b %Y')}.\n\n"
+                f"Two years. That's not motivation — that's just who you are now.\n\n"
+                f"Keep going."
             )
         else:
             msg = (

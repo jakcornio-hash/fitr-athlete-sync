@@ -95,9 +95,11 @@ All messages are sent via `fitr.send_chat_message(room_id, msg)` and logged to t
 | New PB / first result | When a new benchmark result is logged | Congrats loop ~line 1039 |
 | North Star goal achieved | When logged result matches athlete's stated goal | Same congrats loop |
 | First log | When `first_log_by_name[nm] == TODAY` | New athlete onboarding loop ~line 1283 |
-| 90-day ceremony + t-shirt | day 90 — **all** athletes incl. bespoke | Anniversary loop ~line 1254 |
-| 180-day Lifer ceremony | day 180 — non-bespoke | Same |
-| Training anniversary | At 270/365/730 days — non-bespoke | Same |
+| 90-day ceremony + 1:1 call | day 90 — **all** athletes incl. bespoke | Anniversary loop ~line 1254 |
+| 180-day Lifer ceremony + t-shirt + referral ask | day 180 — non-bespoke | Same |
+| 270-day | day 270 — non-bespoke | Same |
+| 365-day ceremony + summit promise | day 365 — non-bespoke; Slack flag fires to Jak | Same |
+| 730-day | day 730 — non-bespoke | Same |
 | 60-day inactive | `days_since == 60` | Off-boarding loop ~line 1163 |
 | Pre-comp (10 weeks) | 70 days before A-comp | `_COMP_MSG_DAYS` loop ~line 1305 |
 | Pre-comp (3 weeks) | 21 days before A or B comp | Same |
@@ -192,10 +194,21 @@ ANTHROPIC_MODEL     # Claude model ID for API calls
 DRY_RUN             # bool — skips all Fitr sends and Sheet writes when True
 TEST_ATHLETES       # list — only these athletes get emails/messages in test runs
 
-# Grandslam retention
-NINETY_DAY_FORM_URL     # Typeform for 90-day t-shirt reward (jstcompete.typeform.com/to/UszYYXgk)
-FOUNDING_MEMBER_CUTOFF  # YYYY-MM-DD — athletes first-logged on/before this are Founding Members (default "2024-12-31")
-SUBSCRIPTION_PRICES     # dict — plan name → monthly £ price (used for MRR calculations)
+# Grandslam retention + milestone rewards
+CONSULTATION_BOOKING_URL  # 90-day 1:1 call booking link (calendar.app.google/...)
+TSHIRT_FORM_URL           # 180-day t-shirt Typeform link (jstcompete.typeform.com/to/UszYYXgk)
+TSHIRT_FORM_SHEET_ID      # Google Sheet ID of Typeform t-shirt responses (set in secrets)
+TSHIRT_FORM_TAB           # Tab name in that sheet (default "Sheet1")
+TSHIRT_FORM_*_COL         # Column header constants matching Typeform question text
+FOUNDING_MEMBER_CUTOFF    # YYYY-MM-DD — athletes first-logged on/before this are Founding Members (default "2024-12-31")
+SUBSCRIPTION_PRICES       # dict — plan name → monthly £ price (used for MRR calculations)
+
+# Milestone reward structure
+# 90d:  1:1 consultation call (CONSULTATION_BOOKING_URL) — all athletes incl. bespoke
+# 180d: JST t-shirt (TSHIRT_FORM_URL) + referral ask — non-bespoke
+# 270d: short acknowledgment message — non-bespoke
+# 365d: summit promise (manual follow-up via Slack flag) — non-bespoke
+# 730d: two-year acknowledgment — non-bespoke
 ```
 
 ---

@@ -5246,6 +5246,54 @@ def page_grandslam(grandslam_results, data_records, pr_records=None, athletes=No
         else:
             st.info("Competition data not loaded — second product candidates unavailable.")
 
+        st.divider()
+
+        # ── T-shirt fulfilment queue ──────────────────────────────────────────
+        st.subheader("T-Shirt Fulfilment Queue")
+        st.caption(
+            "Athletes who have submitted their address and size via the 6-month Typeform. "
+            "Post these before the next sync — tick them off in the Typeform sheet once shipped."
+        )
+        if getattr(config, "TSHIRT_FORM_SHEET_ID", ""):
+            try:
+                _tshirt_responses = get_sheets().read_external_records(
+                    config.TSHIRT_FORM_SHEET_ID,
+                    getattr(config, "TSHIRT_FORM_TAB", "Sheet1"),
+                )
+            except Exception as _te:
+                _tshirt_responses = []
+                st.warning(f"Could not load t-shirt responses: {_te}")
+            if _tshirt_responses:
+                _n_col  = getattr(config, "TSHIRT_FORM_NAME_COL",     "Full name")
+                _sz_col = getattr(config, "TSHIRT_FORM_SIZE_COL",     "T-shirt size")
+                _a1_col = getattr(config, "TSHIRT_FORM_ADDRESS1_COL", "Address line 1")
+                _a2_col = getattr(config, "TSHIRT_FORM_ADDRESS2_COL", "Address line 2")
+                _ci_col = getattr(config, "TSHIRT_FORM_CITY_COL",     "City")
+                _pc_col = getattr(config, "TSHIRT_FORM_POSTCODE_COL", "Postcode")
+                _co_col = getattr(config, "TSHIRT_FORM_COUNTRY_COL",  "Country")
+                _ts_rows = []
+                for _tr in _tshirt_responses:
+                    _ts_rows.append({
+                        "Name":    str(_tr.get(_n_col, "")).strip(),
+                        "Size":    str(_tr.get(_sz_col, "")).strip(),
+                        "Address": ", ".join(filter(None, [
+                            str(_tr.get(_a1_col, "")).strip(),
+                            str(_tr.get(_a2_col, "")).strip(),
+                            str(_tr.get(_ci_col, "")).strip(),
+                            str(_tr.get(_pc_col, "")).strip(),
+                            str(_tr.get(_co_col, "")).strip(),
+                        ])),
+                    })
+                st.dataframe(pd.DataFrame(_ts_rows), use_container_width=True, hide_index=True)
+                st.info(f"{len(_ts_rows)} submission(s) to fulfil.")
+            else:
+                st.success("No t-shirt submissions yet.")
+        else:
+            st.info(
+                "Set **TSHIRT_FORM_SHEET_ID** in your Streamlit secrets or environment variables "
+                "to connect the Typeform response sheet here."
+            )
+
     # ════════════════════════════════════════════════════════════════════════
     # TAB 2 — AT RISK
     # ════════════════════════════════════════════════════════════════════════

@@ -213,6 +213,17 @@ BENCHMARK_NAME_MAP = {
 CONSULTATION_BOOKING_URL = _get("CONSULTATION_BOOKING_URL", "https://calendar.app.google/NmzLTiP8Ypo7Yrff7")
 # 180-day milestone — t-shirt reward Typeform (address + size collection).
 TSHIRT_FORM_URL = _get("TSHIRT_FORM_URL", "https://jstcompete.typeform.com/to/UszYYXgk")
+# Google Sheet ID of the Typeform t-shirt responses (set via env var or Streamlit secret).
+TSHIRT_FORM_SHEET_ID = _get("TSHIRT_FORM_SHEET_ID", "")
+TSHIRT_FORM_TAB = _get("TSHIRT_FORM_TAB", "Sheet1")
+# Column headers — must match the Typeform question text exactly as it appears in the Sheet.
+TSHIRT_FORM_NAME_COL = "Full name"
+TSHIRT_FORM_SIZE_COL = "T-shirt size"
+TSHIRT_FORM_ADDRESS1_COL = "Address line 1"
+TSHIRT_FORM_ADDRESS2_COL = "Address line 2"
+TSHIRT_FORM_CITY_COL = "City"
+TSHIRT_FORM_POSTCODE_COL = "Postcode"
+TSHIRT_FORM_COUNTRY_COL = "Country"
 
 # Grandslam retention: athletes who joined on/before this date are Founding Members.
 # Format: YYYY-MM-DD. Override via FOUNDING_MEMBER_CUTOFF env var.
