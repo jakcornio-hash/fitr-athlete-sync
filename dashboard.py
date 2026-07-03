@@ -4414,15 +4414,18 @@ def page_help():
 |---|---|---|
 | New athlete welcome | Added to Fitr | Sends intake form link + recovery check-in instructions |
 | First log message | Athlete's first training log | "First log is in. Good start." |
-| New PB / result | Benchmark result logged | Short, specific congrats |
+| New PB | Benchmark result logged — better than previous best | Specific congrats naming the improvement |
+| First result on a benchmark | First time logging a benchmark | "Good first result — we'll build from here." |
 | North Star goal hit | Logged result matches their stated goal | Celebration + "time to set the next one" |
 | Competition countdown | 10 weeks, 3 weeks, race week, day before (A races) | Phase-appropriate motivation |
 | Post-competition | Day after a competition | Asks for result, reflection, and how they're feeling |
-| Training anniversary | 90 days, 6 months, 1 year, 18 months, 2 years | Consistency acknowledgement |
-| 60-day inactive | 60 days without a log | Soft check-in, no pressure |
-| Weekly progress emails | Every Monday | Results, consistency, competition updates |
+| 90 days | 90 days since first log | Books a 1:1 consultation call. Sends to all athletes including Bespoke. |
+| 180 days | 180 days since first log | Sends JST t-shirt Typeform link + referral ask |
+| 270 days | 270 days since first log | Short acknowledgment of consistency |
+| 1 year | 365 days since first log | Promises a free training summit ticket. Sends you a Slack flag to follow up when the event is confirmed. |
+| 2 years | 730 days since first log | Two-year acknowledgment |
 
-**Bespoke athletes** receive **no** automated messages — every message to them is personal.
+**Bespoke athletes** receive **no** automated messages except the 90-day consultation call — every other message to them is personal.
 """)
 
     st.divider()
@@ -4444,7 +4447,7 @@ Most days that's it.
 
     tabs_info = [
         ("✅ Actions", """
-**Ed's daily working interface.** Every athlete that needs a personal message from you, in order of priority. The system has not sent anything to these athletes.
+**Your daily working interface.** Every athlete that needs a personal message from you, in order of priority. The system has not sent anything to these athletes.
 
 Each card shows:
 - Priority and reason for contact
@@ -4467,7 +4470,7 @@ Completed items reset each browser session (i.e. next day).
         ("📋 Outreach List", """
 The full overview table — same data as the Actions tab but in table format with export.
 
-**Ed's Action Queue** (top section) — athletes needing a personal message from you.
+**Your Action Queue** (top section) — athletes needing a personal message from you.
 **Auto-sent by system** (collapsed section) — what the system sent this cycle, for your awareness.
 
 Use **Export Outreach List** to download everything with drafted messages as Markdown — useful for planning ahead or sharing.
@@ -4495,7 +4498,7 @@ Filter by Programme or Status to focus on a subset.
         ("👥 Athletes", """
 Full roster. Click any row to open the athlete's profile.
 
-Profile includes: stats, programme, injuries, competitions, benchmark snapshots, recovery history, archetype, coaching notes, and conversation summaries.
+Profile includes: stats, programme, tenure ("With JST"), injuries, competitions, benchmark snapshots, recovery history, archetype, coaching notes, and conversation summaries.
 
 **Risk column** — Composite churn risk score based on days since last log, declining trends, recovery flags, and time since last contact. Use the Risk filter to instantly surface who needs attention.
 
@@ -4532,6 +4535,11 @@ Breakdown of athletes by programme track.
 - **Coach Capacity** — Active athletes, average days since log, and athletes needing attention per coach.
 
 Assign or change a programme inside any athlete's profile.
+"""),
+        ("🏋️ Load", """
+Training load analysis across the squad.
+
+Shows session frequency trends and flags athletes with unusual load spikes or drops. Useful for identifying overtraining risk or athletes who are suddenly doing less than planned.
 """),
         ("📈 Trends", """
 Progress chart for any athlete and benchmark.
@@ -4572,24 +4580,31 @@ The Playbook is used by the AI to generate message drafts — better notes = bet
 The **JST Tone of Voice quick reference** panel at the bottom covers the key rules for all coach-to-athlete messages.
 """),
         ("💎 Grandslam", """
-**Retention pipeline** based on the Grandslam retention framework.
+**Retention intelligence.** Tracks every athlete through the JST retention journey and surfaces who needs attention and who's ready to go deeper.
 
-- **Journey Pipeline** — How many athletes are at each stage (New → Active → Established → Lifer → Elite, or Drifting / Churned).
-- **Business Snapshot** — MRR, active Lifers, Elite count, at-risk headcount.
-- **Whale Board** — Top 20% of athletes by LTV score. These are your highest-retention athletes.
-- **Stage Distribution** — Bar chart of the full squad across stages.
-- **Full Squad Scores** — Every athlete's stage, score, tenure, and activity — filterable by stage.
+- **Overview** — Business snapshot (MRR, squad health score, at-risk count) and journey pipeline (New → Active → Established → Lifer → Elite).
+- **Opportunities** — Athletes approaching the 90-day Established mark (act before they drift), candidates for a second product, and the t-shirt fulfilment queue for 180-day athletes.
+- **At Risk** — Drifting and churned athletes with their last log date and score.
+- **Analytics** — Net MRR movement, message response rate, and whale scoring breakdown.
 
 **Journey stages:**
 - 🌱 **New** — < 30 days
 - 🔥 **Active** — 30–89 days, training consistently
 - ⭐ **Established** — 90–179 days
-- 💎 **Lifer** — 180+ days, still active (gets a ceremony message from the system)
+- 💎 **Lifer** — 180+ days, still active
 - 🏆 **Elite** — Bespoke subscription
 - ⚠️ **Drifting** — 28–59 days since last log — priority for outreach
 - ☠️ **Churned** — 60+ days without logging
 
 The system writes each athlete's Journey Stage and Status Label to the *_DATA* tab daily.
+"""),
+        ("📣 Marketing", """
+**Proof capture and avatar intelligence.** Built for content, referrals, and lead qualification — not for daily coaching use.
+
+- **Squad Tenure** — Every athlete sorted longest-serving first. Shows first log date, tenure, journey stage, and programme. Use this to identify athletes to feature in retention content.
+- **Avatar Profile** — Top 20% of athletes by whale score. Programme breakdown, tier breakdown, average tenure. This is who your marketing should be attracting more of.
+- **Performance Proof** — First result vs best result for every athlete across every benchmark, sorted by biggest % improvement. These are your strongest social proof assets.
+- **Assets Queue** — New benchmark results from the last 7 days, competition results from the last 30 days, and consistency streaks. Ready-made content from this week.
 """),
         ("⚙️ Sync", """
 Sync history and message log.
@@ -4612,7 +4627,9 @@ If a sync looks stale or messages aren't sending, check Streamlit Cloud logs for
 - **Archetype messaging** — Drafted messages are tailored to the athlete's communication archetype. Athletes without one get a generic message.
 - **Adding competitions** — Athletes tab → click athlete → Competition Calendar → Add Competition.
 - **Refreshing data** — Streamlit menu (⋮, top right) → Rerun, or wait up to 15 minutes for the automatic refresh.
-- **Bespoke athletes** — No automated messages are sent to Bespoke subscription athletes. Everything for them goes through you personally.
+- **Bespoke athletes** — No automated messages except the 90-day consultation call. Everything else goes through you personally.
+- **1-year summit promise** — When an athlete hits 12 months, the system fires the ceremony message and sends you a Slack notification to follow up with the event details when the next summit is confirmed.
+- **T-shirt fulfilment** — Athletes who hit 180 days receive a Typeform link to submit their address and size. Their responses appear in Grandslam → Opportunities → T-Shirt Fulfilment Queue.
     """)
 
     st.divider()
