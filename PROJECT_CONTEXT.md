@@ -79,6 +79,8 @@ Email filtering also excludes bespoke athletes:
 non_bespoke_email_by_name = {k: v for k, v in email_by_name.items() if k not in bespoke_names}
 ```
 
+**Exception — 90-day ceremony message:** bespoke athletes DO receive the 90-day t-shirt reward message. The anniversary loop guard is `if nm in bespoke_names and days_training != 90: continue` — all other milestones still skip them.
+
 **If you add a new automated message type, always add a bespoke guard.**
 
 ---
@@ -93,7 +95,9 @@ All messages are sent via `fitr.send_chat_message(room_id, msg)` and logged to t
 | New PB / first result | When a new benchmark result is logged | Congrats loop ~line 1039 |
 | North Star goal achieved | When logged result matches athlete's stated goal | Same congrats loop |
 | First log | When `first_log_by_name[nm] == TODAY` | New athlete onboarding loop ~line 1283 |
-| Training anniversary | At 90/180/270/365/730 days | Anniversary loop ~line 1254 |
+| 90-day ceremony + t-shirt | day 90 — **all** athletes incl. bespoke | Anniversary loop ~line 1254 |
+| 180-day Lifer ceremony | day 180 — non-bespoke | Same |
+| Training anniversary | At 270/365/730 days — non-bespoke | Same |
 | 60-day inactive | `days_since == 60` | Off-boarding loop ~line 1163 |
 | Pre-comp (10 weeks) | 70 days before A-comp | `_COMP_MSG_DAYS` loop ~line 1305 |
 | Pre-comp (3 weeks) | 21 days before A or B comp | Same |
@@ -187,6 +191,11 @@ JST_TRACKS          # list of programme names
 ANTHROPIC_MODEL     # Claude model ID for API calls
 DRY_RUN             # bool — skips all Fitr sends and Sheet writes when True
 TEST_ATHLETES       # list — only these athletes get emails/messages in test runs
+
+# Grandslam retention
+NINETY_DAY_FORM_URL     # Typeform for 90-day t-shirt reward (jstcompete.typeform.com/to/UszYYXgk)
+FOUNDING_MEMBER_CUTOFF  # YYYY-MM-DD — athletes first-logged on/before this are Founding Members (default "2024-12-31")
+SUBSCRIPTION_PRICES     # dict — plan name → monthly £ price (used for MRR calculations)
 ```
 
 ---
@@ -207,6 +216,13 @@ TEST_ATHLETES       # list — only these athletes get emails/messages in test r
 | `recovery_alerts(rec_by_name)` | `[[name, issue, submitted_date]]` |
 | `training_load(pr_records, weeks=12)` | `{athlete: [{week, week_start, sessions}]}` — unique logging days per ISO week |
 | `duplicate_candidates(athletes, data_records, pr_records, threshold=0.82)` | fuzzy name pairs |
+| `grandslam_score(athletes, pr_records, data_records, today=None)` | list of dicts sorted by `whale_score` desc: `{name, days_tenure, sessions_90d, days_since_log, plan, whale_score, journey_stage, status_label}` |
+| `cohort_retention(pr_records, today=None)` | `[{cohort (YYYY-MM), cohort_size, still_active, pct_retained}]` sorted oldest first |
+| `activation_scores(pr_records, athletes)` | `{athlete_name: {unique_benchmarks, total_benchmarks, activation_pct}}` |
+
+**Whale score (0–100):** tenure (0–25) + recency (0–25) + sessions_90d (0–25) + plan tier (0–25).
+**Journey stages:** 🌱 New (<30d) · 🔥 Active (30–89d) · ⭐ Established (90–179d) · 💎 Lifer (180+d active) · 🏆 Elite (bespoke) · ⚠️ Drifting (28–59d no log) · ☠️ Churned (60+d no log).
+`data_by_nm` inside `grandslam_score` is keyed by `"Full Name"` (the `_DATA` key column) — not `"Athlete Name"`.
 
 ---
 
@@ -325,6 +341,7 @@ Reads `"Coaching Playbook"` tab. Filters by scenario dropdown and free-text sear
 18. Run analytics (trend, engagement, milestones, consistency, recovery alerts)
 19. Write Coach Alerts tab
 20. Write daily churn risk snapshot
+20a. **Run `grandslam_score()`** — write Journey Stage + Status Label to `_DATA` via `batch_update_by_name` (key col: `"Full Name"`)
 21. **Send 60-day inactive check-in** (only if `days_since == 60`; skips bespoke)
 22. Send Slack digest + progress emails
 23. Per-coach re-engagement alerts + weekly squad summaries
@@ -425,7 +442,7 @@ Weekly submission via Typeform. Captures soreness, stress, and motivation (1–1
 
 ---
 
-## What changed in recent sessions (Rounds 10–11)
+## What changed in recent sessions (Rounds 10–13)
 
 **Round 10:**
 - Competition result loop (Fitr congrats when result logged for recent comp)
@@ -445,6 +462,18 @@ Weekly submission via Typeform. Captures soreness, stress, and motivation (1–1
 - `_fmt_value` fixed to convert seconds → `M:SS` for time benchmarks
 - PR Log backfill: 1,953 rows corrected from `"1200 mm:ss"` → `"20:00"` format
 - `docs/Ed_Dashboard_Guide.md` — plain-English onboarding guide for Ed Cook
+
+**Round 12:**
+- `analytics.py`: `grandslam_score()`, `cohort_retention()`, `activation_scores()`
+- `config.py`: `FOUNDING_MEMBER_CUTOFF`, `SUBSCRIPTION_PRICES`
+- `sync.py`: Grandslam journey stages + status labels written to `_DATA` daily
+- Dashboard: new `💎 Grandslam` tab (tab 14) with 4 sub-tabs — Overview, Opportunities, At Risk, Analytics
+
+**Round 13:**
+- 90-day Established ceremony message — auto-fires on day 90 for **all** athletes including bespoke
+- 180-day Lifer ceremony message — personal milestone message, non-bespoke only
+- 90-day t-shirt reward: Typeform link (`NINETY_DAY_FORM_URL`) embedded in 90-day message
+- Grandslam dashboard additions: Squad Health Score, Net MRR Movement, Upcoming Established Milestones, Second Product Candidates, Message Response Rate
 
 ---
 
