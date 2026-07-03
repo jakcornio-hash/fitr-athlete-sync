@@ -1388,55 +1388,6 @@ def grandslam_score(athletes, pr_records, data_records, today=None):
     return results
 
 
-def cohort_retention(pr_records, today=None):
-    """Group athletes by first-log month and compute retention.
-
-    Retention = still active (logged within last 44 days) / cohort size.
-
-    Returns list of dicts sorted oldest cohort first:
-        cohort (YYYY-MM), cohort_size, still_active, pct_retained
-    """
-    if today is None:
-        today = dt.date.today()
-
-    active_cutoff = today - dt.timedelta(days=44)
-    first_log = {}
-    last_log = {}
-
-    for r in (pr_records or []):
-        nm = str(r.get("Athlete Name", "")).strip()
-        if not nm:
-            continue
-        d = _parse_date(str(r.get("Date", "")))
-        if not d:
-            continue
-        if nm not in first_log or d < first_log[nm]:
-            first_log[nm] = d
-        if nm not in last_log or d > last_log[nm]:
-            last_log[nm] = d
-
-    cohort_members = {}
-    for nm, fl in first_log.items():
-        key = fl.strftime("%Y-%m")
-        cohort_members.setdefault(key, []).append(nm)
-
-    results = []
-    for cohort_key in sorted(cohort_members.keys()):
-        members = cohort_members[cohort_key]
-        cohort_size = len(members)
-        still_active = sum(
-            1 for nm in members
-            if last_log.get(nm, dt.date.min) >= active_cutoff
-        )
-        pct = round(100 * still_active / cohort_size) if cohort_size else 0
-        results.append({
-            "cohort": cohort_key,
-            "cohort_size": cohort_size,
-            "still_active": still_active,
-            "pct_retained": pct,
-        })
-
-    return results
 
 
 def activation_scores(pr_records, athletes):
