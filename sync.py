@@ -1246,6 +1246,7 @@ def main():
             if nm not in first_log_by_name or d < first_log_by_name[nm]:
                 first_log_by_name[nm] = d
     anniversaries_sent = 0
+    summit_flag_names = []
     for a in athletes:
         nm = a["name"]
         if nm in bespoke_names:
@@ -1287,6 +1288,16 @@ def main():
                 f"Drop your address and size here: {_tshirt_url}\n\n"
                 f"If you know someone who trains and would benefit from this — send them our way."
             )
+        elif days_training == 365:
+            summit_flag_names.append(nm)
+            msg = (
+                f"Hey {first} — a year since your first log on "
+                f"{first_log.strftime('%d %b %Y')}.\n\n"
+                f"Twelve months. That's not common.\n\n"
+                f"You've built something most people talk about but never actually do. "
+                f"We want to get you to our next training summit — on us. "
+                f"I'll send you the details when the next one's confirmed."
+            )
         else:
             msg = (
                 f"Hey {first} — {milestone_label} since your first log on "
@@ -1303,6 +1314,18 @@ def main():
             print(f"  ! Anniversary message failed for {nm}: {exc}")
     if anniversaries_sent:
         print(f"Anniversary messages sent: {anniversaries_sent}")
+    if summit_flag_names:
+        try:
+            _lines = "\n".join(f"  • {nm}" for nm in summit_flag_names)
+            notifier.send_slack(
+                f"🏔️ *Summit ticket — action needed*\n"
+                f"The following athlete(s) just hit 12 months and have been promised a free summit ticket:\n"
+                f"{_lines}\n"
+                f"Send them the event details and access code when the next summit is confirmed."
+            )
+            print(f"Summit flag sent to Slack for: {', '.join(summit_flag_names)}")
+        except Exception as exc:
+            print(f"  ! Summit flag Slack alert failed: {exc}")
 
     # ---- new athlete onboarding (first log == today) ----
     onboarding_sent = 0
