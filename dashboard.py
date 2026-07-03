@@ -544,6 +544,21 @@ def page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_w
         st.success("Nothing to flag this week — all athletes on track.")
 
 
+def _fmt_pr_val(val_str):
+    """Format a PR log value — Fitr stores time results as milliseconds (e.g. 1056000).
+    Anything >= 60000 and integer-shaped is treated as ms and formatted as m:ss."""
+    s = str(val_str).strip()
+    try:
+        v = int(s)
+        if v >= 60000:
+            secs = v // 1000
+            m, sec = divmod(secs, 60)
+            return f"{m}:{sec:02d}"
+    except ValueError:
+        pass
+    return s
+
+
 def _parse_notes_timeline(notes_str):
     """Parse a Coaching Notes cell into [{date, kind, text}, ...] newest-first."""
     entries = []
@@ -1363,7 +1378,7 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
                 _pr_lines = [
                     f"{str(_r.get('Date', '')).strip()}: "
                     f"{str(_r.get('Benchmark Name', '')).strip()} — "
-                    f"{str(_r.get('Value', '')).strip()}"
+                    f"{_fmt_pr_val(str(_r.get('Value', '')).strip())}"
                     for _r in sorted(_year_prs, key=lambda x: str(x.get("Date", "")))
                 ]
                 _pr_summary = "\n".join(_pr_lines[:25]) or "(no benchmarks this year)"
@@ -1605,7 +1620,7 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
                 continue
             d = _parse_date(str(r.get("Date", "")))
             bench = str(r.get("Benchmark Name", "")).strip()
-            val = str(r.get("Value", "")).strip()
+            val = _fmt_pr_val(str(r.get("Value", "")).strip())
             note = str(r.get("Note", "")).strip()
             if d and bench:
                 label = f"{bench}: {val}"
@@ -2374,7 +2389,7 @@ def page_competitions(comp_results, athletes, data_records, competition_rows=Non
                                 _comp_pr_lines = [
                                     f"{str(r.get('Date','')).strip()}: "
                                     f"{str(r.get('Benchmark Name','')).strip()} — "
-                                    f"{str(r.get('Value','')).strip()}"
+                                    f"{_fmt_pr_val(str(r.get('Value','')).strip())}"
                                     for r in pr_records
                                     if str(r.get("Athlete Name", "")).strip() == _nm
                                     and (_parse_date(str(r.get("Date", ""))) or _eight_weeks_ago) >= _eight_weeks_ago
@@ -4127,7 +4142,7 @@ def page_progress():
             recent_rows.append({
                 "Date": str(r.get("Date", "")).strip(),
                 "Benchmark": str(r.get("Benchmark Name", "")).strip(),
-                "Result": str(r.get("Value", "")).strip(),
+                "Result": _fmt_pr_val(str(r.get("Value", "")).strip()),
                 "Note": str(r.get("Note", "")).strip(),
             })
         st.dataframe(pd.DataFrame(recent_rows), width='stretch', hide_index=True)
@@ -6162,7 +6177,7 @@ def page_marketing(pr_records, grandslam_results, data_records, athletes,
         for _r in pr_records:
             _nm  = str(_r.get("Athlete Name", "")).strip()
             _bn  = str(_r.get("Benchmark Name", "")).strip()
-            _val = str(_r.get("Value", "")).strip()
+            _val = _fmt_pr_val(str(_r.get("Value", "")).strip())
             _d   = _parse_date(str(_r.get("Date", "")).strip())
             if _nm and _bn and _val and _d:
                 _hist[(_nm, _bn)].append((_d, _val))
@@ -6209,7 +6224,7 @@ def page_marketing(pr_records, grandslam_results, data_records, athletes,
             {
                 "Athlete": str(r.get("Athlete Name", "")).strip(),
                 "Benchmark": str(r.get("Benchmark Name", "")).strip(),
-                "Result": str(r.get("Value", "")).strip(),
+                "Result": _fmt_pr_val(str(r.get("Value", "")).strip()),
                 "Date": str(r.get("Date", "")).strip(),
             }
             for r in pr_records
@@ -6296,7 +6311,7 @@ def page_marketing(pr_records, grandslam_results, data_records, athletes,
         for _r in pr_records:
             _nm  = str(_r.get("Athlete Name", "")).strip()
             _bn  = str(_r.get("Benchmark Name", "")).strip()
-            _val = str(_r.get("Value", "")).strip()
+            _val = _fmt_pr_val(str(_r.get("Value", "")).strip())
             _d   = _parse_date(str(_r.get("Date", "")).strip())
             if not (_nm and _bn and _val and _d):
                 continue
@@ -6420,7 +6435,7 @@ def main():
                 continue
             _nm = str(_r.get("Athlete Name", "")).strip()
             _bn = str(_r.get("Benchmark Name", "")).strip()
-            _val = str(_r.get("Value", "")).strip()
+            _val = _fmt_pr_val(str(_r.get("Value", "")).strip())
             if not _nm or not _bn or (_nm, _bn) in _seen_milestones:
                 continue
             _seen_milestones.add((_nm, _bn))
