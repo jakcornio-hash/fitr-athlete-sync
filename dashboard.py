@@ -4517,8 +4517,10 @@ Most days that's it.
         ("✅ Actions", """
 **Your daily working interface.** Every athlete that needs a personal message from you, in order of priority. The system has not sent anything to these athletes.
 
+Each athlete gets **one card** — if they have a recovery flag, a performance dip, and a logging gap all at once, these are combined into a single message rather than separate alerts.
+
 Each card shows:
-- Priority and reason for contact
+- Priority and reason for contact (all active signals combined in the subtitle)
 - Pre-drafted message (editable — it's a text box)
 - **Email**, **WhatsApp**, and **Fitr** send buttons
 - **Mark Done** — removes the item from the queue and moves it to a collapsed Completed section
@@ -4534,6 +4536,8 @@ Completed items reset each browser session (i.e. next day).
 - 📉 **Performance** — A benchmark is declining or significantly below peak.
 - 🚨 **Programme Switch** — A-race is 10 weeks out. Confirm you've updated their programme.
 - 📝 **Remind to Log** — In contact but not recording sessions.
+
+**Drafted messages** follow the A-C-A framework: Acknowledge the athlete first, Connect the issue to something that matters to them, then Action (always an open question — never a directive). The tone is tailored to each athlete's archetype.
 """),
         ("📋 Outreach List", """
 The full overview table — same data as the Actions tab but in table format with export.
@@ -4651,7 +4655,7 @@ The **JST Tone of Voice quick reference** panel at the bottom covers the key rul
 **Retention intelligence.** Tracks every athlete through the JST retention journey and surfaces who needs attention and who's ready to go deeper.
 
 - **Overview** — Business snapshot (MRR, squad health score, at-risk count) and journey pipeline (New → Active → Established → Lifer → Elite).
-- **Opportunities** — Athletes approaching the 90-day Established mark (act before they drift), candidates for a second product, and the t-shirt fulfilment queue for 180-day athletes.
+- **Opportunities** — Athletes approaching the 90-day Established mark (act before they drift), candidates for a second product, the t-shirt fulfilment queue for 180-day athletes, the **Referral Tracker** (log and track athlete referrals with status updates), and the **Summit Ticket Tracker** (track 1-year summit ticket promises and mark when sent).
 - **At Risk** — Drifting and churned athletes with their last log date and score.
 - **Analytics** — Net MRR movement, message response rate, and whale scoring breakdown.
 
@@ -4692,12 +4696,14 @@ If a sync looks stale or messages aren't sending, check Streamlit Cloud logs for
     st.markdown("### Quick tips")
     st.markdown("""
 - **Coaching notes** are stored in the Google Sheet *_DATA* tab → Coaching Notes column. You can edit them directly in the sheet.
-- **Archetype messaging** — Drafted messages are tailored to the athlete's communication archetype. Athletes without one get a generic message.
+- **Archetype messaging** — Drafted messages are tailored to the athlete's communication archetype (Brett Bartholomew framework). Athletes without one assessed get a generic message. Run the assessment inside any athlete's profile.
+- **Combined action cards** — If an athlete has multiple issues (recovery flag + performance dip + logging gap), they appear as one card with one message, not separate alerts.
 - **Adding competitions** — Athletes tab → click athlete → Competition Calendar → Add Competition.
 - **Refreshing data** — Streamlit menu (⋮, top right) → Rerun, or wait up to 15 minutes for the automatic refresh.
 - **Bespoke athletes** — No automated messages except the 90-day consultation call. Everything else goes through you personally.
-- **1-year summit promise** — When an athlete hits 12 months, the system fires the ceremony message and sends you a Slack notification to follow up with the event details when the next summit is confirmed.
+- **1-year summit promise** — When an athlete hits 12 months, the system fires the ceremony message and sends you a Slack notification. Track ticket fulfilment in Grandslam → Opportunities → Summit Ticket Tracker.
 - **T-shirt fulfilment** — Athletes who hit 180 days receive a Typeform link to submit their address and size. Their responses appear in Grandslam → Opportunities → T-Shirt Fulfilment Queue.
+- **Referral tracking** — Log referrals from JST athletes in Grandslam → Opportunities → Referral Tracker. Update status as leads progress (Pending → Joined / Not interested).
     """)
 
     st.divider()
