@@ -2644,6 +2644,7 @@ def _build_outreach_rows(engagement_results, trend_results, rec_alert_rows, mile
                 "_ctx": {} if never else {"days": days}, "_programme": _prog(e["name"]),
             })
 
+    _perf_issues: dict = {}
     for athlete, signals in sorted(trend_results.items()):
         for s in signals:
             if s["trend"] == "declining" or s["peak_drop_flag"]:
@@ -2652,13 +2653,17 @@ def _build_outreach_rows(engagement_results, trend_results, rec_alert_rows, mile
                     parts.append(f"declining ({s['trend_pct']:+.1f}%/entry)")
                 if s["peak_drop_flag"]:
                     parts.append(f"{s['peak_drop_pct']:.0f}% below peak")
-                rows.append({
-                    "Priority": "📉 Performance", "Athlete": athlete,
-                    "Reason": f"{s['benchmark']}: {', '.join(parts)}",
-                    "Action": "Performance check-in",
-                    "_order": 4, "_reason_type": "performance_concern",
-                    "_ctx": {"bench": s["benchmark"]}, "_programme": _prog(athlete),
-                })
+                _perf_issues.setdefault(athlete, []).append(
+                    f"{s['benchmark']}: {', '.join(parts)}"
+                )
+    for athlete, bench_lines in _perf_issues.items():
+        rows.append({
+            "Priority": "📉 Performance", "Athlete": athlete,
+            "Reason": " · ".join(bench_lines),
+            "Action": "Performance check-in",
+            "_order": 4, "_reason_type": "performance_concern",
+            "_ctx": {"bench": bench_lines[0]}, "_programme": _prog(athlete),
+        })
 
     for e in engagement_results:
         if not e["flag"]:
