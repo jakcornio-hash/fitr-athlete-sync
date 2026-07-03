@@ -474,7 +474,7 @@ def page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_w
                 "Athlete": e["name"],
                 "JST ID": e["jst_id"],
                 "Last Logged": e["last_logged"],
-                "Days Inactive": e["days_since"] if e["days_since"] is not None else "Never",
+                "Days Inactive": str(e["days_since"]) if e["days_since"] is not None else "Never",
                 "Status": "Never logged" if e["last_logged"] == "never" else "Inactive",
                 "Programme": _prog_short(prog),
                 "Contact": _programme_contact(prog),
@@ -1724,7 +1724,7 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
             "Compliance": comp_data["label"] if comp_data else "—",
             "Profile": f"{done_nm}/{total_nm}",
             "Last Logged": last.isoformat() if last else "Never",
-            "Days Since": days if days is not None else "—",
+            "Days Since": str(days) if days is not None else "—",
             "Trend": trend_label,
             "Recovery": rec_str,
             "Archetype": arch_primary or "—",
@@ -4188,7 +4188,7 @@ def _crm_coach_stats(athletes, engagement_results, data_records):
             "Active (≤14d)": f"{active} ({pct_active}%)",
             "Needs Contact": inactive,
             "Never Logged": never,
-            "Avg Days Since Log": avg_days if avg_days is not None else "—",
+            "Avg Days Since Log": str(avg_days) if avg_days is not None else "—",
             "🔴 Critical": risk_counts["🔴 Critical"],
             "🟡 Elevated": risk_counts["🟡 Elevated"],
             "🟢 Low": risk_counts["🟢 Low"],
@@ -6016,9 +6016,8 @@ def main():
             _seen_milestones.add((_nm, _bn))
             milestones.append((_nm, _bn, _val))
 
-        # Reload analytics if this session started before the module was last updated
-        # (Streamlit hot-reload keeps old modules in sys.modules across dashboard.py reruns)
-        if not hasattr(analytics, "load_analysis"):
+        # Reload analytics if the cached module is missing a function added after first deploy.
+        if not hasattr(analytics, "grandslam_score"):
             import importlib
             importlib.reload(analytics)
         load_results = analytics.load_analysis(pr_records, rec_by_name=rec_by_name, data_records=data_records)
