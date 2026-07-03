@@ -1264,24 +1264,28 @@ def main():
         if not room_id or config.DRY_RUN:
             continue
         first = nm.split()[0]
-        _form_url = getattr(config, "NINETY_DAY_FORM_URL", "")
+        _booking_url = getattr(config, "CONSULTATION_BOOKING_URL", "")
+        _tshirt_url = getattr(config, "TSHIRT_FORM_URL", "")
         if days_training == 90:
             msg = (
                 f"Hey {first} — ninety days since your first log on "
                 f"{first_log.strftime('%d %b %Y')}.\n\n"
                 f"Most people who were going to stop have stopped by now.\n\n"
                 f"You haven't. That's what three months means.\n\n"
-                f"We send a JST t-shirt to everyone who hits ninety days. "
-                f"Drop your address and size here and we'll get it posted: {_form_url}"
+                f"At three months I like to get on a call — check in on where you're at "
+                f"and make sure what you're doing is still the right fit for where you're going. "
+                f"Book a time here: {_booking_url}"
             )
         elif days_training == 180:
             msg = (
                 f"Hey {first} — six months since your first log on "
                 f"{first_log.strftime('%d %b %Y')}.\n\n"
-                f"That's the Lifer mark. Most people who start don't get here — you have.\n\n"
+                f"Most people who start don't get here — you have.\n\n"
                 f"The athletes who reach six months are the ones who actually build the fitness "
                 f"they came for. It's not talent. It's not time. It's just not stopping.\n\n"
-                f"Keep going."
+                f"We send a JST t-shirt to everyone who hits six months. "
+                f"Drop your address and size here: {_tshirt_url}\n\n"
+                f"If you know someone who trains and would benefit from this — send them our way."
             )
         else:
             msg = (

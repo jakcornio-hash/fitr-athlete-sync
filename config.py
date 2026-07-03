@@ -209,8 +209,10 @@ BENCHMARK_NAME_MAP = {
     "elizabeth": "Elizabeth",
 }
 
-# 90-day t-shirt reward — Typeform URL sent in the ceremony message.
-NINETY_DAY_FORM_URL = _get("NINETY_DAY_FORM_URL", "https://jstcompete.typeform.com/to/UszYYXgk")
+# 90-day milestone — 1:1 consultation call booking link.
+CONSULTATION_BOOKING_URL = _get("CONSULTATION_BOOKING_URL", "https://calendar.app.google/NmzLTiP8Ypo7Yrff7")
+# 180-day milestone — t-shirt reward Typeform (address + size collection).
+TSHIRT_FORM_URL = _get("TSHIRT_FORM_URL", "https://jstcompete.typeform.com/to/UszYYXgk")
 
 # Grandslam retention: athletes who joined on/before this date are Founding Members.
 # Format: YYYY-MM-DD. Override via FOUNDING_MEMBER_CUTOFF env var.
