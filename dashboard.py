@@ -2728,7 +2728,52 @@ def _build_outreach_rows(engagement_results, trend_results, rec_alert_rows, mile
     for r in rows:
         r["_auto"] = r["Priority"] in _AUTO_PRIORITIES
 
+    rows = _merge_concern_rows(rows)
     return rows
+
+
+def _merge_concern_rows(rows):
+    """Collapse all concern-type rows for the same athlete into one card.
+
+    Multiple issues (recovery flag + performance dip + logging gap) become a single
+    card with a combined message rather than separate transactional alerts.
+    Positive rows (celebrate, consistency) and comp rows are left untouched.
+    """
+    _PRIORITY_RANK = {
+        "🔴 Contact Today": 0,
+        "📉 Performance":   1,
+        "⚠️ Re-engage":     2,
+        "⚠️ Check In":      3,
+        "📝 Remind to Log": 4,
+    }
+
+    concern_rows = [r for r in rows if r.get("_reason_type") in msg_tmpl.CONCERN_TYPES]
+    other_rows   = [r for r in rows if r.get("_reason_type") not in msg_tmpl.CONCERN_TYPES]
+
+    by_athlete = {}
+    for r in concern_rows:
+        nm = r["Athlete"]
+        signal = {"reason_type": r["_reason_type"], "ctx": r.get("_ctx", {})}
+        if nm not in by_athlete:
+            merged = r.copy()
+            merged["_all_signals"] = [signal]
+            by_athlete[nm] = merged
+        else:
+            existing = by_athlete[nm]
+            existing["_all_signals"].append(signal)
+            # Upgrade to higher priority if this row outranks the current lead
+            if _PRIORITY_RANK.get(r["Priority"], 99) < _PRIORITY_RANK.get(existing["Priority"], 99):
+                existing["Priority"] = r["Priority"]
+                existing["_order"]   = r["_order"]
+                existing["_reason_type"] = r["_reason_type"]
+                existing["_ctx"]     = r.get("_ctx", {})
+            # Append reason text
+            existing["Reason"] = existing["Reason"] + " · " + r["Reason"]
+
+    merged_rows = list(by_athlete.values())
+    combined = other_rows + merged_rows
+    combined.sort(key=lambda x: (x.get("_order", 99), x["Athlete"]))
+    return combined
 
 
 def page_action_list(engagement_results, trend_results, rec_alert_rows, milestones,
@@ -2826,7 +2871,11 @@ def page_action_list(engagement_results, trend_results, rec_alert_rows, mileston
             if comp_msg and not reason_type:
                 msg = comp_msg
             elif reason_type:
-                msg = msg_tmpl.generate_message(name, reason_type, ctx, arch_id)
+                all_signals = r.get("_all_signals", [])
+                if len(all_signals) > 1:
+                    msg = msg_tmpl.generate_combined_message(name, all_signals, arch_id)
+                else:
+                    msg = msg_tmpl.generate_message(name, reason_type, ctx, arch_id)
             else:
                 msg = ""
 
@@ -2988,7 +3037,13 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
                 arch_id = str(arch_row.get("Primary Archetype", "")).strip() if arch_row else None
                 reason_type = r.get("_reason_type")
                 ctx = r.get("_ctx", {})
-                msg = msg_tmpl.generate_message(name, reason_type, ctx, arch_id) if reason_type else ""
+                all_signals = r.get("_all_signals", [])
+                if len(all_signals) > 1:
+                    msg = msg_tmpl.generate_combined_message(name, all_signals, arch_id)
+                elif reason_type:
+                    msg = msg_tmpl.generate_message(name, reason_type, ctx, arch_id)
+                else:
+                    msg = ""
                 prog = r.get("_programme", "")
                 buf.write(f"### {name}\n")
                 buf.write(f"**Priority:** {r['Priority']}  \n")
@@ -3058,7 +3113,11 @@ def page_outreach(engagement_results, trend_results, rec_alert_rows, milestones,
                     _outreach_send_buttons(comp_msg)
                     _fitr_send_widget(sel, comp_msg, idx=i)
                 elif reason_type:
-                    msg = msg_tmpl.generate_message(sel, reason_type, ctx, arch_id)
+                    all_signals = r.get("_all_signals", [])
+                    if len(all_signals) > 1:
+                        msg = msg_tmpl.generate_combined_message(sel, all_signals, arch_id)
+                    else:
+                        msg = msg_tmpl.generate_message(sel, reason_type, ctx, arch_id)
                     st.code(msg, language=None)
                     _outreach_send_buttons(msg)
                     if arch_name:
