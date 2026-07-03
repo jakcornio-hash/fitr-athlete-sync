@@ -90,6 +90,8 @@ TAB_CHURN_HISTORY = "Churn History"
 TAB_MESSAGE_LOG = "Message Log"
 TAB_DRAFT_REPLIES = "Draft Replies"
 TAB_TRAINING_LOAD = "Training Load"
+TAB_REFERRALS = "Referrals"
+TAB_SUMMIT_TICKETS = "Summit Tickets"
 
 # Recovery survey (Typeform sheet — separate from main athlete sheet)
 RECOVERY_SHEET_ID = _get("RECOVERY_SHEET_ID", "")

@@ -5338,6 +5338,187 @@ def page_grandslam(grandslam_results, data_records, pr_records=None, athletes=No
                 "to connect the Typeform response sheet here."
             )
 
+        st.divider()
+
+        # ── Referral tracker ──────────────────────────────────────────────────
+        st.subheader("Referral Tracker")
+        st.caption(
+            "Log referrals from JST athletes. Each entry records who referred whom "
+            "and tracks whether they joined."
+        )
+        try:
+            _referrals = get_sheets().load_referrals()
+        except Exception as _re:
+            _referrals = []
+            st.warning(f"Could not load referrals: {_re}")
+
+        athlete_names_for_ref = sorted({r["name"] for r in (grandslam_results or [])})
+
+        with st.expander("+ Log a new referral", expanded=False):
+            with st.form("referral_form", clear_on_submit=True):
+                _ref_referrer = st.selectbox(
+                    "Referring athlete", [""] + athlete_names_for_ref, key="ref_referrer"
+                )
+                _ref_name  = st.text_input("Referred person's name")
+                _ref_email = st.text_input("Referred person's email (optional)")
+                _ref_notes = st.text_input("Notes (optional)")
+                _ref_submit = st.form_submit_button("Log referral")
+                if _ref_submit:
+                    if not _ref_referrer or not _ref_name.strip():
+                        st.error("Referring athlete and referred name are required.")
+                    else:
+                        try:
+                            get_sheets().add_referral(
+                                TODAY.isoformat(), _ref_referrer,
+                                _ref_name.strip(), _ref_email.strip(), _ref_notes.strip(),
+                            )
+                            st.success(f"Referral logged — {_ref_referrer} → {_ref_name.strip()}")
+                            st.rerun()
+                        except Exception as _re2:
+                            st.error(f"Failed to save: {_re2}")
+
+        if _referrals:
+            _ref_df_rows = []
+            for _i, _rv in enumerate(_referrals, start=2):
+                _ref_df_rows.append({
+                    "Row": _i,
+                    "Date": str(_rv.get("Date", "")),
+                    "Referrer": str(_rv.get("Referrer Name", "")),
+                    "Referred": str(_rv.get("Referred Name", "")),
+                    "Email": str(_rv.get("Referred Email", "")),
+                    "Notes": str(_rv.get("Notes", "")),
+                    "Status": str(_rv.get("Status", "Pending")),
+                })
+            _ref_statuses = ["Pending", "Joined", "Not interested", "No response"]
+            for _rv_row in _ref_df_rows:
+                _rv_col1, _rv_col2, _rv_col3 = st.columns([3, 2, 2])
+                _rv_col1.markdown(
+                    f"**{_rv_row['Referrer']}** → {_rv_row['Referred']}"
+                    + (f" ({_rv_row['Email']})" if _rv_row['Email'] else "")
+                    + (f"  \n_{_rv_row['Notes']}_" if _rv_row['Notes'] else "")
+                )
+                _rv_col2.caption(_rv_row["Date"])
+                _new_status = _rv_col3.selectbox(
+                    "Status", _ref_statuses,
+                    index=_ref_statuses.index(_rv_row["Status"])
+                    if _rv_row["Status"] in _ref_statuses else 0,
+                    key=f"ref_status_{_rv_row['Row']}",
+                    label_visibility="collapsed",
+                )
+                if _new_status != _rv_row["Status"]:
+                    try:
+                        get_sheets().update_referral_status(_rv_row["Row"], _new_status)
+                        st.rerun()
+                    except Exception as _re3:
+                        st.error(f"Could not update: {_re3}")
+            _joined = sum(1 for r in _ref_df_rows if r["Status"] == "Joined")
+            st.caption(
+                f"{len(_ref_df_rows)} referral(s) logged · "
+                f"{_joined} joined · "
+                f"{len(_ref_df_rows) - _joined} pending / other"
+            )
+        else:
+            st.info("No referrals logged yet.")
+
+        st.divider()
+
+        # ── Summit ticket tracker ─────────────────────────────────────────────
+        st.subheader("Summit Ticket Tracker")
+        st.caption(
+            "Athletes promised a free summit ticket at 1 year. "
+            "Mark tickets as sent once the event is confirmed and the athlete has been notified."
+        )
+        try:
+            _summit_rows = get_sheets().load_summit_tickets()
+        except Exception as _ste:
+            _summit_rows = []
+            st.warning(f"Could not load summit tickets: {_ste}")
+
+        # Auto-suggest any 365-day athletes not already in the tracker
+        _summit_names_tracked = {str(r.get("Athlete Name", "")).strip() for r in _summit_rows}
+        _promised_not_tracked = [
+            r for r in (grandslam_results or [])
+            if r["days_tenure"] >= 365 and r["name"] not in _summit_names_tracked
+        ]
+        if _promised_not_tracked:
+            st.warning(
+                f"{len(_promised_not_tracked)} athlete(s) have hit 1 year but aren't in the tracker yet: "
+                + ", ".join(r["name"] for r in _promised_not_tracked)
+            )
+            with st.form("summit_add_form"):
+                _sadd_athlete = st.selectbox(
+                    "Add to tracker",
+                    [r["name"] for r in _promised_not_tracked],
+                )
+                _sadd_event = st.text_input("Event name (optional — add later once confirmed)")
+                _sadd_notes = st.text_input("Notes (optional)")
+                if st.form_submit_button("Add to tracker"):
+                    try:
+                        get_sheets().add_summit_ticket(
+                            TODAY.isoformat(), _sadd_athlete,
+                            _sadd_event.strip(), _sadd_notes.strip(),
+                        )
+                        st.success(f"{_sadd_athlete} added to summit tracker.")
+                        st.rerun()
+                    except Exception as _ste2:
+                        st.error(f"Failed to save: {_ste2}")
+
+        with st.expander("+ Manually add an athlete to the tracker", expanded=False):
+            with st.form("summit_manual_form", clear_on_submit=True):
+                _sm_athlete = st.selectbox(
+                    "Athlete", [""] + athlete_names_for_ref, key="summit_manual_athlete"
+                )
+                _sm_event = st.text_input("Event name (optional)")
+                _sm_notes = st.text_input("Notes (optional)")
+                if st.form_submit_button("Add"):
+                    if not _sm_athlete:
+                        st.error("Select an athlete.")
+                    else:
+                        try:
+                            get_sheets().add_summit_ticket(
+                                TODAY.isoformat(), _sm_athlete,
+                                _sm_event.strip(), _sm_notes.strip(),
+                            )
+                            st.success(f"{_sm_athlete} added.")
+                            st.rerun()
+                        except Exception as _ste3:
+                            st.error(f"Failed to save: {_ste3}")
+
+        if _summit_rows:
+            for _si, _sr in enumerate(_summit_rows, start=2):
+                _s_name    = str(_sr.get("Athlete Name", ""))
+                _s_event   = str(_sr.get("Event", "")).strip()
+                _s_sent    = str(_sr.get("Ticket Sent", "No")).strip()
+                _s_date_p  = str(_sr.get("Date Promised", ""))
+                _s_date_s  = str(_sr.get("Date Sent", ""))
+                _sc1, _sc2, _sc3, _sc4 = st.columns([3, 2, 2, 2])
+                _sc1.markdown(f"**{_s_name}**" + (f"  \n{_s_event}" if _s_event else ""))
+                _sc2.caption(f"Promised: {_s_date_p}")
+                if _s_sent == "Yes":
+                    _sc3.success(f"Sent {_s_date_s}")
+                else:
+                    _mark_key = f"summit_sent_{_si}"
+                    _event_key = f"summit_event_{_si}"
+                    _new_event = _sc3.text_input(
+                        "Event", value=_s_event, key=_event_key,
+                        label_visibility="collapsed", placeholder="Event name"
+                    )
+                    if _sc4.button("Mark sent", key=_mark_key):
+                        try:
+                            get_sheets().mark_summit_ticket_sent(
+                                _si, TODAY.isoformat(), _new_event.strip()
+                            )
+                            st.rerun()
+                        except Exception as _ste4:
+                            st.error(f"Could not update: {_ste4}")
+            _n_sent = sum(1 for r in _summit_rows if str(r.get("Ticket Sent", "")) == "Yes")
+            st.caption(
+                f"{len(_summit_rows)} athlete(s) promised a ticket · "
+                f"{_n_sent} sent · {len(_summit_rows) - _n_sent} outstanding"
+            )
+        else:
+            st.info("No summit tickets tracked yet.")
+
     # ════════════════════════════════════════════════════════════════════════
     # TAB 2 — AT RISK
     # ════════════════════════════════════════════════════════════════════════

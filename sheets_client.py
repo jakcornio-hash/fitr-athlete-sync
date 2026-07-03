@@ -392,6 +392,62 @@ class SheetsClient:
         except Exception:
             return []
 
+    # --------------------------------------------------------- referrals
+    _REFERRAL_HEADERS = [
+        "Date", "Referrer Name", "Referred Name", "Referred Email", "Notes", "Status",
+    ]
+
+    def load_referrals(self):
+        try:
+            ws = self.get_or_create(config.TAB_REFERRALS, self._REFERRAL_HEADERS)
+            return ws.get_all_records()
+        except Exception as e:
+            print(f"  ! referrals load failed: {e}")
+            return []
+
+    def add_referral(self, date, referrer, referred_name, referred_email, notes=""):
+        ws = self.get_or_create(config.TAB_REFERRALS, self._REFERRAL_HEADERS)
+        ws.append_rows(
+            [[date, referrer, referred_name, referred_email, notes, "Pending"]],
+            value_input_option="USER_ENTERED",
+        )
+
+    def update_referral_status(self, row_number, status):
+        """row_number is 1-indexed (row 1 = header, data starts at 2)."""
+        ws = self.get_or_create(config.TAB_REFERRALS, self._REFERRAL_HEADERS)
+        status_col = self._REFERRAL_HEADERS.index("Status") + 1
+        ws.update_cell(row_number, status_col, status)
+
+    # --------------------------------------------------------- summit tickets
+    _SUMMIT_HEADERS = [
+        "Date Promised", "Athlete Name", "Event", "Ticket Sent", "Date Sent", "Notes",
+    ]
+
+    def load_summit_tickets(self):
+        try:
+            ws = self.get_or_create(config.TAB_SUMMIT_TICKETS, self._SUMMIT_HEADERS)
+            return ws.get_all_records()
+        except Exception as e:
+            print(f"  ! summit tickets load failed: {e}")
+            return []
+
+    def add_summit_ticket(self, date_promised, athlete_name, event="", notes=""):
+        ws = self.get_or_create(config.TAB_SUMMIT_TICKETS, self._SUMMIT_HEADERS)
+        ws.append_rows(
+            [[date_promised, athlete_name, event, "No", "", notes]],
+            value_input_option="USER_ENTERED",
+        )
+
+    def mark_summit_ticket_sent(self, row_number, date_sent, event=""):
+        ws = self.get_or_create(config.TAB_SUMMIT_TICKETS, self._SUMMIT_HEADERS)
+        sent_col   = self._SUMMIT_HEADERS.index("Ticket Sent") + 1
+        date_col   = self._SUMMIT_HEADERS.index("Date Sent") + 1
+        event_col  = self._SUMMIT_HEADERS.index("Event") + 1
+        ws.update_cell(row_number, sent_col, "Yes")
+        ws.update_cell(row_number, date_col, date_sent)
+        if event:
+            ws.update_cell(row_number, event_col, event)
+
     # --------------------------------------------------------- intake form
     def load_intake_responses(self):
         """Read athlete intake Typeform responses from an external sheet."""
