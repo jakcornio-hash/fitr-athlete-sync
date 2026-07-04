@@ -1281,6 +1281,125 @@ def main():
         if offboarding_sent:
             print(f"Off-boarding check-in messages sent: {offboarding_sent}")
 
+    # ---- referral acknowledgements ----
+    _referrals = sheets.load_referrals()
+    if _referrals:
+        sheets.ensure_referral_columns()
+
+        # name → full name lookup for referred athletes
+        _athlete_name_lower = {a["name"].lower(): a["name"] for a in athletes}
+
+        # most recent log date per athlete (activity check for conversion)
+        _pr_dates_ref = {}
+        for _rec in pr_records:
+            _nm = str(_rec.get("Athlete Name", "")).strip()
+            _d  = _parse_date(str(_rec.get("Date", "")))
+            if _nm and _d:
+                _pr_dates_ref.setdefault(_nm, []).append(_d)
+
+        # coach name → slack channel (for coach referrers)
+        _coach_name_map_ref = sheets.load_coach_names()  # {programme: coach_name}
+        _coach_slack = {}  # {coach_name: channel}
+        for _prog, _channel in coach_channel_map.items():
+            _cname = _coach_name_map_ref.get(_prog, "")
+            if _cname:
+                _coach_slack.setdefault(_cname, _channel)
+
+        _ref_join_sent = 0
+        _ref_convert_sent = 0
+
+        for _row_idx, _ref in enumerate(_referrals, start=2):
+            _status      = str(_ref.get("Status", "")).strip()
+            _referred    = str(_ref.get("Referred Name", "")).strip()
+            _referrer    = str(_ref.get("Referrer Name", "")).strip()
+            _trial_end_s = str(_ref.get("Trial End", "")).strip()
+            _join_ack    = str(_ref.get("Join Ack Sent", "")).strip()
+            _conv_ack    = str(_ref.get("Convert Ack Sent", "")).strip()
+
+            if not _referred or not _referrer:
+                continue
+
+            _referred_full = _athlete_name_lower.get(_referred.lower())
+            _referrer_first = _referrer.split()[0]
+
+            def _send_referral_msg(msg):
+                """Try Fitr DM first; fall back to coach Slack channel."""
+                _room = room_id_by_name.get(_referrer)
+                if _room:
+                    fitr.send_chat_message(_room, msg)
+                    return True
+                _ch = _coach_slack.get(_referrer)
+                if _ch:
+                    notifier.send_slack_message(_ch, msg)
+                    return True
+                return False
+
+            # Phase 1 — detect join: referred athlete has logged at least once
+            if _status == "Pending" and not _join_ack:
+                if _referred_full and _pr_dates_ref.get(_referred_full):
+                    _referred_first = _referred_full.split()[0]
+                    _msg = (
+                        f"Hey {_referrer_first} — {_referred_first} just joined. "
+                        f"They reached out because of you, and that means something. "
+                        f"How do you know them?"
+                    )
+                    if not config.DRY_RUN:
+                        try:
+                            _sent = _send_referral_msg(_msg)
+                            if _sent:
+                                sheets.update_referral_ack(
+                                    _row_idx,
+                                    {"Status": "Joined", "Join Ack Sent": TODAY.isoformat()},
+                                )
+                                _ref_join_sent += 1
+                                messages_sent_log.append({
+                                    "Date": TODAY.isoformat(), "Athlete Name": _referrer,
+                                    "Message Type": "referral_join", "Room ID": room_id_by_name.get(_referrer, ""),
+                                })
+                                import time as _time; _time.sleep(0.5)
+                        except FitrError as _exc:
+                            print(f"  ! Referral join message failed for {_referrer}: {_exc}")
+                    else:
+                        print(f"[DRY_RUN] Referral join ack — {_referred_full} joined, referrer: {_referrer}")
+
+            # Phase 2 — detect conversion: trial end date passed, referred athlete still active
+            elif _status == "Joined" and not _conv_ack and _trial_end_s:
+                _trial_end = _parse_date(_trial_end_s)
+                if _trial_end and TODAY >= _trial_end:
+                    _last_logs = _pr_dates_ref.get(_referred_full or "", [])
+                    _last_log  = max(_last_logs) if _last_logs else None
+                    if _last_log and (TODAY - _last_log).days <= 30:
+                        _referred_first = (_referred_full or _referred).split()[0]
+                        _msg = (
+                            f"Hey {_referrer_first} — {_referred_first} has finished their trial "
+                            f"and decided to stay. Your free month is on its way — "
+                            f"we'll get that sorted for you this week. "
+                            f"What made you think of sending them our way?"
+                        )
+                        if not config.DRY_RUN:
+                            try:
+                                _sent = _send_referral_msg(_msg)
+                                if _sent:
+                                    sheets.update_referral_ack(
+                                        _row_idx,
+                                        {"Status": "Converted", "Convert Ack Sent": TODAY.isoformat()},
+                                    )
+                                    _ref_convert_sent += 1
+                                    messages_sent_log.append({
+                                        "Date": TODAY.isoformat(), "Athlete Name": _referrer,
+                                        "Message Type": "referral_converted", "Room ID": room_id_by_name.get(_referrer, ""),
+                                    })
+                                    import time as _time; _time.sleep(0.5)
+                            except FitrError as _exc:
+                                print(f"  ! Referral convert message failed for {_referrer}: {_exc}")
+                        else:
+                            print(f"[DRY_RUN] Referral convert ack — {_referred_full} converted, referrer: {_referrer}")
+
+        if _ref_join_sent:
+            print(f"Referral join acknowledgements sent: {_ref_join_sent}")
+        if _ref_convert_sent:
+            print(f"Referral conversion acknowledgements sent: {_ref_convert_sent}")
+
     # ---- digest notification ----
     print("Sending digest...")
     notifier.send_digest(

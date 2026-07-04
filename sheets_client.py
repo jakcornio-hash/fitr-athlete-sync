@@ -411,6 +411,7 @@ class SheetsClient:
     # --------------------------------------------------------- referrals
     _REFERRAL_HEADERS = [
         "Date", "Referrer Name", "Referred Name", "Referred Email", "Notes", "Status",
+        "Trial End", "Join Ack Sent", "Convert Ack Sent",
     ]
 
     def load_referrals(self):
@@ -421,10 +422,39 @@ class SheetsClient:
             print(f"  ! referrals load failed: {e}")
             return []
 
-    def add_referral(self, date, referrer, referred_name, referred_email, notes=""):
+    def ensure_referral_columns(self):
+        """Add any columns from _REFERRAL_HEADERS missing from the live tab header row."""
+        try:
+            ws = self.get_or_create(config.TAB_REFERRALS, self._REFERRAL_HEADERS)
+            current = ws.row_values(1)
+            new_cols = [h for h in self._REFERRAL_HEADERS if h not in current]
+            if not new_cols:
+                return
+            start_col = len(current) + 1
+            for i, h in enumerate(new_cols):
+                ws.update_cell(1, start_col + i, h)
+        except Exception as e:
+            print(f"  ! ensure_referral_columns failed: {e}")
+
+    def update_referral_ack(self, row_number, updates):
+        """Update specific fields in a referral row. updates = {column_name: value}."""
+        try:
+            ws = self.get_or_create(config.TAB_REFERRALS, self._REFERRAL_HEADERS)
+            headers = ws.row_values(1)
+            cells = [
+                gspread.Cell(row_number, headers.index(col) + 1, val)
+                for col, val in updates.items()
+                if col in headers
+            ]
+            if cells:
+                ws.update_cells(cells)
+        except Exception as e:
+            print(f"  ! update_referral_ack failed (row {row_number}): {e}")
+
+    def add_referral(self, date, referrer, referred_name, referred_email, notes="", trial_end=""):
         ws = self.get_or_create(config.TAB_REFERRALS, self._REFERRAL_HEADERS)
         ws.append_rows(
-            [[date, referrer, referred_name, referred_email, notes, "Pending"]],
+            [[date, referrer, referred_name, referred_email, notes, "Pending", trial_end, "", ""]],
             value_input_option="USER_ENTERED",
         )
 
