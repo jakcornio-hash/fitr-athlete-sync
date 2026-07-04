@@ -1855,6 +1855,73 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
     event = st.dataframe(
         df, width='stretch', hide_index=True,
         on_select="rerun", selection_mode="single-row",
+        column_config={
+            "Risk": st.column_config.TextColumn(
+                "Risk",
+                help=(
+                    "Churn risk — combines days since last log, benchmark trend direction, "
+                    "and recovery survey data.\n\n"
+                    "🟢 Low · 🟡 Medium · 🔴 High"
+                ),
+            ),
+            "Compliance": st.column_config.TextColumn(
+                "Compliance",
+                help=(
+                    "Sessions logged in the last 4 weeks vs programme expectation. "
+                    "Standard = 5/week; 1x/day = 7/week; 2x/day = 14/week.\n\n"
+                    "✅ ≥80% · 🟡 50–79% · 🔴 <50%"
+                ),
+            ),
+            "Profile": st.column_config.TextColumn(
+                "Profile",
+                help=(
+                    "Profile completeness out of 5 data points: goal set, coaching notes added, "
+                    "recovery survey submitted, benchmark logged, archetype assessed.\n\n"
+                    "Higher = more coaching context available."
+                ),
+            ),
+            "Days Since": st.column_config.TextColumn(
+                "Days Since",
+                help=(
+                    "Number of days since the athlete last logged a result in Fitr. "
+                    "'—' means they have never logged."
+                ),
+            ),
+            "Trend": st.column_config.TextColumn(
+                "Trend",
+                help=(
+                    "Benchmark performance direction based on recent log entries.\n\n"
+                    "📉 Declining = one or more benchmarks moving the wrong way\n"
+                    "📈 Improving = upward trend on at least one benchmark\n"
+                    "'—' = not enough data to determine"
+                ),
+            ),
+            "Recovery": st.column_config.TextColumn(
+                "Recovery",
+                help=(
+                    "Summary of the athlete's most recent weekly recovery survey — "
+                    "soreness, stress, and motivation scores (each out of 10). "
+                    "High soreness or stress flags for a coach check-in."
+                ),
+            ),
+            "Archetype": st.column_config.TextColumn(
+                "Archetype",
+                help=(
+                    "Primary communication archetype from the Bartholomew model. "
+                    "Determines the coaching style and tone used in outreach messages.\n\n"
+                    "'—' = athlete has not yet completed the self-assessment."
+                ),
+            ),
+            "Logging": st.column_config.TextColumn(
+                "Logging",
+                help=(
+                    "Current logging status.\n\n"
+                    "✅ Active = logged in the last 28 days\n"
+                    "📝 Nudge = flagged for a check-in prompt\n"
+                    "⚠️ Inactive = no log in 28+ days"
+                ),
+            ),
+        },
     )
 
     selected_rows = event.selection.rows if hasattr(event, "selection") else []
