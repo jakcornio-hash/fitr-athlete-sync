@@ -1144,7 +1144,7 @@ def main():
     print(f"Milestones: {len(milestones)}  |  Consistency streaks: {len(consistency_wins)}")
 
     # ---- grandslam scores — update Journey Stage + Status Label in _DATA ----
-    grandslam_results = analytics.grandslam_score(athletes, pr_records, data_records)
+    grandslam_results = analytics.grandslam_score(athletes, pr_records, data_recs)
     if not config.DRY_RUN and grandslam_results:
         stage_updates = {
             r["name"]: {"Journey Stage": r["journey_stage"], "Status Label": r["status_label"]}
