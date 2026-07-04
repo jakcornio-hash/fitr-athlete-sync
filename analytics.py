@@ -229,6 +229,59 @@ def consistency_check(pr_log_records, athletes, min_consecutive_weeks=4):
     return wins
 
 
+_STREAK_EXEMPT_WEEKDAYS = {3, 6}  # Thursday (recovery), Sunday (rest)
+_STREAK_MILESTONES = {7, 14, 21, 30, 60, 90}
+
+
+def daily_streak_check(pr_log_records, athletes, today=None):
+    """Find athletes whose current streak of consecutive expected-training-days hits a milestone.
+
+    Thursday and Sunday are exempt — absence on those days never breaks a streak.
+    Only fires for athletes active within the last 3 days so stale streaks don't re-trigger.
+    Returns [(name, streak_days), ...] where streak_days is in _STREAK_MILESTONES.
+    """
+    import datetime as _dt
+    if today is None:
+        today = TODAY
+
+    log_dates_by_name = defaultdict(set)
+    for rec in pr_log_records:
+        name = str(rec.get("Athlete Name", "")).strip()
+        d = _parse_date(str(rec.get("Date", "")))
+        if name and d:
+            log_dates_by_name[name].add(d)
+
+    valid_names = {a["name"] for a in athletes}
+    results = []
+
+    for name in valid_names:
+        log_dates = log_dates_by_name.get(name, set())
+        if not log_dates:
+            continue
+
+        most_recent = max(log_dates)
+        if (today - most_recent).days > 3:
+            continue  # stale — don't re-fire old streaks
+
+        # Walk backward from most recent log, counting required training days logged
+        streak = 0
+        d = most_recent
+        for _ in range(400):
+            if d.weekday() in _STREAK_EXEMPT_WEEKDAYS:
+                d -= _dt.timedelta(days=1)
+                continue
+            if d in log_dates:
+                streak += 1
+                d -= _dt.timedelta(days=1)
+            else:
+                break  # missed a required training day — streak ends
+
+        if streak in _STREAK_MILESTONES:
+            results.append((name, streak))
+
+    return results
+
+
 def load_analysis(pr_log_records, rec_by_name=None, data_records=None, weeks_back=12):
     """
     Training load proxy per athlete, derived from PR-log entry frequency.

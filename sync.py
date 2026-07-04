@@ -1126,7 +1126,77 @@ def main():
     )
     milestones = analytics.milestone_detection(bench_rows)
     consistency_wins = analytics.consistency_check(pr_records, athletes)
+    streak_hits = analytics.daily_streak_check(pr_records, athletes)
     rec_alert_rows = analytics.recovery_alerts(rec_by_name)
+
+    # ---- streak milestone messages ----
+    if streak_hits and not config.DRY_RUN:
+        _streak_notes = {}
+        _streak_sent = 0
+        _streak_msgs = {
+            7:  (
+                "Hey {first} — seven training days in a row. "
+                "That's not luck, that's a decision you've been making every single day this week. "
+                "What's been making it easier to show up?"
+            ),
+            14: (
+                "Hey {first} — two weeks straight without missing a beat. "
+                "The athletes who build real fitness are the ones who keep going even when it's inconvenient. "
+                "What's keeping you going at the moment?"
+            ),
+            21: (
+                "Hey {first} — 21 training days in a row. "
+                "Three weeks of showing up consistently. "
+                "How does your body feel at this point compared to when you started this run?"
+            ),
+            30: (
+                "Hey {first} — 30 consecutive training days. "
+                "A month of work. That's not a habit anymore — that's just who you are now. "
+                "What's changed for you over the last month?"
+            ),
+            60: (
+                "Hey {first} — 60 days straight. "
+                "I want you to think about the version of you who started this run. "
+                "What would they make of where you are now?"
+            ),
+            90: (
+                "Hey {first} — 90 training days in a row. "
+                "Ninety. That's not something most people ever do. "
+                "What does consistency at this level actually mean to you?"
+            ),
+        }
+        for nm, streak_days in streak_hits:
+            if nm in bespoke_names:
+                continue
+            note_key = f"streak_{streak_days}d"
+            existing_notes = str(data_by_name_all.get(nm, {}).get("Coaching Notes", ""))
+            if note_key in existing_notes:
+                continue  # already sent this milestone
+            room_id = room_id_by_name.get(nm)
+            if not room_id:
+                continue
+            first = nm.split()[0]
+            msg = _streak_msgs.get(streak_days, "").format(first=first)
+            if not msg:
+                continue
+            try:
+                fitr.send_chat_message(room_id, msg)
+                _streak_notes[nm] = f"[{TODAY.isoformat()} — {note_key}]"
+                _streak_sent += 1
+                messages_sent_log.append({
+                    "Date": TODAY.isoformat(), "Athlete Name": nm,
+                    "Message Type": note_key, "Room ID": room_id,
+                })
+                import time as _time; _time.sleep(0.5)
+            except FitrError as exc:
+                print(f"  ! Streak message failed for {nm}: {exc}")
+        if _streak_notes:
+            append_coaching_notes(sheets, _streak_notes)
+        if _streak_sent:
+            print(f"Streak milestone messages sent: {_streak_sent}")
+    elif streak_hits and config.DRY_RUN:
+        for nm, sd in streak_hits:
+            print(f"[DRY_RUN] Streak {sd}d milestone for {nm}")
 
     # ---- weekly AI coaching digest per athlete ----
     digests_written = generate_weekly_athlete_digests(

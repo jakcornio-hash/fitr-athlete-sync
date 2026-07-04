@@ -6261,6 +6261,75 @@ def page_marketing(pr_records, grandslam_results, data_records, athletes,
         cutoff_14d = TODAY - dt.timedelta(days=14)
         cutoff_30d = TODAY - dt.timedelta(days=30)
 
+        # ── Testimonial candidates ────────────────────────────────────────
+        st.markdown("#### 🎤 Testimonial Candidates (last 30 days)")
+        st.caption(
+            "Athletes who've hit a significant milestone recently — "
+            "warmest possible people to ask for a quote, a reel, or a case study."
+        )
+        data_by_nm_mkt = {
+            str(r.get("Full Name", "")).strip(): r for r in (data_records or [])
+        }
+        _testimonial_rows = []
+        _anniversary_milestones = {90: "3 months", 180: "6 months", 365: "1 year", 730: "2 years"}
+        for nm, fl in first_log_by_nm.items():
+            days_on = (TODAY - fl).days
+            for threshold, label in _anniversary_milestones.items():
+                if 0 <= days_on - threshold < 30:
+                    prog = str(data_by_nm_mkt.get(nm, {}).get("Programme", "")).strip() or "—"
+                    milestone_date = fl + dt.timedelta(days=threshold)
+                    _testimonial_rows.append({
+                        "Athlete": nm,
+                        "Programme": prog,
+                        "Achievement": f"{label} milestone",
+                        "Date": milestone_date.strftime("%d %b %Y"),
+                        "Why reach out": "Journey story + consistency proof",
+                        "_sort": milestone_date,
+                    })
+        # Big improvements in last 30 days (not just 14)
+        import re as _re_tc
+        from collections import defaultdict as _ddict_tc
+        _hist_tc: dict = _ddict_tc(list)
+        for _r in pr_records:
+            _nm  = str(_r.get("Athlete Name", "")).strip()
+            _bn  = str(_r.get("Benchmark Name", "")).strip()
+            _val = _fmt_pr_val(str(_r.get("Value", "")).strip())
+            _d   = _parse_date(str(_r.get("Date", "")).strip())
+            if _nm and _bn and _val and _d:
+                _hist_tc[(_nm, _bn)].append((_d, _val))
+        for _k in _hist_tc:
+            _hist_tc[_k].sort()
+        _seen_tc = set()
+        for (_nm, _bn), _recs in _hist_tc.items():
+            for _i, (_d, _val) in enumerate(_recs):
+                if _d >= cutoff_30d and _i > 0 and _nm not in _seen_tc:
+                    prog = str(data_by_nm_mkt.get(_nm, {}).get("Programme", "")).strip() or "—"
+                    _testimonial_rows.append({
+                        "Athlete": _nm,
+                        "Programme": prog,
+                        "Achievement": f"New PB — {_bn}",
+                        "Date": _d.strftime("%d %b %Y"),
+                        "Why reach out": "Before/after performance story",
+                        "_sort": _d,
+                    })
+                    _seen_tc.add(_nm)
+        _testimonial_rows.sort(key=lambda x: x["_sort"], reverse=True)
+        for r in _testimonial_rows:
+            del r["_sort"]
+        if _testimonial_rows:
+            st.dataframe(
+                pd.DataFrame(_testimonial_rows),
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.caption(
+                f"{len(_testimonial_rows)} candidate(s) — reach out this week while the achievement is fresh."
+            )
+        else:
+            st.info("No testimonial candidates in the last 30 days.")
+
+        st.divider()
+
         # ── Recent improvements (before → after pairs) ────────────────────
         st.markdown("#### 📸 Recent Improvements (last 14 days)")
         st.caption(
