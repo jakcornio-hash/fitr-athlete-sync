@@ -203,6 +203,22 @@ class SheetsClient:
         except gspread.WorksheetNotFound:
             return {}
 
+    def load_coach_names(self):
+        """Return {programme: coach_name} from the Coaches tab 'Coach Name' column.
+
+        Returns {} if the column doesn't exist or the tab is missing — coach filter
+        simply won't appear in the dashboard until the column is populated.
+        """
+        try:
+            rows = self.sh.worksheet(config.TAB_COACHES).get_all_records()
+            return {
+                str(r.get("Programme", "")).strip(): str(r.get("Coach Name", "")).strip()
+                for r in rows
+                if str(r.get("Programme", "")).strip() and str(r.get("Coach Name", "")).strip()
+            }
+        except Exception:
+            return {}
+
     def read_external_records(self, sheet_id, tab_title):
         """Read all records from a different Google Sheet by ID."""
         sh = self.gc.open_by_key(sheet_id)

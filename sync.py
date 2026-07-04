@@ -1044,26 +1044,28 @@ def main():
             _is_time_val = bool(_re_msg.match(r'^\d+:\d{2}', str(value or "")))
             if goal and _goal_achieved(goal, bench, value):
                 msg = (
-                    f"Hey {first} — you just hit your North Star Goal. "
-                    f"{bench}: {value}. That's what we've been building towards.\n\n"
-                    f"Really proud of what you've put in to get there. "
-                    f"Time to set the next one."
+                    f"Hey {first} — {bench}: {value}. That's the goal you came in with. "
+                    f"I've been watching the work you've been putting in and this is what that looks like. "
+                    f"What does hitting this actually mean for you?"
                 )
             elif prev and prev not in ("", "first entry"):
                 if _is_time_val:
                     msg = (
-                        f"Great work, {first}. That {bench} dropping from {prev} to {value} — "
-                        f"that's real progress. Looking forward to seeing where we can take it."
+                        f"Hey {first} — {bench} came in at {value}, down from {prev}. "
+                        f"That kind of progress doesn't happen by accident. "
+                        f"What's been different about your approach lately?"
                     )
                 else:
                     msg = (
-                        f"Great work, {first}. {bench} up from {prev} to {value} — "
-                        f"that's the direction we want. Keep building on it."
+                        f"Hey {first} — {bench} up to {value} from {prev}. "
+                        f"Numbers like that reflect the consistency you've been putting in. "
+                        f"What's been clicking for you?"
                     )
             else:
                 msg = (
-                    f"Good first result, {first}. {bench}: {value}. "
-                    f"We'll build from here."
+                    f"Hey {first} — first result in for {bench}: {value}. "
+                    f"That's the starting point — everything builds from here. "
+                    f"What are you hoping to achieve with it?"
                 )
             try:
                 fitr.send_chat_message(room_id, msg)
@@ -1194,10 +1196,9 @@ def main():
                 continue
             first = nm.split()[0]
             msg = (
-                f"Hey {first} — it's been a while since I've seen you in the logs. "
-                f"Hope everything's okay.\n\n"
-                f"If life's got in the way or you want to adjust something with the programme, "
-                f"just drop me a message. No pressure."
+                f"Hey {first} — it's been a while and I've been thinking about you. "
+                f"That's not a chase-up — life gets complicated and training has to fit around it. "
+                f"What's going on for you at the moment?"
             )
             try:
                 fitr.send_chat_message(room_id, msg)
@@ -1374,12 +1375,13 @@ def main():
             continue
         first = nm.split()[0]
         msg = (
-            f"Hey {first} — first log is in. Good start.\n\n"
-            f"Two things worth doing from day one:\n\n"
-            f"1. Log every session as soon as you finish — even a quick note helps. "
+            f"Hey {first} — first log is in. Starting is the part most people put off, "
+            f"so the fact you've done it matters.\n\n"
+            f"To make coaching as useful as possible from day one, two things worth building in:\n\n"
+            f"1. Log every session as soon as you finish — even a quick note. "
             f"Two minutes of data makes coaching a lot better.\n"
             f"2. Weekly recovery check-in: https://jstcompete.typeform.com/to/Q1tL7MmR — "
-            f"takes 2 minutes, helps me manage your training load week to week.\n\n"
+            f"takes 2 minutes, helps me manage your load week to week.\n\n"
             f"Message me here anytime."
         )
         try:
@@ -1397,21 +1399,21 @@ def main():
     # A comp milestones: send once on exact day (sync runs daily)
     _COMP_MSG_DAYS = {
         70: ("10 weeks out",
-             "Hey {first} — your 10-week competition prep block starts {today}. "
-             "Everything from here is pointed at {comp}. "
-             "I'll be switching your programme over — trust the process."),
+             "Hey {first} — 10 weeks to {comp} starts {today}. "
+             "Everything from here is pointed at that day. "
+             "Before I lock in your programme — what does a successful performance look like to you at {comp}?"),
         21: ("3 weeks out",
              "Hey {first} — three weeks to {comp}. "
-             "We're in the final stretch. Keep the quality high and manage your recovery. "
-             "Any questions about your prep, just message."),
+             "The preparation is in — this is the sharpening phase now. "
+             "What's your headspace going into the final stretch?"),
         7:  ("race week",
              "Hey {first} — {comp} is seven days away. "
-             "Stick to the plan, trust your training, and stay sharp. "
-             "You've put the work in."),
+             "The work is done. "
+             "How are you feeling going into race week?"),
         1:  ("day before",
-             "Hey {first} — {comp} is tomorrow. You're ready. "
-             "Good sleep tonight, good warm-up in the morning, "
-             "and go show what you've built."),
+             "Hey {first} — {comp} is tomorrow. "
+             "I've watched what you've put into this prep and you've done the work. "
+             "How are you feeling going into the day?"),
     }
     competition_rows = sheets.load_competitions()
     comp_msgs_sent = 0
@@ -1506,18 +1508,17 @@ def main():
         first = nm.split()[0]
         if comp_type in ("A", "B"):
             msg = (
-                f"Hey {first} — hope you're recovering well after {comp_nm}.\n\n"
-                f"When you get a chance, can you let me know:\n\n"
+                f"Hey {first} — I was following {comp_nm} and I'm proud of what you put into it.\n\n"
+                f"When you get a chance, I'd love to hear:\n\n"
                 f"1. Your result / placing\n"
                 f"2. What went well — anything you want to build on\n"
                 f"3. One thing you'd do differently\n"
-                f"4. How your body's feeling right now\n\n"
-                f"Proud of what you put in to get there."
+                f"4. How your body's feeling right now"
             )
         else:
             msg = (
-                f"Hey {first} — how did {comp_nm} go? "
-                f"Would love to hear your result and any thoughts from the day."
+                f"Hey {first} — I've been thinking about how {comp_nm} went for you. "
+                f"What was the result and what are you taking away from it?"
             )
         try:
             fitr.send_chat_message(room_id, msg)
@@ -1560,9 +1561,8 @@ def main():
             continue
         first = nm.split()[0]
         msg = (
-            f"Hey {first} — well done at {comp_nm}. Result: {result}. "
-            f"Really proud of what you put in. "
-            f"Let's debrief when you're ready and use it to plan the next block."
+            f"Hey {first} — {result} at {comp_nm}. You earned that. "
+            f"How are you feeling about it — what stood out to you from the day?"
         )
         try:
             fitr.send_chat_message(room_id, msg)

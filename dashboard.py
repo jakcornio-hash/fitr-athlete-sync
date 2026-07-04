@@ -354,7 +354,7 @@ def page_self_assess():
 
 
 def page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_wins,
-                data_records=None, pr_records=None, athletes=None):
+                data_records=None, pr_records=None, athletes=None, archetype_by_name=None):
     flagged = [e for e in engagement_results if e["flag"]]
     concerns = [
         (athlete, s)
@@ -440,12 +440,16 @@ def page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_w
                 momentum_alerts.append({"name": nm, "reasons": reasons})
 
     # Metric row
-    c1, c2, c3, c4, c5 = st.columns(5)
+    unassessed_count = sum(
+        1 for a in (athletes or []) if a["name"] not in (archetype_by_name or {})
+    )
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("🔴 Recovery Flags", len(rec_alert_rows))
     c2.metric("⚠️ Inactive Athletes", len(flagged))
     c3.metric("📉 Performance Concerns", len(concerns))
     c4.metric("✅ Consistency Streaks", len(consistency_wins))
     c5.metric("⚡ Multi-Decline", len(multi_decline))
+    c6.metric("📋 Unassessed", unassessed_count)
 
     st.divider()
 
@@ -1673,7 +1677,7 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
 
 def page_athletes(pr_records, athletes, trend_results, engagement_results,
                   rec_by_name, data_records=None, archetype_by_name=None,
-                  competition_rows=None):
+                  competition_rows=None, coach_progs=None):
     # Build per-name lookup from _DATA
     data_by_name = {}
     for rec in (data_records or []):
@@ -1790,6 +1794,13 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
     else:
         f_sub, f_ref = [], []
 
+    all_coaches = sorted((coach_progs or {}).keys())
+    if all_coaches:
+        fc_c1, fc_c2 = st.columns([2, 3])
+        f_coach = fc_c1.multiselect("Coach", all_coaches, placeholder="All coaches")
+    else:
+        f_coach = []
+
     filtered_rows = summary_rows
     if search_query:
         q = search_query.strip().lower()
@@ -1823,11 +1834,20 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
             r for r in filtered_rows
             if str(data_by_name.get(r["Name"], {}).get("Referral Source", "")).strip() in f_ref
         ]
+    if f_coach:
+        _coach_programmes = {p for c in f_coach for p in (coach_progs or {}).get(c, [])}
+        filtered_rows = [r for r in filtered_rows if r["Programme"] in _coach_programmes]
 
     total = len(summary_rows)
     shown = len(filtered_rows)
+    unassessed_shown = sum(1 for r in filtered_rows if r.get("Archetype") == "—")
+    _parts = []
     if shown < total:
-        st.caption(f"Showing {shown} of {total} athletes")
+        _parts.append(f"Showing {shown} of {total} athletes")
+    if unassessed_shown:
+        _parts.append(f"📋 {unassessed_shown} unassessed")
+    if _parts:
+        st.caption(" · ".join(_parts))
 
     df = pd.DataFrame(filtered_rows)
 
@@ -3290,7 +3310,7 @@ def page_load(load_results):
 
 
 def page_squad(athletes, engagement_results, rec_by_name,
-               data_records=None, archetype_by_name=None, pr_records=None):
+               data_records=None, archetype_by_name=None, pr_records=None, coach_progs=None):
     """Card grid — every athlete at a glance, colour-coded by status."""
 
     data_by_name = {}
@@ -3339,9 +3359,15 @@ def page_squad(athletes, engagement_results, rec_by_name,
         str(data_by_name.get(a["name"], {}).get("Programme", "")).strip() or None
         for a in athletes
     }))
-    fc1, fc2 = st.columns(2)
-    prog_filter = fc1.multiselect("Programme", all_progs, placeholder="All programmes", key="squad_prog_filter")
-    status_filter = fc2.multiselect(
+    all_coaches_squad = sorted((coach_progs or {}).keys())
+    _n_cols = 3 if all_coaches_squad else 2
+    _sq_cols = st.columns(_n_cols)
+    prog_filter = _sq_cols[0].multiselect("Programme", all_progs, placeholder="All programmes", key="squad_prog_filter")
+    if all_coaches_squad:
+        coach_filter_sq = _sq_cols[1].multiselect("Coach", all_coaches_squad, placeholder="All coaches", key="squad_coach_filter")
+    else:
+        coach_filter_sq = []
+    status_filter = _sq_cols[-1].multiselect(
         "Status", ["🟢 Active", "🟡 Check in", "🔴 Urgent"],
         placeholder="All statuses", key="squad_status_filter",
     )
@@ -3353,6 +3379,10 @@ def page_squad(athletes, engagement_results, rec_by_name,
         emoji, _ = _card_status(nm)
         if prog_filter and prog not in prog_filter:
             continue
+        if coach_filter_sq:
+            _sq_coach_progs = {p for c in coach_filter_sq for p in (coach_progs or {}).get(c, [])}
+            if prog not in _sq_coach_progs:
+                continue
         if status_filter and _status_bucket(emoji) not in status_filter:
             continue
         visible.append(a)
@@ -6425,6 +6455,11 @@ def main():
                 existing = archetype_by_name.get(nm)
                 if not existing or str(row.get("Taken At", "")) > str(existing.get("Taken At", "")):
                     archetype_by_name[nm] = row
+        # Build coach → programmes map for Coach filter (requires "Coach Name" column in Coaches tab)
+        _coach_name_map = get_sheets().load_coach_names()
+        coach_progs = {}
+        for _prog, _coach in _coach_name_map.items():
+            coach_progs.setdefault(_coach, []).append(_prog)
         # Recent results this week = things to celebrate; dedupe per athlete+benchmark
         _week_ago = TODAY - dt.timedelta(days=7)
         _seen_milestones = set()
@@ -6461,11 +6496,12 @@ def main():
         page_outreach(engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins, comp_results, archetype_by_name=archetype_by_name, data_records=data_records)
     with tabs[2]:
         page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_wins,
-                    data_records=data_records, pr_records=pr_records, athletes=athletes)
+                    data_records=data_records, pr_records=pr_records, athletes=athletes,
+                    archetype_by_name=archetype_by_name)
     with tabs[3]:
-        page_squad(athletes, engagement_results, rec_by_name, data_records=data_records, archetype_by_name=archetype_by_name, pr_records=pr_records)
+        page_squad(athletes, engagement_results, rec_by_name, data_records=data_records, archetype_by_name=archetype_by_name, pr_records=pr_records, coach_progs=coach_progs)
     with tabs[4]:
-        page_athletes(pr_records, athletes, trend_results, engagement_results, rec_by_name, data_records, archetype_by_name=archetype_by_name, competition_rows=competition_rows)
+        page_athletes(pr_records, athletes, trend_results, engagement_results, rec_by_name, data_records, archetype_by_name=archetype_by_name, competition_rows=competition_rows, coach_progs=coach_progs)
     with tabs[5]:
         page_week_planner(engagement_results, rec_alert_rows, comp_results, consistency_wins, milestones, data_records=data_records)
     with tabs[6]:
