@@ -56,6 +56,7 @@ def main():
         print(f"'Coach Name' column already exists at column {coach_col}.")
     else:
         coach_col = len(headers) + 1
+        ws.resize(cols=coach_col)  # expand grid before writing outside current bounds
         ws.update_cell(1, coach_col, "Coach Name")
         print(f"Created 'Coach Name' header at column {coach_col}.")
 
