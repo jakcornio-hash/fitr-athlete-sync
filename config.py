@@ -235,14 +235,16 @@ TSHIRT_FORM_COUNTRY_COL = "Country"
 # Format: YYYY-MM-DD. Override via FOUNDING_MEMBER_CUTOFF env var.
 FOUNDING_MEMBER_CUTOFF = _get("FOUNDING_MEMBER_CUTOFF", "2024-12-31")
 
-# Monthly subscription prices by plan name — update to match your actual plans/prices.
+# Monthly revenue TO JST per plan — used for MRR in the Finance/Grand Slam tabs.
 # Keys must exactly match the values stored in the "Subscription Plan" column of _DATA.
 # Leave a plan out or set to 0 to exclude it from MRR calculations.
+# NOTE: Bespoke/Semi-Bespoke subscription money goes to the contractor coach;
+# JST charges the coach £40 per client, so JST's MRR per bespoke client is 40.
 SUBSCRIPTION_PRICES = {
-    "Bespoke": 300,
-    "JST Athlete": 97,
-    "Strength Bias": 97,
-    "Engine Bias": 97,
-    "Gymnastics Bias": 97,
-    "Competition Ready": 97,
+    "Bespoke": 40,
+    "JST Athlete": 54.99,
+    "Strength Bias": 54.99,
+    "Engine Bias": 54.99,
+    "Gymnastics Bias": 54.99,
+    "Competition Ready": 54.99,
 }
