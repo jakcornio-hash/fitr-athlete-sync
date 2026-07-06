@@ -1024,6 +1024,9 @@ def main():
         print(f"Bespoke athletes (automated messages suppressed): {len(bespoke_names)}")
 
     # ---- auto-congratulations + goal celebrations via Fitr chat ----
+    # Declines are never sent to the athlete as a "well done" — they're collected
+    # here and surfaced to coaches in the digest instead (see declining_singles below).
+    declining_singles = []  # (name, bench, value, prev)
     if bench_rows and not config.DRY_RUN:
         congrats_sent = 0
         for row in bench_rows:
@@ -1040,8 +1043,6 @@ def main():
                 continue
             first = name.split()[0]
             goal = goals_by_name.get(name, "")
-            import re as _re_msg
-            _is_time_val = bool(_re_msg.match(r'^\d+:\d{2}', str(value or "")))
             if goal and _goal_achieved(goal, bench, value):
                 msg = (
                     f"Hey {first} — {bench}: {value}. That's the goal you came in with. "
@@ -1049,7 +1050,13 @@ def main():
                     f"What does hitting this actually mean for you?"
                 )
             elif prev and prev not in ("", "first entry"):
-                if _is_time_val:
+                comparison = analytics.compare_result(bench, prev, value)
+                if comparison == "declined":
+                    declining_singles.append((name, bench, value, prev))
+                    continue  # not messaged to the athlete — flagged to coaches instead
+                if comparison != "improved":
+                    continue  # flat or unparseable — nothing worth messaging about
+                if analytics.is_lower_better(bench):
                     msg = (
                         f"Hey {first} — {bench} came in at {value}, down from {prev}. "
                         f"That kind of progress doesn't happen by accident. "
@@ -1076,6 +1083,8 @@ def main():
             except FitrError as exc:
                 print(f"  ! Congrats message failed for {name}: {exc}")
         print(f"Congratulations messages sent: {congrats_sent}")
+        if declining_singles:
+            print(f"Declining results flagged to coaches (not messaged to athlete): {len(declining_singles)}")
 
     # ---- writes ----
     sheets.append_rows(config.TAB_PR_LOG, bench_rows + chal_rows)
@@ -1405,6 +1414,7 @@ def main():
     notifier.send_digest(
         TODAY, engagement_results, trend_results,
         rec_alert_rows, milestones, consistency_wins,
+        declining_singles=declining_singles,
     )
 
     # ---- per-coach re-engagement alerts (inactive athletes) ----

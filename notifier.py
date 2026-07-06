@@ -10,6 +10,7 @@ import ssl
 import urllib.request
 from email.message import EmailMessage
 
+import analytics
 import config
 
 try:
@@ -30,7 +31,8 @@ def _fmt_date(d):
 
 
 def build_digest(date, engagement_results, trend_results,
-                 rec_alert_rows, milestones, consistency_wins):
+                 rec_alert_rows, milestones, consistency_wins,
+                 declining_singles=None):
     """Returns (plain_text, slack_text) — action-focused, fits ~1 hour of coaching work."""
     sections_plain = []
     sections_slack = []
@@ -41,6 +43,16 @@ def build_digest(date, engagement_results, trend_results,
         lines_s = [f"  • *{r[0]}* — {r[1]} (submitted {r[2]})" for r in rec_alert_rows]
         sections_plain.append(("🔴 RECOVERY FLAGS — message these athletes", lines_p))
         sections_slack.append(("🔴 *RECOVERY FLAGS* — message these athletes", lines_s))
+
+    # ---- single results that came in worse than last time — flag, don't congratulate ----
+    if declining_singles:
+        lines_p, lines_s = [], []
+        for name, bench, value, prev in declining_singles:
+            line = f"  • {name} — {bench}: {value} (previous: {prev})"
+            lines_p.append(line)
+            lines_s.append(line.replace(f"  • {name}", f"  • *{name}*", 1))
+        sections_plain.append(("📉 RESULT DOWN — not auto-messaged, worth a check-in", lines_p))
+        sections_slack.append(("📉 *RESULT DOWN* — not auto-messaged, worth a check-in", lines_s))
 
     # ---- new PRs to celebrate ----
     if milestones:
@@ -209,15 +221,24 @@ def send_coach_notifications(bench_rows, chal_rows, programme_by_name, coach_cha
         count = len(entries)
         lines = [f"🏋️ *{athlete}* logged {count} new result{'s' if count > 1 else ''}:"]
         marketing_captures = []
+        declines = []
         for bench, value, kind, prev in entries:
             icon = "🏆" if kind == "Benchmark" else "🎯"
-            if prev and kind == "Benchmark":
+            comparison = analytics.compare_result(bench, prev, value) if prev and kind == "Benchmark" else None
+            if comparison == "improved":
                 lines.append(f"  {icon} *{bench}*: {prev} → *{value}* 📸")
                 marketing_captures.append(f"{bench}: {prev} → {value}")
+            elif comparison == "declined":
+                lines.append(f"  ⚠️ *{bench}*: {prev} → *{value}* (down — worth a check-in)")
+                declines.append(f"{bench}: {prev} → {value}")
+            elif prev and kind == "Benchmark":
+                lines.append(f"  {icon} *{bench}*: {prev} → *{value}*")
             else:
                 lines.append(f"  {icon} *{bench}*: {value}")
         if marketing_captures:
             lines.append(f"  _📸 Marketing capture{'s' if len(marketing_captures) > 1 else ''} — consider capturing the before/after story_")
+        if declines:
+            lines.append(f"  _⚠️ {len(declines)} result{'s' if len(declines) > 1 else ''} down from last time — not auto-messaged to the athlete_")
         if prog:
             lines.append(f"  _{prog}_")
         try:
@@ -685,10 +706,12 @@ def send_draft_reply_alerts(names, webhook_url=None):
 
 
 def send_digest(date, engagement_results, trend_results,
-                rec_alert_rows, milestones, consistency_wins):
+                rec_alert_rows, milestones, consistency_wins,
+                declining_singles=None):
     plain, slack_text = build_digest(
         date, engagement_results, trend_results,
         rec_alert_rows, milestones, consistency_wins,
+        declining_singles=declining_singles,
     )
     subject = f"JST Compete Coaching Digest — {date}"
 

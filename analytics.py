@@ -1027,6 +1027,28 @@ _LB_CATEGORIES = {
 _LB_LOWER_IS_BETTER = ["row", "run", "bike", "assault", "erg", "400m", "800m", "1km", "1.2km", "2km", "5km", "mile", "sprint"]
 
 
+def is_lower_better(benchmark_name):
+    """True if a lower number is the better result for this benchmark (times, distances)."""
+    return any(kw in str(benchmark_name).lower() for kw in _LB_LOWER_IS_BETTER)
+
+
+def compare_result(benchmark_name, prev_value_str, new_value_str):
+    """Compare a new benchmark result to the previous one, accounting for direction.
+
+    Times/distances are lower-is-better; weight/reps/rounds are higher-is-better.
+    Returns "improved", "declined", "flat", or None if either value can't be
+    parsed as a number (e.g. a free-text AMRAP result).
+    """
+    prev_num = _parse_numeric(prev_value_str)
+    new_num = _parse_numeric(new_value_str)
+    if prev_num is None or new_num is None:
+        return None
+    if prev_num == new_num:
+        return "flat"
+    better = new_num < prev_num if is_lower_better(benchmark_name) else new_num > prev_num
+    return "improved" if better else "declined"
+
+
 def leaderboard_data(pr_records):
     """Latest value per (athlete, benchmark) from all-time PR log.
 
