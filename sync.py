@@ -1854,6 +1854,23 @@ def main():
         if _mfitr_sent:
             print(f"Monthly Fitr progress messages sent: {_mfitr_sent}")
 
+        # Monthly gym owner credit statements
+        try:
+            _gym_directory = sheets.load_gym_directory()
+            _gym_referrals = sheets.load_gym_referrals()
+            if _gym_directory or _gym_referrals:
+                _gym_summaries = analytics.gym_credit_summary(
+                    _gym_referrals, _gym_directory
+                )
+                _month_label_gym = _last_month_end.strftime("%B %Y")
+                _gym_emails_sent = notifier.send_gym_owner_credits(
+                    _gym_summaries, _month_label_gym
+                )
+                if _gym_emails_sent:
+                    print(f"Gym owner credit emails sent: {_gym_emails_sent}")
+        except Exception as _gym_err:
+            print(f"  ! Gym credit emails failed: {_gym_err}")
+
     # ---- log automated messages + check for replies ----
     if messages_sent_log:
         sheets.log_messages(messages_sent_log)

@@ -93,6 +93,10 @@ TAB_TRAINING_LOAD = "Training Load"
 TAB_REFERRALS = "Referrals"
 TAB_SUMMIT_TICKETS = "Summit Tickets"
 
+# Gym Owner Referral Programme
+TAB_GYM_DIRECTORY = "Gym Directory"
+TAB_GYM_REFERRALS = "Gym Referrals"
+
 # Recovery survey (Typeform sheet — separate from main athlete sheet)
 RECOVERY_SHEET_ID = _get("RECOVERY_SHEET_ID", "")
 RECOVERY_TAB = "New form"

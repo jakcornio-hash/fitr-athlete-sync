@@ -6614,6 +6614,336 @@ def page_marketing(pr_records, grandslam_results, data_records, athletes,
                 )
 
 
+# ── Gym Owner Referral Programme ──────────────────────────────────────────────
+
+_GYM_PRODUCTS = {
+    "Athlete (£54.99/mo)": {
+        "monthly_sub": 54.99,
+        "credit_rate": "20%",
+        "monthly_credit": 11.0,
+        "credit_end_months": None,
+    },
+    "Semi-Bespoke (£150/mo)": {
+        "monthly_sub": 150.0,
+        "credit_rate": "£50/mo × 3",
+        "monthly_credit": 50.0,
+        "credit_end_months": 3,
+    },
+    "Fully Bespoke (£250/mo)": {
+        "monthly_sub": 250.0,
+        "credit_rate": "£75/mo × 3",
+        "monthly_credit": 75.0,
+        "credit_end_months": 3,
+    },
+}
+
+
+def page_gym_referrals(athletes=None):
+    """Gym Owner Referral Programme — credits, leaderboard, alerts, and log entry."""
+    st.header("🏋️ Gym Owner Referral Programme")
+    st.caption(
+        "Track referrals from affiliated gym owners, calculate monthly credits "
+        "against their JST invoices, and send automated monthly statements."
+    )
+
+    with st.spinner("Loading gym data…"):
+        sheets = get_sheets()
+        try:
+            gym_directory = sheets.load_gym_directory()
+            gym_referrals = sheets.load_gym_referrals()
+        except Exception as _e:
+            st.error(f"Could not load gym data: {_e}")
+            return
+
+    gym_summaries = analytics.gym_credit_summary(gym_referrals, gym_directory)
+
+    # ── Programme KPIs ────────────────────────────────────────────────────────
+    total_active   = sum(g["active_count"] for g in gym_summaries)
+    total_credits  = sum(g["total_monthly_credit"] for g in gym_summaries)
+    total_gyms     = len([g for g in gym_summaries if g["active_count"] > 0])
+    all_alerts     = [a for g in gym_summaries for a in g["alerts"]]
+    total_revenue  = sum(
+        (g["net_owed"] or 0) for g in gym_summaries if g["net_owed"] is not None
+    )
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Active Referrals",   total_active)
+    k2.metric("Monthly Credits",    f"£{total_credits:.2f}")
+    k3.metric("Gyms Referring",     total_gyms)
+    k4.metric("Alerts",             len(all_alerts), delta=None if not all_alerts else "⚠️",
+              delta_color="off")
+
+    if all_alerts:
+        _alert_types = [a["type"] for a in all_alerts]
+        if "cap_hit" in _alert_types:
+            st.warning(f"⚡ {_alert_types.count('cap_hit')} gym(s) have hit the credit cap — excess rolls forward.")
+        if "expiring" in _alert_types:
+            st.warning(f"⏳ {_alert_types.count('expiring')} Bespoke credit(s) expiring within 30 days.")
+        if "stale" in _alert_types:
+            st.warning(f"🔴 {_alert_types.count('stale')} credit(s) have passed their window — mark as Expired.")
+        if "cancelled" in _alert_types:
+            st.info(f"ℹ️ {_alert_types.count('cancelled')} cancellation(s) recorded this month.")
+
+    st.divider()
+
+    gym_tabs = st.tabs([
+        "📊 Overview", "🏆 Leaderboard", "🏋️ Per Gym", "⚠️ Alerts", "➕ Add Referral",
+    ])
+
+    # ── Overview ──────────────────────────────────────────────────────────────
+    with gym_tabs[0]:
+        st.subheader("Monthly Credit Summary")
+        if not gym_summaries:
+            st.info(
+                "No gyms in the directory yet. Add gyms to the **Gym Directory** tab "
+                "in your Google Sheet, then log referrals here."
+            )
+        else:
+            _rows = []
+            for g in gym_summaries:
+                _rows.append({
+                    "Gym":              g["gym_name"],
+                    "Code":             g["gym_code"],
+                    "Active Refs":      g["active_count"],
+                    "Monthly Credit":   f"£{g['total_monthly_credit']:.2f}",
+                    "Invoice":          f"£{g['monthly_fee']:.2f}" if g["monthly_fee"] else "—",
+                    "Net Owed":         (
+                        "£0.00 (cap)" if g["cap_hit"]
+                        else f"£{g['net_owed']:.2f}" if g["net_owed"] is not None
+                        else "—"
+                    ),
+                    "% Offset":         f"{g['pct_offset']:.0f}%" if g["pct_offset"] is not None else "—",
+                    "Alerts":           len(g["alerts"]),
+                })
+            _df = pd.DataFrame(_rows)
+            st.dataframe(
+                _df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Alerts": st.column_config.NumberColumn(
+                        format="%d ⚠️",
+                        help="Number of alerts for this gym",
+                    ),
+                },
+            )
+
+            _total_row = {
+                "Gym": "TOTAL", "Code": "",
+                "Active Refs": total_active,
+                "Monthly Credit": f"£{total_credits:.2f}",
+                "Invoice": "", "Net Owed": "", "% Offset": "", "Alerts": len(all_alerts),
+            }
+            st.caption(
+                f"**Total credits this month: £{total_credits:.2f}** across "
+                f"{total_active} active referral(s) from {total_gyms} gym(s)."
+            )
+
+    # ── Leaderboard ───────────────────────────────────────────────────────────
+    with gym_tabs[1]:
+        st.subheader("Gym Referral Leaderboard")
+        if not gym_summaries:
+            st.info("No referral data yet.")
+        else:
+            _lb = [
+                {"Rank": i + 1, "Gym": g["gym_name"], "Active Referrals": g["active_count"],
+                 "Monthly Credit": f"£{g['total_monthly_credit']:.2f}",
+                 "Coach": g.get("coach", "—") or "—"}
+                for i, g in enumerate(gym_summaries) if g["active_count"] > 0
+            ]
+            if _lb:
+                _lb[0]["Rank"] = "🥇 1"
+                if len(_lb) > 1:
+                    _lb[1]["Rank"] = "🥈 2"
+                if len(_lb) > 2:
+                    _lb[2]["Rank"] = "🥉 3"
+                st.dataframe(pd.DataFrame(_lb), use_container_width=True, hide_index=True)
+            else:
+                st.info("No gyms with active referrals yet.")
+
+            # Gyms in directory but with no referrals
+            _dormant = [g["gym_name"] for g in gym_summaries if g["active_count"] == 0]
+            if _dormant:
+                with st.expander(f"Gyms with no active referrals ({len(_dormant)})"):
+                    for _gn in _dormant:
+                        st.markdown(f"- {_gn}")
+
+    # ── Per Gym ───────────────────────────────────────────────────────────────
+    with gym_tabs[2]:
+        st.subheader("Per-Gym Detail")
+        if not gym_summaries:
+            st.info("No gym data yet.")
+        else:
+            _gym_names  = [g["gym_name"] for g in gym_summaries]
+            _sel_name   = st.selectbox("Select gym", _gym_names, key="gym_sel")
+            _sel_gym    = next((g for g in gym_summaries if g["gym_name"] == _sel_name), None)
+
+            if _sel_gym:
+                _c1, _c2, _c3 = st.columns(3)
+                _c1.metric("Active Referrals", _sel_gym["active_count"])
+                _c2.metric("Monthly Credit",   f"£{_sel_gym['total_monthly_credit']:.2f}")
+                if _sel_gym["monthly_fee"]:
+                    _c3.metric(
+                        "Net Owed",
+                        "£0 (cap)" if _sel_gym["cap_hit"] else f"£{_sel_gym['net_owed']:.2f}",
+                    )
+
+                if _sel_gym.get("owner_name") or _sel_gym.get("owner_email"):
+                    st.caption(
+                        f"Owner: **{_sel_gym.get('owner_name', '—')}** "
+                        f"· {_sel_gym.get('owner_email', '—')} "
+                        f"· {_sel_gym.get('tier', '')} tier"
+                    )
+
+                if _sel_gym["alerts"]:
+                    st.markdown("**Alerts for this gym:**")
+                    for _a in _sel_gym["alerts"]:
+                        _icon = {"expiring": "⏳", "stale": "🔴", "cancelled": "ℹ️", "cap_hit": "⚡"}.get(
+                            _a["type"], "⚠️"
+                        )
+                        st.warning(f"{_icon} {_a['message']}")
+
+                _refs = _sel_gym.get("referrals", [])
+                if _refs:
+                    st.markdown("**Referrals:**")
+                    _ref_rows = []
+                    for _r in _refs:
+                        _ref_rows.append({
+                            "ID":            _r.get("Referral ID", ""),
+                            "Member":        _r.get("Referred Member", ""),
+                            "Product":       _r.get("Product", ""),
+                            "Monthly Credit":_r.get("Monthly Credit", ""),
+                            "Sign-Up":       _r.get("Sign-Up Date", ""),
+                            "Credit End":    _r.get("Credit End", "") or "Rolling",
+                            "Status":        _r.get("Status", ""),
+                            "Active":        "✅" if _r.get("credit_active") else "—",
+                        })
+                    st.dataframe(pd.DataFrame(_ref_rows), use_container_width=True, hide_index=True)
+                else:
+                    st.info("No referrals logged for this gym yet.")
+
+    # ── Alerts ────────────────────────────────────────────────────────────────
+    with gym_tabs[3]:
+        st.subheader("All Alerts")
+        if not all_alerts:
+            st.success("No alerts — all credits are clean.")
+        else:
+            _alert_icons = {
+                "expiring":  "⏳",
+                "stale":     "🔴",
+                "cancelled": "ℹ️",
+                "cap_hit":   "⚡",
+            }
+            for _gym in gym_summaries:
+                if not _gym["alerts"]:
+                    continue
+                st.markdown(f"**{_gym['gym_name']}**")
+                for _a in _gym["alerts"]:
+                    _icon = _alert_icons.get(_a["type"], "⚠️")
+                    if _a["type"] in ("expiring", "stale"):
+                        st.warning(f"{_icon} {_a['message']}")
+                    elif _a["type"] == "cap_hit":
+                        st.success(f"{_icon} {_a['message']}")
+                    else:
+                        st.info(f"{_icon} {_a['message']}")
+
+    # ── Add Referral ──────────────────────────────────────────────────────────
+    with gym_tabs[4]:
+        st.subheader("Log a New Referral")
+
+        _gym_options = {g["gym_name"]: g for g in gym_summaries}
+        _gym_codes   = {g["gym_name"]: g["gym_code"] for g in gym_summaries}
+
+        if gym_directory:
+            _referring_gym = st.selectbox(
+                "Referring gym", list(_gym_options.keys()), key="ref_gym_sel"
+            )
+            _gym_code = _gym_codes.get(_referring_gym, "")
+        else:
+            _referring_gym = st.text_input("Referring gym name", key="ref_gym_name")
+            _gym_code      = st.text_input("Gym code (e.g. TIGERLILY)", key="ref_gym_code").upper()
+
+        _referred_member = st.text_input("Referred member name", key="ref_member")
+        _product_label   = st.selectbox("Product", list(_GYM_PRODUCTS.keys()), key="ref_product")
+        _product_info    = _GYM_PRODUCTS[_product_label]
+        _product_name    = _product_label.split(" (")[0]
+
+        _sign_up_date = st.date_input(
+            "Sign-up date", value=TODAY, key="ref_signup"
+        )
+
+        _credit_end_date = ""
+        if _product_info["credit_end_months"]:
+            import datetime as _dt_mod
+            _auto_end = (_sign_up_date.replace(day=1)
+                         if hasattr(_sign_up_date, "replace") else TODAY.replace(day=1))
+            _ce_months = _product_info["credit_end_months"]
+            _auto_end_m = _auto_end.month + _ce_months
+            _auto_end_y = _auto_end.year + (_auto_end_m - 1) // 12
+            _auto_end_m = (_auto_end_m - 1) % 12 + 1
+            import calendar as _cal
+            _last_day = _cal.monthrange(_auto_end_y, _auto_end_m)[1]
+            _auto_end_date = _auto_end.replace(year=_auto_end_y, month=_auto_end_m, day=_last_day)
+            _credit_end_inp = st.date_input(
+                f"Credit end date (auto: {_ce_months} months)",
+                value=_auto_end_date,
+                key="ref_credit_end",
+            )
+            _credit_end_date = str(_credit_end_inp)
+        else:
+            st.caption("Credit type: **Rolling** — continues while member stays subscribed.")
+
+        _notes = st.text_input("Notes (optional)", key="ref_notes")
+
+        st.markdown(
+            f"**Credit summary:** £{_product_info['monthly_credit']:.2f}/month "
+            f"({_product_info['credit_rate']}) "
+            + (f"until {_credit_end_date}" if _credit_end_date else "rolling")
+        )
+
+        if st.button("Log referral", type="primary", key="log_gym_ref"):
+            if not _referred_member.strip():
+                st.error("Referred member name is required.")
+            elif not _referring_gym:
+                st.error("Referring gym is required.")
+            else:
+                _ref_id = f"GR-{len(gym_referrals) + 1:03d}"
+                try:
+                    sheets.add_gym_referral(
+                        referral_id    = _ref_id,
+                        gym_name       = _referring_gym,
+                        gym_code       = _gym_code,
+                        referred_member= _referred_member.strip(),
+                        product        = _product_name,
+                        monthly_sub    = _product_info["monthly_sub"],
+                        credit_rate    = _product_info["credit_rate"],
+                        monthly_credit = _product_info["monthly_credit"],
+                        sign_up_date   = str(_sign_up_date),
+                        credit_start   = str(_sign_up_date),
+                        credit_end     = _credit_end_date,
+                        status         = "Active",
+                        notes          = _notes.strip(),
+                    )
+                    st.success(
+                        f"✅ Referral {_ref_id} logged — {_referred_member.strip()} "
+                        f"via {_referring_gym} ({_product_name}). "
+                        "Reload the page to see the updated totals."
+                    )
+                except Exception as _add_err:
+                    st.error(f"Failed to log referral: {_add_err}")
+
+        st.divider()
+        st.markdown("**Pitch template** (for gym owner calls):")
+        st.code(
+            "For every one of your members who signs up for JST Athlete or Bespoke, "
+            "I'll credit your invoice. 20% of their Athlete subscription every month, "
+            "for as long as they stay. For Bespoke referrals, £50 a month off your bill "
+            "for the first three months. Get enough of your lot on JST and your Class "
+            "programming could end up costing you nothing.",
+            language=None,
+        )
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -6691,7 +7021,8 @@ def main():
         "✅ Actions", "📋 Outreach List", "🚨 Alerts", "🃏 Squad", "👥 Athletes",
         "🗓️ Week Plan", "🏁 Competitions", "📊 Programmes", "🏋️ Load",
         "📈 Trends", "🏆 Leaderboard", "💤 Recovery", "🌐 CRM",
-        "📚 Playbook", "💎 Grandslam", "📣 Marketing", "⚙️ Sync", "❓ Help",
+        "📚 Playbook", "💎 Grandslam", "📣 Marketing", "🏋️ Gym Referrals",
+        "⚙️ Sync", "❓ Help",
     ])
 
     with tabs[0]:
@@ -6731,8 +7062,10 @@ def main():
                        competition_rows=competition_rows, consistency_wins=consistency_wins,
                        milestones=milestones)
     with tabs[16]:
-        page_sync_health()
+        page_gym_referrals(athletes=athletes)
     with tabs[17]:
+        page_sync_health()
+    with tabs[18]:
         page_help()
 
 

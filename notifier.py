@@ -706,3 +706,76 @@ def send_digest(date, engagement_results, trend_results,
         print("  Email digest sent")
     except Exception as e:
         print(f"  ! Email send failed: {e}")
+
+
+def send_gym_owner_credits(gym_summaries, month_label):
+    """Send a monthly credit statement to each gym owner with an email on file.
+
+    gym_summaries: output of analytics.gym_credit_summary()
+    month_label:   e.g. "June 2026"
+    Returns count of emails sent.
+    """
+    if not config.SMTP_FROM or not config.SMTP_PASSWORD:
+        print("  ! SMTP not configured — gym owner credit emails skipped")
+        return 0
+
+    sent = 0
+    for gym in gym_summaries:
+        owner_email  = gym.get("owner_email", "").strip()
+        if not owner_email:
+            continue
+        owner_name   = gym.get("owner_name", "").strip() or gym.get("gym_name", "")
+        gym_name     = gym.get("gym_name", "")
+        active_count = gym.get("active_count", 0)
+        total_credit = gym.get("total_monthly_credit", 0.0)
+        monthly_fee  = gym.get("monthly_fee", 0.0)
+        net_owed     = gym.get("net_owed")
+        excess       = gym.get("excess", 0.0)
+        cap_hit      = gym.get("cap_hit", False)
+        first_name   = owner_name.split()[0] if owner_name else "there"
+
+        lines = [
+            f"Hi {first_name},",
+            "",
+            f"Here's your JST referral credit summary for {month_label}.",
+            "",
+            f"Active referrals:      {active_count}",
+            f"Monthly credit earned: £{total_credit:.2f}",
+        ]
+        if monthly_fee:
+            lines.append(f"Your JST invoice:      £{monthly_fee:.2f}/month")
+            if cap_hit:
+                lines.append(f"Credit applied:        £{monthly_fee:.2f} (cap reached)")
+                lines.append(f"Excess rolled forward: £{excess:.2f}")
+                lines.append("Net owed this month:   £0.00")
+            else:
+                lines.append(f"Net owed this month:   £{net_owed:.2f}")
+
+        active_refs = [r for r in gym.get("referrals", []) if r.get("credit_active")]
+        if active_refs:
+            lines += ["", "Active referrals:"]
+            for ref in active_refs:
+                lines.append(
+                    f"  • {ref.get('Referred Member', '')} "
+                    f"({ref.get('Product', '')}) — "
+                    f"£{ref.get('Monthly Credit', '')} credit/month"
+                )
+
+        lines += ["", "Thanks for spreading the word.", "Jak & the JST team"]
+
+        subject = f"JST referral credit — {month_label} — {gym_name}"
+        body    = "\n".join(lines)
+
+        if config.DRY_RUN:
+            print(f"[DRY_RUN] gym credit email → {owner_email}: {subject}")
+            sent += 1
+            continue
+
+        try:
+            _send_email_to(config.SMTP_FROM, config.SMTP_PASSWORD, owner_email, subject, body)
+            sent += 1
+            print(f"  Gym credit email sent → {owner_email} ({gym_name})")
+        except Exception as exc:
+            print(f"  ! Gym credit email failed → {owner_email}: {exc}")
+
+    return sent

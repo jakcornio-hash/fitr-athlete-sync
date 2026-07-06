@@ -494,6 +494,68 @@ class SheetsClient:
         if event:
             ws.update_cell(row_number, event_col, event)
 
+    # ─────────────────────────── Gym Owner Referral Programme ──────────────────
+
+    _GYM_DIRECTORY_HEADERS = [
+        "Gym Name", "Gym Code", "Owner Name", "Owner Email",
+        "Tier", "Monthly Fee", "Coach", "Notes",
+    ]
+    _GYM_REFERRAL_HEADERS = [
+        "Referral ID", "Referring Gym", "Gym Code", "Referred Member",
+        "Product", "Monthly Sub", "Credit Rate", "Monthly Credit",
+        "Sign-Up Date", "Credit Start", "Credit End", "Status", "Notes",
+    ]
+
+    def load_gym_directory(self):
+        """Return all rows from Gym Directory tab, creating the tab with headers if absent."""
+        ws = self.get_or_create(config.TAB_GYM_DIRECTORY, self._GYM_DIRECTORY_HEADERS)
+        return ws.get_all_records()
+
+    def load_gym_referrals(self):
+        """Return all rows from Gym Referrals tab, creating the tab with headers if absent."""
+        ws = self.get_or_create(config.TAB_GYM_REFERRALS, self._GYM_REFERRAL_HEADERS)
+        return ws.get_all_records()
+
+    def add_gym_referral(self, referral_id, gym_name, gym_code, referred_member,
+                         product, monthly_sub, credit_rate, monthly_credit,
+                         sign_up_date, credit_start, credit_end="",
+                         status="Active", notes=""):
+        if config.DRY_RUN:
+            print(f"[DRY_RUN] would add gym referral {referral_id} for {referred_member}")
+            return
+        ws = self.get_or_create(config.TAB_GYM_REFERRALS, self._GYM_REFERRAL_HEADERS)
+        ws.append_rows(
+            [[referral_id, gym_name, gym_code, referred_member,
+              product, monthly_sub, credit_rate, monthly_credit,
+              sign_up_date, credit_start, credit_end, status, notes]],
+            value_input_option="USER_ENTERED",
+        )
+
+    def update_gym_referral_status(self, referral_id, new_status, notes=""):
+        """Find a referral row by ID and update its Status (and optionally Notes)."""
+        if config.DRY_RUN:
+            print(f"[DRY_RUN] would update gym referral {referral_id} → {new_status}")
+            return
+        ws = self.get_or_create(config.TAB_GYM_REFERRALS, self._GYM_REFERRAL_HEADERS)
+        all_vals = ws.get_all_values()
+        if len(all_vals) < 2:
+            return
+        headers = all_vals[0]
+        try:
+            id_col     = headers.index("Referral ID")
+            status_col = headers.index("Status")
+            notes_col  = headers.index("Notes")
+        except ValueError:
+            return
+        for row_idx, row in enumerate(all_vals[1:], start=2):
+            if len(row) > id_col and row[id_col] == referral_id:
+                ws.update_cell(row_idx, status_col + 1, new_status)
+                if notes:
+                    existing = row[notes_col] if notes_col < len(row) else ""
+                    combined = f"{existing}; {notes}" if existing else notes
+                    ws.update_cell(row_idx, notes_col + 1, combined)
+                return
+
     # --------------------------------------------------------- intake form
     def load_intake_responses(self):
         """Read athlete intake Typeform responses from an external sheet."""

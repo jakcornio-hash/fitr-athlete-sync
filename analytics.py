@@ -1479,3 +1479,145 @@ def activation_scores(pr_records, athletes):
         }
 
     return results
+
+
+# ─────────────────────────── Gym Owner Referral Programme ───────────────────
+
+def _safe_float(s):
+    """Parse a string like '£11' or '11.00' to float, returning 0.0 on failure."""
+    import re
+    cleaned = re.sub(r"[£$€,\s]", "", str(s)).strip()
+    try:
+        return float(cleaned)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def gym_credit_summary(gym_referrals, gym_directory, today=None):
+    """Compute per-gym referral credits, net owed, and alerts.
+
+    Returns list of dicts sorted by most active referrals first:
+    {gym_name, gym_code, owner_name, owner_email, monthly_fee, coach,
+     active_count, total_monthly_credit, net_owed, excess, pct_offset,
+     cap_hit, referrals, alerts}
+    """
+    import datetime as _dt
+    from collections import defaultdict
+
+    if today is None:
+        today = TODAY
+
+    gym_by_code = {}
+    for gym in gym_directory:
+        code = str(gym.get("Gym Code", "")).strip().upper()
+        if code:
+            gym_by_code[code] = {
+                "gym_name":    str(gym.get("Gym Name", "")).strip(),
+                "gym_code":    code,
+                "owner_name":  str(gym.get("Owner Name", "")).strip(),
+                "owner_email": str(gym.get("Owner Email", "")).strip(),
+                "tier":        str(gym.get("Tier", "")).strip(),
+                "monthly_fee": _safe_float(str(gym.get("Monthly Fee", "0"))),
+                "coach":       str(gym.get("Coach", "")).strip(),
+            }
+
+    refs_by_gym = defaultdict(list)
+    for ref in gym_referrals:
+        code = str(ref.get("Gym Code", "")).strip().upper()
+        if code:
+            refs_by_gym[code].append(ref)
+
+    all_codes = set(gym_by_code.keys()) | set(refs_by_gym.keys())
+    results = []
+
+    for code in sorted(all_codes):
+        gym_info = gym_by_code.get(code, {
+            "gym_name": code, "gym_code": code,
+            "owner_name": "", "owner_email": "",
+            "tier": "", "monthly_fee": 0.0, "coach": "",
+        })
+        monthly_fee = gym_info["monthly_fee"]
+
+        total_credit = 0.0
+        active_count = 0
+        alerts = []
+        ref_rows = []
+
+        for ref in refs_by_gym.get(code, []):
+            status       = str(ref.get("Status", "")).strip()
+            credit_end_s = str(ref.get("Credit End", "")).strip()
+            monthly_cr   = _safe_float(str(ref.get("Monthly Credit", "0")))
+            referred     = str(ref.get("Referred Member", "")).strip()
+            product      = str(ref.get("Product", "")).strip()
+            ref_id       = str(ref.get("Referral ID", "")).strip()
+
+            credit_end    = _parse_date(credit_end_s) if credit_end_s else None
+            credit_active = False
+
+            if status == "Active":
+                if credit_end is None or credit_end >= today:
+                    credit_active = True
+                    if credit_end is not None:
+                        days_left = (credit_end - today).days
+                        if days_left <= 30:
+                            alerts.append({
+                                "type": "expiring", "ref_id": ref_id,
+                                "member": referred, "product": product,
+                                "message": (
+                                    f"{referred} ({product}) — credit expires "
+                                    f"in {days_left} day(s)"
+                                ),
+                            })
+                else:
+                    alerts.append({
+                        "type": "stale", "ref_id": ref_id,
+                        "member": referred, "product": product,
+                        "message": (
+                            f"{referred} ({product}) credit window closed — "
+                            "mark as Expired in Gym Referrals tab"
+                        ),
+                    })
+            elif status == "Cancelled":
+                alerts.append({
+                    "type": "cancelled", "ref_id": ref_id,
+                    "member": referred, "product": product,
+                    "message": f"{referred} cancelled — credit stopped",
+                })
+
+            if credit_active:
+                total_credit += monthly_cr
+                active_count += 1
+
+            ref_rows.append({
+                **{k: str(v).strip() for k, v in ref.items()},
+                "credit_active": credit_active,
+            })
+
+        net_owed   = max(0.0, monthly_fee - total_credit) if monthly_fee else None
+        excess     = max(0.0, total_credit - monthly_fee) if monthly_fee else 0.0
+        pct_offset = round(total_credit / monthly_fee * 100, 1) if monthly_fee else None
+        cap_hit    = monthly_fee > 0 and total_credit >= monthly_fee
+
+        if cap_hit:
+            alerts.append({
+                "type": "cap_hit", "ref_id": "", "member": "", "product": "",
+                "message": (
+                    f"Credit cap reached — {gym_info['gym_name']} owes £0 this month. "
+                    f"£{excess:.2f} rolls forward."
+                ),
+            })
+
+        results.append({
+            **gym_info,
+            "active_count":         active_count,
+            "total_monthly_credit": total_credit,
+            "net_owed":             net_owed,
+            "excess":               excess,
+            "pct_offset":           pct_offset,
+            "cap_hit":              cap_hit,
+            "referrals":            ref_rows,
+            "alerts":               alerts,
+        })
+
+    results.sort(key=lambda x: x["active_count"], reverse=True)
+    return results
