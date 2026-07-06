@@ -28,17 +28,27 @@ class SheetsClient:
                 f"Response status: {getattr(e.response, 'status_code', '?')}. "
                 f"Body snippet: {str(e)[:300]}"
             ) from e
+        # Every gspread `Spreadsheet.worksheet(title)` call issues a fresh
+        # fetch_sheet_metadata() request (a full read of every tab's metadata).
+        # With ~20 tabs and dozens of call sites — several run per-athlete —
+        # a single sync run can blow through Sheets API's per-minute read quota.
+        # Cache resolved Worksheet objects for the lifetime of this client so
+        # repeated lookups of the same tab cost one API call, not one per call site.
+        self._ws_cache = {}
 
     def worksheet(self, title):
-        return self.sh.worksheet(title)
+        if title not in self._ws_cache:
+            self._ws_cache[title] = self.sh.worksheet(title)
+        return self._ws_cache[title]
 
     def get_or_create(self, title, headers=None):
         try:
-            return self.sh.worksheet(title)
+            return self.worksheet(title)
         except gspread.WorksheetNotFound:
             ws = self.sh.add_worksheet(title=title, rows=200, cols=max(10, len(headers or [])))
             if headers:
                 ws.update("A1", [headers])
+            self._ws_cache[title] = ws
             return ws
 
     def read_records(self, title):
@@ -71,10 +81,11 @@ class SheetsClient:
             print(f"[DRY_RUN] would overwrite '{title}' with {len(rows)} rows")
             return
         try:
-            ws = self.sh.worksheet(title)
+            ws = self.worksheet(title)
             ws.clear()
         except gspread.WorksheetNotFound:
             ws = self.sh.add_worksheet(title=title, rows=max(200, len(rows) + 10), cols=20)
+            self._ws_cache[title] = ws
         if rows:
             ws.update("A1", rows, value_input_option="USER_ENTERED")
 
@@ -122,7 +133,7 @@ class SheetsClient:
     def load_archetype_assessments(self):
         """Return all rows from Archetype Assessments tab, or [] if tab missing."""
         try:
-            ws = self.sh.worksheet(self.TAB_ARCHETYPES)
+            ws = self.worksheet(self.TAB_ARCHETYPES)
             return ws.get_all_records()
         except gspread.WorksheetNotFound:
             return []
@@ -141,7 +152,7 @@ class SheetsClient:
     def load_competitions(self):
         """Return all rows from Competitions tab, or [] if not yet created."""
         try:
-            ws = self.sh.worksheet(self.TAB_COMPETITIONS)
+            ws = self.worksheet(self.TAB_COMPETITIONS)
             return ws.get_all_records()
         except gspread.WorksheetNotFound:
             return []
@@ -163,7 +174,7 @@ class SheetsClient:
             print(f"[DRY_RUN] would update result for {athlete_name} — {comp_name}: {result_text!r}")
             return True
         try:
-            ws = self.sh.worksheet(self.TAB_COMPETITIONS)
+            ws = self.worksheet(self.TAB_COMPETITIONS)
         except gspread.WorksheetNotFound:
             return False
         values = ws.get_all_values()
@@ -192,7 +203,7 @@ class SheetsClient:
         Set Active to FALSE/NO/0/OFF to silence notifications for that coach.
         """
         try:
-            rows = self.sh.worksheet(config.TAB_COACHES).get_all_records()
+            rows = self.worksheet(config.TAB_COACHES).get_all_records()
             return {
                 str(r.get("Programme", "")).strip(): str(r.get("Slack Channel", "")).strip()
                 for r in rows
@@ -210,7 +221,7 @@ class SheetsClient:
         simply won't appear in the dashboard until the column is populated.
         """
         try:
-            rows = self.sh.worksheet(config.TAB_COACHES).get_all_records()
+            rows = self.worksheet(config.TAB_COACHES).get_all_records()
             return {
                 str(r.get("Programme", "")).strip(): str(r.get("Coach Name", "")).strip()
                 for r in rows
@@ -252,7 +263,7 @@ class SheetsClient:
     def load_churn_history(self):
         """Return all rows from Churn History tab, or [] if tab missing."""
         try:
-            return self.sh.worksheet(config.TAB_CHURN_HISTORY).get_all_records()
+            return self.worksheet(config.TAB_CHURN_HISTORY).get_all_records()
         except Exception:
             return []
 
@@ -280,7 +291,7 @@ class SheetsClient:
         import datetime as dt
         today = dt.date.today()
         try:
-            rows = self.sh.worksheet(config.TAB_MESSAGE_LOG).get_all_records()
+            rows = self.worksheet(config.TAB_MESSAGE_LOG).get_all_records()
         except Exception:
             return []
         pending = []
@@ -303,7 +314,7 @@ class SheetsClient:
         if config.DRY_RUN:
             return
         try:
-            ws = self.sh.worksheet(config.TAB_MESSAGE_LOG)
+            ws = self.worksheet(config.TAB_MESSAGE_LOG)
         except Exception:
             return
         values = ws.get_all_values()
@@ -362,7 +373,7 @@ class SheetsClient:
     def load_draft_replies(self):
         """Return all non-cleared draft reply rows."""
         try:
-            rows = self.sh.worksheet(config.TAB_DRAFT_REPLIES).get_all_records()
+            rows = self.worksheet(config.TAB_DRAFT_REPLIES).get_all_records()
             return [r for r in rows if not str(r.get("Cleared", "")).strip()]
         except Exception:
             return []
@@ -372,7 +383,7 @@ class SheetsClient:
         if config.DRY_RUN:
             return
         try:
-            ws = self.sh.worksheet(config.TAB_DRAFT_REPLIES)
+            ws = self.worksheet(config.TAB_DRAFT_REPLIES)
             values = ws.get_all_values()
             if not values:
                 return
@@ -404,7 +415,7 @@ class SheetsClient:
     def load_training_load(self):
         """Return all rows from Training Load tab, or [] if tab missing."""
         try:
-            return self.sh.worksheet(config.TAB_TRAINING_LOAD).get_all_records()
+            return self.worksheet(config.TAB_TRAINING_LOAD).get_all_records()
         except Exception:
             return []
 

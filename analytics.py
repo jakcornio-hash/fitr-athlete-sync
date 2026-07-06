@@ -241,6 +241,7 @@ def daily_streak_check(pr_log_records, athletes, today=None):
     Returns [(name, streak_days), ...] where streak_days is in _STREAK_MILESTONES.
     """
     import datetime as _dt
+    from collections import defaultdict
     if today is None:
         today = TODAY
 
