@@ -1798,6 +1798,62 @@ def main():
         if monthly_sent:
             print(f"Monthly athlete reports sent: {monthly_sent}")
 
+        # Monthly Fitr progress message — short personal check-in for every athlete with a room
+        _last_month_end   = TODAY.replace(day=1) - dt.timedelta(days=1)
+        _last_month_start = _last_month_end.replace(day=1)
+        _month_label      = _last_month_end.strftime("%B")
+        _month_guard      = f"{TODAY.strftime('%Y-%m')} — monthly_fitr"
+
+        _month_sessions: dict = {}
+        _month_prs: dict = {}
+        for _rec in pr_records:
+            _nm    = str(_rec.get("Athlete Name", "")).strip()
+            _d_str = str(_rec.get("Date", "")).strip()
+            if _nm and _last_month_start.isoformat() <= _d_str <= _last_month_end.isoformat():
+                _month_sessions.setdefault(_nm, set()).add(_d_str)
+                _b = str(_rec.get("Benchmark Name", "")).strip()
+                _v = str(_rec.get("Value", "")).strip()
+                if _b and _v:
+                    _month_prs.setdefault(_nm, []).append((_b, _v))
+
+        _mfitr_notes: dict = {}
+        _mfitr_sent = 0
+        for _nm, _sess_dates in _month_sessions.items():
+            if _nm in bespoke_names:
+                continue
+            _room = room_id_by_name.get(_nm)
+            if not _room:
+                continue
+            if _month_guard in str(data_by_name_all.get(_nm, {}).get("Coaching Notes", "")):
+                continue
+            _sessions = len(_sess_dates)
+            _prs      = _month_prs.get(_nm, [])
+            _first    = _nm.split()[0]
+            _pr_line  = (
+                f" {_prs[0][0]} came in at {_prs[0][1]}." if len(_prs) == 1
+                else f" You hit {len(_prs)} results — {_prs[0][0]} at {_prs[0][1]} stands out."
+            ) if _prs else ""
+            _msg = (
+                f"Hey {_first} — {_month_label} is done.{_pr_line} "
+                f"{_sessions} session{'s' if _sessions != 1 else ''} logged. "
+                f"How are you feeling about where things are heading?"
+            )
+            try:
+                fitr.send_chat_message(_room, _msg)
+                _mfitr_notes[_nm] = f"[{TODAY.isoformat()} — monthly_fitr]"
+                _mfitr_sent += 1
+                messages_sent_log.append({
+                    "Date": TODAY.isoformat(), "Athlete Name": _nm,
+                    "Message Type": "monthly_fitr", "Room ID": _room,
+                })
+                import time as _time; _time.sleep(0.5)
+            except FitrError as _exc:
+                print(f"  ! Monthly Fitr message failed for {_nm}: {_exc}")
+        if _mfitr_notes:
+            append_coaching_notes(sheets, _mfitr_notes)
+        if _mfitr_sent:
+            print(f"Monthly Fitr progress messages sent: {_mfitr_sent}")
+
     # ---- log automated messages + check for replies ----
     if messages_sent_log:
         sheets.log_messages(messages_sent_log)

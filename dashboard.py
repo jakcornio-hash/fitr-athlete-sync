@@ -5807,33 +5807,37 @@ def page_grandslam(grandslam_results, data_records, pr_records=None, athletes=No
             if cohorts:
                 df_cohort = pd.DataFrame([{
                     "Cohort": c["cohort"],
-                    "Started": c["cohort_size"],
-                    "Still active": c["still_active"],
-                    "Retention %": c["pct_retained"],
+                    "Started": c["n"],
+                    "30-day %": c["pct_30d"] if c["pct_30d"] is not None else "—",
+                    "60-day %": c["pct_60d"] if c["pct_60d"] is not None else "—",
+                    "90-day %": c["pct_90d"] if c["pct_90d"] is not None else "—",
                 } for c in cohorts])
                 st.dataframe(df_cohort, use_container_width=True, hide_index=True)
 
-                # Retention chart
-                chart_c = (
-                    alt.Chart(pd.DataFrame(cohorts))
-                    .mark_line(point=True)
-                    .encode(
-                        x=alt.X("cohort:N", axis=alt.Axis(labelAngle=-45, title="Cohort")),
-                        y=alt.Y("pct_retained:Q",
-                                axis=alt.Axis(title="Retention %"),
-                                scale=alt.Scale(domain=[0, 100])),
-                        tooltip=["cohort", "cohort_size", "still_active", "pct_retained"],
+                _chart_cohorts = [c for c in cohorts if c["pct_30d"] is not None]
+                if _chart_cohorts:
+                    chart_c = (
+                        alt.Chart(pd.DataFrame(_chart_cohorts))
+                        .mark_line(point=True)
+                        .encode(
+                            x=alt.X("cohort:N", axis=alt.Axis(labelAngle=-45, title="Cohort")),
+                            y=alt.Y("pct_30d:Q",
+                                    axis=alt.Axis(title="30-day Retention %"),
+                                    scale=alt.Scale(domain=[0, 100])),
+                            tooltip=["cohort", "n", "pct_30d", "pct_60d", "pct_90d"],
+                        )
+                        .properties(height=200, title="30-day Retention % by Start Month")
                     )
-                    .properties(height=200, title="Retention % by Start Month")
-                )
-                st.altair_chart(chart_c, use_container_width=True)
+                    st.altair_chart(chart_c, use_container_width=True)
 
-                worst = min(cohorts, key=lambda c: c["pct_retained"])
-                best = max(cohorts, key=lambda c: c["pct_retained"])
-                st.caption(
-                    f"Lowest retention: **{worst['cohort']}** ({worst['pct_retained']}% of {worst['cohort_size']}). "
-                    f"Highest: **{best['cohort']}** ({best['pct_retained']}% of {best['cohort_size']})."
-                )
+                    _scored = [c for c in _chart_cohorts if c["pct_30d"] is not None]
+                    if _scored:
+                        worst = min(_scored, key=lambda c: c["pct_30d"])
+                        best  = max(_scored, key=lambda c: c["pct_30d"])
+                        st.caption(
+                            f"Lowest 30-day retention: **{worst['cohort']}** ({worst['pct_30d']}% of {worst['n']}). "
+                            f"Highest: **{best['cohort']}** ({best['pct_30d']}% of {best['n']})."
+                        )
         else:
             st.info("PR records not loaded — cohort data unavailable.")
 
@@ -5871,6 +5875,51 @@ def page_grandslam(grandslam_results, data_records, pr_records=None, athletes=No
                 })
             df_prog = pd.DataFrame(rows_prog).sort_values("At Risk %", ascending=False)
             st.dataframe(df_prog, use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        # ── Retention by programme ────────────────────────────────────────────
+        st.subheader("Retention by Programme")
+        st.caption(
+            "% of athletes in each programme who logged a session in the last 30 and 90 days. "
+            "Sorted lowest 30-day activity first — focus attention on programmes at the bottom."
+        )
+        if pr_records:
+            _cutoff_30p = TODAY - dt.timedelta(days=30)
+            _cutoff_90p = TODAY - dt.timedelta(days=90)
+            _last_log_p = {}
+            for _r in pr_records:
+                _nm = str(_r.get("Athlete Name", "")).strip()
+                _d  = _parse_date(str(_r.get("Date", "")))
+                if _nm and _d and (_nm not in _last_log_p or _d > _last_log_p[_nm]):
+                    _last_log_p[_nm] = _d
+            _prog_buckets_p = {}
+            for _r in (grandslam_results or []):
+                _nm  = _r["name"]
+                _prg = str(data_by_nm.get(_nm, {}).get("Programme", "")).strip() or "Unknown"
+                _prog_buckets_p.setdefault(_prg, []).append(_nm)
+            _ret_rows = []
+            for _prg, _names in sorted(_prog_buckets_p.items()):
+                _n    = len(_names)
+                _a30  = sum(1 for n in _names if _last_log_p.get(n, dt.date(2000, 1, 1)) >= _cutoff_30p)
+                _a90  = sum(1 for n in _names if _last_log_p.get(n, dt.date(2000, 1, 1)) >= _cutoff_90p)
+                _p30  = round(100 * _a30 / _n) if _n else 0
+                _p90  = round(100 * _a90 / _n) if _n else 0
+                _ret_rows.append({
+                    "Programme": _prg, "Athletes": _n,
+                    "Active (30d)": f"{_a30}  ({_p30}%)",
+                    "Active (90d)": f"{_a90}  ({_p90}%)",
+                    "_sort": _p30,
+                })
+            _ret_rows.sort(key=lambda x: x["_sort"])
+            for _r in _ret_rows:
+                del _r["_sort"]
+            if _ret_rows:
+                st.dataframe(pd.DataFrame(_ret_rows), use_container_width=True, hide_index=True)
+            else:
+                st.info("No programme data available.")
+        else:
+            st.info("PR records not loaded.")
 
         st.divider()
 
@@ -6325,6 +6374,25 @@ def page_marketing(pr_records, grandslam_results, data_records, athletes,
             st.caption(
                 f"{len(_testimonial_rows)} candidate(s) — reach out this week while the achievement is fresh."
             )
+            st.markdown("**Draft outreach messages — copy and send:**")
+            for _tc in _testimonial_rows:
+                _tc_first = _tc["Athlete"].split()[0]
+                if "milestone" in _tc["Achievement"]:
+                    _tc_draft = (
+                        f"Hey {_tc_first} — {_tc['Achievement']} with us. "
+                        f"That kind of commitment is exactly what this programme is built on. "
+                        f"Would you be up for sharing a bit about your experience? "
+                        f"Even a couple of lines would mean a lot — completely on your terms."
+                    )
+                else:
+                    _bench_name = _tc["Achievement"].replace("New PB — ", "")
+                    _tc_draft = (
+                        f"Hey {_tc_first} — {_bench_name} is a result worth talking about. "
+                        f"Would you be up for sharing your story? "
+                        f"Could be a quick message about what's changed for you — completely on your terms."
+                    )
+                with st.expander(f"{_tc['Athlete']} — {_tc['Achievement']}"):
+                    st.code(_tc_draft, language=None)
         else:
             st.info("No testimonial candidates in the last 30 days.")
 
