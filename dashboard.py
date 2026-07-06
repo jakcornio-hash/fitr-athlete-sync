@@ -3727,6 +3727,7 @@ def page_crm(athletes, engagement_results, data_records, pr_records=None):
     crm_tabs = st.tabs([
         "🔄 Lifecycle", "🚀 Pipeline", "👥 Rosters", "⚠️ Discrepancies", "✏️ Bulk Reassign",
         "💰 Revenue", "📨 Msg Effectiveness", "📊 Coach Stats", "🔍 Duplicates",
+        "🌱 Onboarding",
     ])
 
     with crm_tabs[0]:
@@ -3747,6 +3748,8 @@ def page_crm(athletes, engagement_results, data_records, pr_records=None):
         _crm_coach_stats(athletes, engagement_results, data_records)
     with crm_tabs[8]:
         _crm_dedup(athletes, data_records, pr_records or [])
+    with crm_tabs[9]:
+        _crm_onboarding(athletes, pr_records or [], data_records)
 
 
 def _crm_message_effectiveness():
@@ -3758,13 +3761,33 @@ def _crm_message_effectiveness():
         st.info("No messages logged yet. The Message Log tab will populate after the next sync run.")
         return
 
+    window = st.radio(
+        "Window", ["All time", "Last 30 days", "Last 90 days"],
+        horizontal=True, key="msg_eff_window",
+    )
+    if window != "All time":
+        _cutoff = TODAY - dt.timedelta(days=30 if window == "Last 30 days" else 90)
+        rows = [
+            r for r in rows
+            if (_parse_date(str(r.get("Date", ""))) or TODAY) >= _cutoff
+        ]
+        if not rows:
+            st.info(f"No messages sent in the {window.lower()}.")
+            return
+
     from collections import defaultdict
     totals = defaultdict(lambda: {"sent": 0, "replied": 0})
+    per_athlete = defaultdict(lambda: {"sent": 0, "replied": 0})
     for r in rows:
         msg_type = str(r.get("Message Type", "unknown")).strip()
         totals[msg_type]["sent"] += 1
+        nm = str(r.get("Athlete Name", "")).strip()
+        if nm:
+            per_athlete[nm]["sent"] += 1
         if str(r.get("Replied", "")).strip().lower() == "yes":
             totals[msg_type]["replied"] += 1
+            if nm:
+                per_athlete[nm]["replied"] += 1
 
     table_rows = []
     for msg_type, counts in sorted(totals.items()):
@@ -3797,6 +3820,148 @@ def _crm_message_effectiveness():
         f"Overall: {total_sent} messages sent, {total_replied} replies received "
         f"({overall_rate}% reply rate)"
     )
+
+    # Athletes who never engage with automated messages — the automation is
+    # invisible to them; they need a personal touch instead.
+    never_repliers = sorted(
+        ((nm, c["sent"]) for nm, c in per_athlete.items()
+         if c["sent"] >= 2 and c["replied"] == 0),
+        key=lambda x: -x[1],
+    )
+    if never_repliers:
+        with st.expander(f"🔇 Never replied ({len(never_repliers)} athletes, 2+ messages sent)"):
+            st.caption(
+                "These athletes have never replied to any automated message. "
+                "Consider a personal message or a different channel — more automation "
+                "won't reach them."
+            )
+            st.dataframe(
+                pd.DataFrame(
+                    [{"Athlete": nm, "Messages Sent": sent} for nm, sent in never_repliers]
+                ),
+                width='stretch', hide_index=True,
+            )
+
+
+def _crm_onboarding(athletes, pr_records, data_records):
+    """Onboarding funnel — roster → first log → activated → retained at 30 days."""
+    st.markdown("### Onboarding Funnel")
+    st.caption(
+        "Where new athletes fall off in their first month. "
+        "Activation = 3+ training days in the first 14 days after their first log."
+    )
+
+    from collections import defaultdict
+    log_dates_by_nm = defaultdict(set)
+    for rec in pr_records:
+        nm = str(rec.get("Athlete Name", "")).strip()
+        d = _parse_date(str(rec.get("Date", "")))
+        if nm and d:
+            log_dates_by_nm[nm].add(d)
+
+    roster_names = [a["name"] for a in athletes]
+    n_roster = len(roster_names)
+
+    ever_logged, activated, retained_30 = [], [], []
+    recent_joiners = []
+
+    for nm in roster_names:
+        dates = log_dates_by_nm.get(nm)
+        if not dates:
+            continue
+        ever_logged.append(nm)
+        first = min(dates)
+        last = max(dates)
+        days_since_first = (TODAY - first).days
+
+        early_days = {d for d in dates if (d - first).days <= 14}
+        is_activated = len(early_days) >= 3
+        if is_activated:
+            activated.append(nm)
+
+        # Retained at 30d: any log in the day 21–45 window (only judged once
+        # the athlete is ≥45 days in, so new joiners aren't counted as failed)
+        if days_since_first >= 45:
+            if any(21 <= (d - first).days <= 45 for d in dates):
+                retained_30.append(nm)
+        elif days_since_first >= 21 and any(21 <= (d - first).days for d in dates):
+            retained_30.append(nm)
+
+        if days_since_first <= 60:
+            days_since_last = (TODAY - last).days
+            if days_since_last <= 3:
+                status = "🟢 Training"
+            elif days_since_last <= 10:
+                status = "🟡 Quiet"
+            else:
+                status = "🔴 Gone quiet"
+            recent_joiners.append({
+                "Athlete": nm,
+                "First Log": first.strftime("%d %b"),
+                "Days In": days_since_first,
+                "Sessions": len(dates),
+                "Last Log (days ago)": days_since_last,
+                "Activated": "✅" if is_activated else "—",
+                "Status": status,
+            })
+
+    # Retention denominator: only athletes old enough to judge
+    judgeable = [nm for nm in ever_logged
+                 if (TODAY - min(log_dates_by_nm[nm])).days >= 21]
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("On Roster", n_roster)
+    c2.metric("Ever Logged", len(ever_logged),
+              delta=f"{len(ever_logged) / n_roster * 100:.0f}%" if n_roster else None,
+              delta_color="off")
+    c3.metric("Activated (3+ in 14d)", len(activated),
+              delta=f"{len(activated) / len(ever_logged) * 100:.0f}%" if ever_logged else None,
+              delta_color="off")
+    c4.metric("Retained at 30d", len(retained_30),
+              delta=f"{len(retained_30) / len(judgeable) * 100:.0f}% of judgeable" if judgeable else None,
+              delta_color="off")
+
+    # Funnel chart
+    funnel_df = pd.DataFrame([
+        {"Stage": "1. On Roster",   "Athletes": n_roster},
+        {"Stage": "2. Ever Logged", "Athletes": len(ever_logged)},
+        {"Stage": "3. Activated",   "Athletes": len(activated)},
+        {"Stage": "4. Retained 30d","Athletes": len(retained_30)},
+    ])
+    funnel = (
+        alt.Chart(funnel_df)
+        .mark_bar()
+        .encode(
+            x=alt.X("Athletes:Q"),
+            y=alt.Y("Stage:N", sort=None, title=""),
+            tooltip=["Stage:N", "Athletes:Q"],
+        )
+        .properties(height=160)
+    )
+    st.altair_chart(funnel, width='stretch')
+
+    never_logged = [nm for nm in roster_names if nm not in set(ever_logged)]
+    if never_logged:
+        with st.expander(f"⬜ On roster but never logged ({len(never_logged)})"):
+            for nm in sorted(never_logged):
+                st.markdown(f"- {nm}")
+
+    st.divider()
+    st.markdown("### New Athletes — First 60 Days")
+    st.caption("Your highest-leverage retention window. Anyone 🔴 here needs a message today.")
+    if recent_joiners:
+        recent_joiners.sort(key=lambda r: -r["Last Log (days ago)"])
+        st.dataframe(pd.DataFrame(recent_joiners), width='stretch', hide_index=True)
+    else:
+        st.info("No athletes started in the last 60 days.")
+
+    # Intake form context, if wired up
+    try:
+        intake = get_sheets().load_intake_responses()
+        if intake:
+            st.caption(f"📥 {len(intake)} intake form response(s) on record.")
+    except Exception:
+        pass
 
 
 def _crm_lifecycle(athletes, engagement_results, data_records, crm_by_name):
@@ -6614,6 +6779,134 @@ def page_marketing(pr_records, grandslam_results, data_records, athletes,
                 )
 
 
+# ── Finance ───────────────────────────────────────────────────────────────────
+
+def page_finance(data_records, pr_records, athletes):
+    """Money view — MRR, revenue at risk, gym credits payable, net position."""
+    st.header("💷 Finance")
+    st.caption(
+        "Monthly recurring revenue, revenue at risk from inactive athletes, "
+        "and gym referral credits payable."
+    )
+
+    prices = getattr(config, "SUBSCRIPTION_PRICES", {})
+    data_by_nm = {
+        str(r.get("Full Name", "")).strip(): r for r in (data_records or [])
+        if str(r.get("Full Name", "")).strip()
+    }
+
+    # Last log date per athlete
+    last_log_by_nm = {}
+    for rec in (pr_records or []):
+        nm = str(rec.get("Athlete Name", "")).strip()
+        d = _parse_date(str(rec.get("Date", "")))
+        if nm and d and (nm not in last_log_by_nm or d > last_log_by_nm[nm]):
+            last_log_by_nm[nm] = d
+
+    # MRR + risk buckets
+    total_mrr = 0.0
+    drifting_mrr, churned_mrr = 0.0, 0.0
+    drifting_rows, churned_rows = [], []
+    for nm, rec in data_by_nm.items():
+        plan = str(rec.get("Subscription Plan", "")).strip()
+        price = prices.get(plan, 0)
+        if not price:
+            continue
+        total_mrr += price
+        last = last_log_by_nm.get(nm)
+        days_since = (TODAY - last).days if last else None
+        if days_since is None or days_since >= 60:
+            churned_mrr += price
+            churned_rows.append({
+                "Athlete": nm, "Plan": plan, "MRR (£)": price,
+                "Days Since Log": days_since if days_since is not None else "never",
+            })
+        elif days_since >= 28:
+            drifting_mrr += price
+            drifting_rows.append({
+                "Athlete": nm, "Plan": plan, "MRR (£)": price,
+                "Days Since Log": days_since,
+            })
+
+    # Gym referral credits payable this month
+    gym_credits = 0.0
+    gym_active_refs = 0
+    try:
+        _gd = get_sheets().load_gym_directory()
+        _gr = get_sheets().load_gym_referrals()
+        _gs = analytics.gym_credit_summary(_gr, _gd)
+        gym_credits = sum(g["total_monthly_credit"] for g in _gs)
+        gym_active_refs = sum(g["active_count"] for g in _gs)
+    except Exception:
+        pass
+
+    healthy_mrr = total_mrr - drifting_mrr - churned_mrr
+    net_after_credits = total_mrr - gym_credits
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Total MRR", f"£{total_mrr:,.0f}")
+    k2.metric("At Risk (28–59d)", f"£{drifting_mrr:,.0f}",
+              delta=f"-{len(drifting_rows)} athletes" if drifting_rows else None,
+              delta_color="off")
+    k3.metric("Inactive (60d+)", f"£{churned_mrr:,.0f}",
+              delta=f"-{len(churned_rows)} athletes" if churned_rows else None,
+              delta_color="off")
+    k4.metric("Gym Credits Out", f"£{gym_credits:,.2f}",
+              delta=f"{gym_active_refs} active refs" if gym_active_refs else None,
+              delta_color="off")
+
+    st.caption(
+        f"**Net after gym credits: £{net_after_credits:,.2f}/month.** "
+        f"Healthy (active) MRR: £{healthy_mrr:,.0f} "
+        f"({healthy_mrr / total_mrr * 100:.0f}% of book)."
+        if total_mrr else
+        "No priced subscriptions found — check the 'Subscription Plan' column in _DATA "
+        "and SUBSCRIPTION_PRICES in config.py."
+    )
+
+    st.divider()
+
+    fin_tabs = st.tabs(["📊 MRR Breakdown", "⚠️ Revenue at Risk", "🏋️ Gym Credits"])
+
+    with fin_tabs[0]:
+        _crm_revenue(data_records)
+
+    with fin_tabs[1]:
+        st.markdown("### Revenue at Risk")
+        st.caption(
+            "Paying athletes who have stopped logging. Every row here is money "
+            "walking out the door — the Actions tab has outreach drafts for them."
+        )
+        if drifting_rows:
+            st.markdown(f"**⚠️ Drifting (28–59 days) — £{drifting_mrr:,.0f}/month**")
+            st.dataframe(
+                pd.DataFrame(sorted(drifting_rows, key=lambda r: -r["MRR (£)"])),
+                width='stretch', hide_index=True,
+            )
+        if churned_rows:
+            st.markdown(f"**🔴 Inactive (60+ days) — £{churned_mrr:,.0f}/month**")
+            st.dataframe(
+                pd.DataFrame(sorted(churned_rows, key=lambda r: -r["MRR (£)"])),
+                width='stretch', hide_index=True,
+            )
+        if not drifting_rows and not churned_rows:
+            st.success("No paying athletes are drifting or inactive. 🎉")
+
+    with fin_tabs[2]:
+        st.markdown("### Gym Referral Credits")
+        st.caption("Full detail lives in the 🏋️ Gym Referrals tab — this is the money summary.")
+        if gym_active_refs:
+            _c1, _c2 = st.columns(2)
+            _c1.metric("Credits payable this month", f"£{gym_credits:,.2f}")
+            _c2.metric("Active referrals", gym_active_refs)
+            st.caption(
+                "Referred members pay full subscription; credits come off gym owner "
+                "invoices. Net programme revenue = referred-member subs − credits."
+            )
+        else:
+            st.info("No active gym referrals yet.")
+
+
 # ── Gym Owner Referral Programme ──────────────────────────────────────────────
 
 _GYM_PRODUCTS = {
@@ -6944,6 +7237,132 @@ def page_gym_referrals(athletes=None):
         )
 
 
+# ── Daily mobile view ─────────────────────────────────────────────────────────
+
+def page_daily():
+    """Phone-friendly morning check-in — shown when ?mode=daily.
+
+    Deliberately lightweight: no charts, no wide tables, only the tabs it needs.
+    """
+    st.title("☀️ Daily Check-in")
+    st.caption(TODAY.strftime("%A %d %B %Y"))
+
+    sheets = get_sheets()
+    try:
+        pr_records = sheets.read_records(config.TAB_PR_LOG)
+        bm_values = sheets.read_values(config.TAB_BENCHMARKS)
+        data_records = sheets.read_records(config.TAB_DATA)
+    except Exception:
+        st.error("Unable to load data — try again in a minute.")
+        return
+
+    header = bm_values[0] if bm_values else []
+    athletes = []
+    for i, r in enumerate(bm_values[1:], start=2):
+        rec = dict(zip(header, r))
+        name = (rec.get("Name") or "").strip()
+        if name and (rec.get("Fitr ID") or "").strip():
+            athletes.append({"name": name, "fitr_id": rec["Fitr ID"], "row": i})
+
+    last_log_by_nm = {}
+    for rec in pr_records:
+        nm = str(rec.get("Athlete Name", "")).strip()
+        d = _parse_date(str(rec.get("Date", "")))
+        if nm and d and (nm not in last_log_by_nm or d > last_log_by_nm[nm]):
+            last_log_by_nm[nm] = d
+
+    data_by_nm = {
+        str(r.get("Full Name", "")).strip(): r for r in data_records
+        if str(r.get("Full Name", "")).strip()
+    }
+
+    # ── Needs attention ───────────────────────────────────────────────────────
+    st.markdown("### 🚨 Needs attention")
+    overdue = []
+    for a in athletes:
+        nm = a["name"]
+        plan = str(data_by_nm.get(nm, {}).get("Subscription Plan", "")).strip().lower()
+        if plan == "bespoke":
+            continue
+        last = last_log_by_nm.get(nm)
+        days = (TODAY - last).days if last else None
+        if days is None or days >= 7:
+            overdue.append((nm, days))
+    overdue.sort(key=lambda x: -(x[1] if x[1] is not None else 999))
+
+    if overdue:
+        for nm, days in overdue[:10]:
+            label = f"{days} days quiet" if days is not None else "never logged"
+            icon = "🔴" if (days is None or days >= 14) else "🟡"
+            st.markdown(f"{icon} **{nm}** — {label}")
+        if len(overdue) > 10:
+            st.caption(f"+ {len(overdue) - 10} more on the Actions tab")
+    else:
+        st.success("Everyone has logged in the last week. 🎉")
+
+    st.divider()
+
+    # ── Celebrate ─────────────────────────────────────────────────────────────
+    st.markdown("### 🎉 This week's results")
+    week_ago = TODAY - dt.timedelta(days=7)
+    seen = set()
+    wins = []
+    for r in sorted(pr_records, key=lambda x: str(x.get("Date", "")), reverse=True):
+        d = _parse_date(str(r.get("Date", "")))
+        if not d or d < week_ago:
+            continue
+        nm = str(r.get("Athlete Name", "")).strip()
+        bn = str(r.get("Benchmark Name", "")).strip()
+        if not nm or not bn or (nm, bn) in seen:
+            continue
+        seen.add((nm, bn))
+        wins.append(f"**{nm}** — {bn}: {_fmt_pr_val(str(r.get('Value', '')).strip())}")
+    if wins:
+        for w in wins[:12]:
+            st.markdown(f"🏅 {w}")
+        if len(wins) > 12:
+            st.caption(f"+ {len(wins) - 12} more")
+    else:
+        st.info("No results logged this week yet.")
+
+    st.divider()
+
+    # ── Gym referral alerts ───────────────────────────────────────────────────
+    try:
+        _gs = analytics.gym_credit_summary(
+            sheets.load_gym_referrals(), sheets.load_gym_directory()
+        )
+        _gym_alerts = [
+            (g["gym_name"], a) for g in _gs for a in g["alerts"]
+            if a["type"] in ("expiring", "stale", "cancelled")
+        ]
+        if _gym_alerts:
+            st.markdown("### 🏋️ Gym referral alerts")
+            for gym_name, a in _gym_alerts[:8]:
+                st.markdown(f"⚠️ **{gym_name}** — {a['message']}")
+            st.divider()
+    except Exception:
+        pass
+
+    # ── Pending replies ───────────────────────────────────────────────────────
+    try:
+        pending = sheets.load_pending_messages(max_age_days=4)
+        if pending:
+            st.markdown("### 📨 Awaiting replies")
+            st.caption(f"{len(pending)} automated message(s) sent recently, no reply yet.")
+            for p in pending[:8]:
+                st.markdown(
+                    f"- **{str(p.get('Athlete Name', '')).strip()}** — "
+                    f"{str(p.get('Message Type', '')).strip()} "
+                    f"({str(p.get('Date', '')).strip()})"
+                )
+    except Exception:
+        pass
+
+    st.divider()
+    st.caption("Full dashboard: remove `?mode=daily` from the URL.")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -6953,6 +7372,10 @@ def main():
 
     if st.query_params.get("mode") == "progress":
         page_progress()
+        return
+
+    if st.query_params.get("mode") == "daily":
+        page_daily()
         return
 
     # ── Sidebar controls ──────────────────────────────────────────────────────
@@ -6972,6 +7395,11 @@ def main():
             st.success("🟢 Fitr messaging ON")
         else:
             st.warning("🔴 Fitr messaging OFF — copy only")
+
+        st.divider()
+        st.markdown("### 📱 Phone view")
+        st.caption("Bookmark this for a fast morning check-in on your phone:")
+        st.code("?mode=daily", language=None)
 
     st.title("🏋️ JST Compete — Coaching Dashboard")
     st.caption(f"Data refreshes every 15 minutes · Last loaded: {dt.datetime.now().strftime('%H:%M')}")
@@ -7022,7 +7450,7 @@ def main():
         "🗓️ Week Plan", "🏁 Competitions", "📊 Programmes", "🏋️ Load",
         "📈 Trends", "🏆 Leaderboard", "💤 Recovery", "🌐 CRM",
         "📚 Playbook", "💎 Grandslam", "📣 Marketing", "🏋️ Gym Referrals",
-        "⚙️ Sync", "❓ Help",
+        "💷 Finance", "⚙️ Sync", "❓ Help",
     ])
 
     with tabs[0]:
@@ -7064,8 +7492,10 @@ def main():
     with tabs[16]:
         page_gym_referrals(athletes=athletes)
     with tabs[17]:
-        page_sync_health()
+        page_finance(data_records, pr_records, athletes)
     with tabs[18]:
+        page_sync_health()
+    with tabs[19]:
         page_help()
 
 
