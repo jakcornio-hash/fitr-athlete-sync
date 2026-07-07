@@ -595,6 +595,35 @@ def _parse_notes_timeline(notes_str):
     return entries
 
 
+_NOTES_KEYWORD_STOPWORDS = {
+    "and", "the", "for", "not", "but", "you", "her", "his", "she", "was",
+    "are", "all", "can", "has", "had", "its", "out", "off", "ago", "yet",
+    "with", "from", "this", "that", "have", "been", "were", "will", "your",
+    "they", "them", "their", "note", "notes", "none", "some", "when", "then",
+}
+
+
+def _last_mention_date(notes_str, keywords):
+    """Most recent date (YYYY-MM-DD str) a Coaching Notes entry mentions any
+    of `keywords` (case-insensitive substring match), or None if no match.
+
+    Used to attach "when was this actually discussed" context to static,
+    undated fields (e.g. Injury Status) — a flag with no date reads as
+    current even when it's a year stale.
+    """
+    kws = [
+        k.lower() for k in keywords
+        if len(k) >= 3 and k.lower() not in _NOTES_KEYWORD_STOPWORDS
+    ]
+    if not kws:
+        return None
+    for entry in _parse_notes_timeline(notes_str):  # already newest-first
+        text_l = entry["text"].lower()
+        if any(kw in text_l for kw in kws):
+            return entry["date"]
+    return None
+
+
 def _profile_completeness(name, profile, archetype_by_name, has_logged, has_recovery):
     """Return (done, total, [(label, bool)]) for the onboarding checklist."""
     checks = [
@@ -1021,6 +1050,19 @@ def _athlete_profile_panel(name, data_by_name, pr_records, trend_results,
             st.markdown(f"**{colour} Injury Status:** {inj_status or '—'}")
             if inj_notes:
                 st.markdown(f"> {inj_notes}")
+            # Injury Status/Notes are static sheet fields with no timestamp of
+            # their own — cross-reference the dated Coaching Notes timeline so
+            # a year-old flag doesn't read as current.
+            _inj_kw = re.split(r"[,\s/]+", f"{inj_status} {inj_notes}")
+            _inj_last = _last_mention_date(str(profile.get("Coaching Notes", "")), _inj_kw)
+            if _inj_last:
+                _days_ago = (TODAY - dt.date.fromisoformat(_inj_last)).days
+                if _days_ago > 180:
+                    st.caption(f"⚠️ Last mentioned in notes: {_inj_last} ({_days_ago} days ago) — confirm this is still current")
+                else:
+                    st.caption(f"Last mentioned in notes: {_inj_last} ({_days_ago} days ago)")
+            else:
+                st.caption("⚠️ No dated mention found in Coaching Notes — confirm this is still current")
         else:
             st.markdown("**🟢 Injury Status:** —")
 
