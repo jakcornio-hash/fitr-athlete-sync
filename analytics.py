@@ -1024,7 +1024,14 @@ _LB_CATEGORIES = {
     "Conditioning": ["row", "run", "bike", "assault", "erg", "400m", "800m", "1km", "1.2km", "2km", "mile", "sprint"],
 }
 
-_LB_LOWER_IS_BETTER = ["row", "run", "bike", "assault", "erg", "400m", "800m", "1km", "1.2km", "2km", "5km", "mile", "sprint"]
+_LB_LOWER_IS_BETTER = [
+    "row", "run", "bike", "assault", "erg", "400m", "800m", "1km", "1.2km", "2km", "5km", "mile", "sprint",
+    # Classic for-time benchmark WODs — lower is better. Cindy is deliberately
+    # excluded: it's a 20-minute AMRAP scored in rounds, where higher is better,
+    # and already falls through correctly to the higher-is-better default.
+    "fran", "grace", "diane", "helen", "karen", "isabel", "linda", "annie",
+    "amanda", "jackie", "elizabeth", "murph", "kelly", "nancy",
+]
 
 
 def is_lower_better(benchmark_name):

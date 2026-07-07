@@ -667,6 +667,12 @@ def auto_onboard_new_athletes(sheets, rooms, fitr=None, room_id_by_name=None,
                        [[" ", name, str(fid)] for name, fid, _ in to_onboard])
 
     # Add to _DATA
+    # data_names_lower is the reliable "have we met this person before" signal —
+    # unlike a Fitr chat-room ID, which can apparently be re-issued/duplicated for
+    # the same person (e.g. after Fitr merges a re-registered account), a _DATA row
+    # persists as long as no one deletes it. Compute unconditionally (defaulting to
+    # empty) so it's available below even if _DATA is unreadable or malformed.
+    data_names_lower = set()
     data_vals = sheets.read_values(config.TAB_DATA)
     if data_vals:
         data_header = data_vals[0]
@@ -702,6 +708,10 @@ def auto_onboard_new_athletes(sheets, rooms, fitr=None, room_id_by_name=None,
         for name, fid, prog in to_onboard:
             if bespoke_names and name in bespoke_names:
                 print(f"  [auto-onboard] Skipping Fitr message for bespoke athlete: {name!r}")
+                continue
+            if name.lower() in data_names_lower:
+                print(f"  [auto-onboard] Skipping onboarding message for {name!r} — "
+                      f"already has a _DATA record (re-detected Fitr ID, not a new athlete)")
                 continue
             room_id = room_id_by_name.get(name)
             if not room_id:
@@ -1024,11 +1034,13 @@ def main():
         print(f"Bespoke athletes (automated messages suppressed): {len(bespoke_names)}")
 
     # ---- auto-congratulations + goal celebrations via Fitr chat ----
-    # Declines are never sent to the athlete as a "well done" — they're collected
-    # here and surfaced to coaches in the digest instead (see declining_singles below).
+    # One message per athlete per run, not one per result — an athlete who logs
+    # several PBs in the same sync window gets a single roundup, not a burst of
+    # near-identical DMs in a row. Declines are never sent to the athlete as a
+    # "well done" — they're collected here and surfaced to coaches instead.
     declining_singles = []  # (name, bench, value, prev)
     if bench_rows and not config.DRY_RUN:
-        congrats_sent = 0
+        _wins_by_name = {}  # name -> list of (kind, bench, value, prev)
         for row in bench_rows:
             if len(row) < 5:
                 continue
@@ -1041,14 +1053,9 @@ def main():
             room_id = room_id_by_name.get(name)
             if not room_id:
                 continue
-            first = name.split()[0]
             goal = goals_by_name.get(name, "")
             if goal and _goal_achieved(goal, bench, value):
-                msg = (
-                    f"Hey {first} — {bench}: {value}. That's the goal you came in with. "
-                    f"I've been watching the work you've been putting in and this is what that looks like. "
-                    f"What does hitting this actually mean for you?"
-                )
+                _wins_by_name.setdefault(name, []).append(("goal", bench, value, prev))
             elif prev and prev not in ("", "first entry"):
                 comparison = analytics.compare_result(bench, prev, value)
                 if comparison == "declined":
@@ -1056,24 +1063,36 @@ def main():
                     continue  # not messaged to the athlete — flagged to coaches instead
                 if comparison != "improved":
                     continue  # flat or unparseable — nothing worth messaging about
-                if analytics.is_lower_better(bench):
-                    msg = (
-                        f"Hey {first} — {bench} came in at {value}, down from {prev}. "
-                        f"That kind of progress doesn't happen by accident. "
-                        f"What's been different about your approach lately?"
-                    )
-                else:
-                    msg = (
-                        f"Hey {first} — {bench} up to {value} from {prev}. "
-                        f"Numbers like that reflect the consistency you've been putting in. "
-                        f"What's been clicking for you?"
-                    )
+                _wins_by_name.setdefault(name, []).append(("pb", bench, value, prev))
             else:
-                msg = (
-                    f"Hey {first} — first result in for {bench}: {value}. "
-                    f"That's the starting point — everything builds from here. "
-                    f"What are you hoping to achieve with it?"
-                )
+                _wins_by_name.setdefault(name, []).append(("first", bench, value, prev))
+
+        congrats_sent = 0
+        for name, wins in _wins_by_name.items():
+            room_id = room_id_by_name.get(name)
+            first = name.split()[0]
+            goal_wins = [w for w in wins if w[0] == "goal"]
+            pb_wins = [w for w in wins if w[0] == "pb"]
+            first_wins = [w for w in wins if w[0] == "first"]
+
+            if goal_wins:
+                _, bench, value, _ = goal_wins[0]
+                msg = f"{first}, {bench}: {value} — that's the goal you set. Nice work."
+            elif len(wins) == 1 and pb_wins:
+                _, bench, value, prev = pb_wins[0]
+                direction = "down" if analytics.is_lower_better(bench) else "up"
+                msg = f"{first}, {bench} {direction} to {value} (from {prev}). Nice."
+            elif len(wins) == 1 and first_wins:
+                _, bench, value, _ = first_wins[0]
+                msg = f"{first}, first result logged for {bench}: {value}. Good starting point."
+            elif pb_wins:
+                items = ", ".join(f"{b} to {v}" for _, b, v, _ in pb_wins[:4])
+                more = f" (+{len(pb_wins) - 4} more)" if len(pb_wins) > 4 else ""
+                msg = f"{first}, good week — {items}{more}. Nice."
+            else:
+                items = ", ".join(f"{b}: {v}" for _, b, v, _ in wins[:4])
+                msg = f"{first}, results logged: {items}."
+
             try:
                 fitr.send_chat_message(room_id, msg)
                 congrats_sent += 1
@@ -1143,36 +1162,12 @@ def main():
         _streak_notes = {}
         _streak_sent = 0
         _streak_msgs = {
-            7:  (
-                "Hey {first} — seven training days in a row. "
-                "That's not luck, that's a decision you've been making every single day this week. "
-                "What's been making it easier to show up?"
-            ),
-            14: (
-                "Hey {first} — two weeks straight without missing a beat. "
-                "The athletes who build real fitness are the ones who keep going even when it's inconvenient. "
-                "What's keeping you going at the moment?"
-            ),
-            21: (
-                "Hey {first} — 21 training days in a row. "
-                "Three weeks of showing up consistently. "
-                "How does your body feel at this point compared to when you started this run?"
-            ),
-            30: (
-                "Hey {first} — 30 consecutive training days. "
-                "A month of work. That's not a habit anymore — that's just who you are now. "
-                "What's changed for you over the last month?"
-            ),
-            60: (
-                "Hey {first} — 60 days straight. "
-                "I want you to think about the version of you who started this run. "
-                "What would they make of where you are now?"
-            ),
-            90: (
-                "Hey {first} — 90 training days in a row. "
-                "Ninety. That's not something most people ever do. "
-                "What does consistency at this level actually mean to you?"
-            ),
+            7:  "{first}, 7 days in a row. Fair play. Keep it going.",
+            14: "{first}, two weeks straight, no misses. Nice work.",
+            21: "{first}, 21 days in a row. That's a proper run. Keep going.",
+            30: "{first}, 30 days straight — a full month. Strong.",
+            60: "{first}, 60 days in a row. That's serious consistency.",
+            90: "{first}, 90 days straight. Not many people do that. Well in.",
         }
         for nm, streak_days in streak_hits:
             if nm in bespoke_names:
@@ -1274,11 +1269,7 @@ def main():
             if not room_id:
                 continue
             first = nm.split()[0]
-            msg = (
-                f"Hey {first} — it's been a while and I've been thinking about you. "
-                f"That's not a chase-up — life gets complicated and training has to fit around it. "
-                f"What's going on for you at the moment?"
-            )
+            msg = f"{first}, haven't seen you in a while — no pressure, just checking in. Everything alright?"
             try:
                 fitr.send_chat_message(room_id, msg)
                 offboarding_sent += 1
@@ -1347,11 +1338,7 @@ def main():
             if _status == "Pending" and not _join_ack:
                 if _referred_full and _pr_dates_ref.get(_referred_full):
                     _referred_first = _referred_full.split()[0]
-                    _msg = (
-                        f"Hey {_referrer_first} — {_referred_first} just joined. "
-                        f"They reached out because of you, and that means something. "
-                        f"How do you know them?"
-                    )
+                    _msg = f"{_referrer_first}, {_referred_first} just joined — nice, thanks for the introduction. How do you know them?"
                     if not config.DRY_RUN:
                         try:
                             _sent = _send_referral_msg(_msg)
@@ -1380,10 +1367,8 @@ def main():
                     if _last_log and (TODAY - _last_log).days <= 30:
                         _referred_first = (_referred_full or _referred).split()[0]
                         _msg = (
-                            f"Hey {_referrer_first} — {_referred_first} has finished their trial "
-                            f"and decided to stay. Your free month is on its way — "
-                            f"we'll get that sorted for you this week. "
-                            f"What made you think of sending them our way?"
+                            f"{_referrer_first}, {_referred_first}'s stuck around after their trial — nice. "
+                            f"Your free month's on its way, sorted this week."
                         )
                         if not config.DRY_RUN:
                             try:
@@ -1489,53 +1474,31 @@ def main():
         _tshirt_url = getattr(config, "TSHIRT_FORM_URL", "")
         if days_training == 90:
             msg = (
-                f"Hey {first} — ninety days since your first log on "
-                f"{first_log.strftime('%d %b %Y')}.\n\n"
-                f"Most people who were going to stop have stopped by now.\n\n"
-                f"You haven't. That's what three months means.\n\n"
-                f"At three months I like to get on a call — check in on where you're at "
-                f"and make sure what you're doing is still the right fit for where you're going. "
-                f"Book a time here: {_booking_url}"
+                f"{first}, 90 days since your first log ({first_log.strftime('%d %b %Y')}). "
+                f"Worth getting on a call at this point to check in and make sure the programme's "
+                f"still right for where you're headed. Book here: {_booking_url}"
             )
         elif days_training == 180:
             msg = (
-                f"Hey {first} — six months since your first log on "
-                f"{first_log.strftime('%d %b %Y')}.\n\n"
-                f"Most people who start don't get here — you have.\n\n"
-                f"The athletes who reach six months are the ones who actually build the fitness "
-                f"they came for. It's not talent. It's not time. It's just not stopping.\n\n"
-                f"We send a JST t-shirt to everyone who hits six months. "
-                f"Drop your address and size here: {_tshirt_url}\n\n"
-                f"If you know someone who trains and would benefit from this — send them our way."
+                f"{first}, six months in. We send a JST t-shirt at this point — "
+                f"drop your address and size here: {_tshirt_url}\n\n"
+                f"If you know anyone who'd benefit from training with us, send them our way."
             )
         elif days_training == 270:
-            msg = (
-                f"Hey {first} — nine months since your first log on "
-                f"{first_log.strftime('%d %b %Y')}.\n\n"
-                f"Still showing up. That's the whole thing."
-            )
+            msg = f"{first}, nine months in. Still showing up."
         elif days_training == 365:
             summit_flag_names.append(nm)
             msg = (
-                f"Hey {first} — a year since your first log on "
-                f"{first_log.strftime('%d %b %Y')}.\n\n"
-                f"Twelve months. Most people who start a training programme never make it to one.\n\n"
-                f"You've built something most people talk about but never actually do. "
-                f"We want to get you to our next training summit — on us. "
-                f"I'll send you the details when the next one's confirmed."
+                f"{first}, one year since your first log ({first_log.strftime('%d %b %Y')}). "
+                f"That's a proper milestone — we want to get you to our next training summit, on us. "
+                f"I'll send details when it's confirmed."
             )
         elif days_training == 730:
-            msg = (
-                f"Hey {first} — two years since your first log on "
-                f"{first_log.strftime('%d %b %Y')}.\n\n"
-                f"Two years. That's not motivation — that's just who you are now.\n\n"
-                f"Keep going."
-            )
+            msg = f"{first}, two years in. Keep going."
         else:
             msg = (
-                f"Hey {first} — {milestone_label} since your first log on "
-                f"{first_log.strftime('%d %b %Y')}. "
-                f"That consistency is exactly what makes the difference."
+                f"{first}, {milestone_label} since your first log "
+                f"({first_log.strftime('%d %b %Y')}). Nice consistency."
             )
         try:
             fitr.send_chat_message(room_id, msg)
@@ -1574,13 +1537,10 @@ def main():
             continue
         first = nm.split()[0]
         msg = (
-            f"Hey {first} — first log is in. Starting is the part most people put off, "
-            f"so the fact you've done it matters.\n\n"
-            f"To make coaching as useful as possible from day one, two things worth building in:\n\n"
-            f"1. Log every session as soon as you finish — even a quick note. "
-            f"Two minutes of data makes coaching a lot better.\n"
+            f"{first}, first log's in — nice one. Two things to help me coach you well from day one:\n\n"
+            f"1. Log every session as soon as you finish, even a quick note. Makes a big difference.\n"
             f"2. Weekly recovery check-in: https://jstcompete.typeform.com/to/Q1tL7MmR — "
-            f"takes 2 minutes, helps me manage your load week to week.\n\n"
+            f"2 minutes, helps me manage your load week to week.\n\n"
             f"Message me here anytime."
         )
         try:
@@ -1707,18 +1667,14 @@ def main():
         first = nm.split()[0]
         if comp_type in ("A", "B"):
             msg = (
-                f"Hey {first} — I was following {comp_nm} and I'm proud of what you put into it.\n\n"
-                f"When you get a chance, I'd love to hear:\n\n"
-                f"1. Your result / placing\n"
-                f"2. What went well — anything you want to build on\n"
+                f"{first}, how did {comp_nm} go? When you get a chance:\n\n"
+                f"1. Result / placing\n"
+                f"2. What went well\n"
                 f"3. One thing you'd do differently\n"
                 f"4. How your body's feeling right now"
             )
         else:
-            msg = (
-                f"Hey {first} — I've been thinking about how {comp_nm} went for you. "
-                f"What was the result and what are you taking away from it?"
-            )
+            msg = f"{first}, how did {comp_nm} go? What's the result and what are you taking from it?"
         try:
             fitr.send_chat_message(room_id, msg)
             post_comp_msgs_sent += 1
@@ -1759,10 +1715,7 @@ def main():
         if not room_id or config.DRY_RUN:
             continue
         first = nm.split()[0]
-        msg = (
-            f"Hey {first} — {result} at {comp_nm}. You earned that. "
-            f"How are you feeling about it — what stood out to you from the day?"
-        )
+        msg = f"{first}, {result} at {comp_nm}. Nice one. What stood out from the day?"
         try:
             fitr.send_chat_message(room_id, msg)
             comp_result_msgs_sent += 1
@@ -1844,9 +1797,8 @@ def main():
                 else f" You hit {len(_prs)} results — {_prs[0][0]} at {_prs[0][1]} stands out."
             ) if _prs else ""
             _msg = (
-                f"Hey {_first} — {_month_label} is done.{_pr_line} "
-                f"{_sessions} session{'s' if _sessions != 1 else ''} logged. "
-                f"How are you feeling about where things are heading?"
+                f"{_first}, {_month_label} done —{_pr_line} "
+                f"{_sessions} session{'s' if _sessions != 1 else ''} logged. Solid month."
             )
             try:
                 fitr.send_chat_message(_room, _msg)
