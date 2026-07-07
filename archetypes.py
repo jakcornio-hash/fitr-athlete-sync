@@ -92,7 +92,7 @@ def score_rating(ratings, pairs=None):
     scores = {aid: sums[aid] / counts[aid] for aid in sums if counts[aid] > 0}
 
     # Step 2: forced-pair adjustments
-    instrument_pairs = RATING.get("pairs", [])
+    instrument_pairs = RATING.get("forced_pairs", [])
     for pair_idx, pair_answer in enumerate(pairs or []):
         if pair_idx >= len(instrument_pairs):
             break
