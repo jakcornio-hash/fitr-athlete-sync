@@ -1033,14 +1033,15 @@ def main():
     if bespoke_names:
         print(f"Bespoke athletes (automated messages suppressed): {len(bespoke_names)}")
 
-    # ---- auto-congratulations + goal celebrations via Fitr chat ----
-    # One message per athlete per run, not one per result — an athlete who logs
-    # several PBs in the same sync window gets a single roundup, not a burst of
-    # near-identical DMs in a row. Declines are never sent to the athlete as a
-    # "well done" — they're collected here and surfaced to coaches instead.
+    # ---- auto-congratulations: collect wins now, send later ----
+    # Collection only — the actual DMs go out further down, after streak
+    # milestones are computed, so an athlete whose PBs and streak land on the
+    # same run gets ONE combined message instead of two. Declines are never
+    # sent to the athlete as a "well done" — they're collected here and
+    # surfaced to coaches instead.
     declining_singles = []  # (name, bench, value, prev)
+    _wins_by_name = {}      # name -> list of (kind, bench, value, prev)
     if bench_rows and not config.DRY_RUN:
-        _wins_by_name = {}  # name -> list of (kind, bench, value, prev)
         for row in bench_rows:
             if len(row) < 5:
                 continue
@@ -1066,42 +1067,6 @@ def main():
                 _wins_by_name.setdefault(name, []).append(("pb", bench, value, prev))
             else:
                 _wins_by_name.setdefault(name, []).append(("first", bench, value, prev))
-
-        congrats_sent = 0
-        for name, wins in _wins_by_name.items():
-            room_id = room_id_by_name.get(name)
-            first = name.split()[0]
-            goal_wins = [w for w in wins if w[0] == "goal"]
-            pb_wins = [w for w in wins if w[0] == "pb"]
-            first_wins = [w for w in wins if w[0] == "first"]
-
-            if goal_wins:
-                _, bench, value, _ = goal_wins[0]
-                msg = f"{first}, {bench}: {value} — that's the goal you set. Nice work."
-            elif len(wins) == 1 and pb_wins:
-                _, bench, value, prev = pb_wins[0]
-                direction = "down" if analytics.is_lower_better(bench) else "up"
-                msg = f"{first}, {bench} {direction} to {value} (from {prev}). Nice."
-            elif len(wins) == 1 and first_wins:
-                _, bench, value, _ = first_wins[0]
-                msg = f"{first}, first result logged for {bench}: {value}. Good starting point."
-            elif pb_wins:
-                items = ", ".join(f"{b} to {v}" for _, b, v, _ in pb_wins[:4])
-                more = f" (+{len(pb_wins) - 4} more)" if len(pb_wins) > 4 else ""
-                msg = f"{first}, good week — {items}{more}. Nice."
-            else:
-                items = ", ".join(f"{b}: {v}" for _, b, v, _ in wins[:4])
-                msg = f"{first}, results logged: {items}."
-
-            try:
-                fitr.send_chat_message(room_id, msg)
-                congrats_sent += 1
-                messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": name,
-                                          "Message Type": "congrats", "Room ID": room_id})
-                import time as _time; _time.sleep(0.5)
-            except FitrError as exc:
-                print(f"  ! Congrats message failed for {name}: {exc}")
-        print(f"Congratulations messages sent: {congrats_sent}")
         if declining_singles:
             print(f"Declining results flagged to coaches (not messaged to athlete): {len(declining_singles)}")
 
@@ -1157,50 +1122,106 @@ def main():
     streak_hits = analytics.daily_streak_check(pr_records, athletes)
     rec_alert_rows = analytics.recovery_alerts(rec_by_name)
 
-    # ---- streak milestone messages ----
+    # ---- PB congrats + streak milestones: one DM per athlete per run ----
+    # Streaks that coincide with a PB roundup ride along in the same message;
+    # only athletes with a streak milestone and no PBs get a standalone DM.
+    _streak_msgs = {
+        7:  "{first}, 7 days in a row. Fair play. Keep it going.",
+        14: "{first}, two weeks straight, no misses. Nice work.",
+        21: "{first}, 21 days in a row. That's a proper run. Keep going.",
+        30: "{first}, 30 days straight — a full month. Strong.",
+        60: "{first}, 60 days in a row. That's serious consistency.",
+        90: "{first}, 90 days straight. Not many people do that. Well in.",
+    }
+    _pending_streaks = {}  # name -> streak_days, guards already applied
     if streak_hits and not config.DRY_RUN:
-        _streak_notes = {}
-        _streak_sent = 0
-        _streak_msgs = {
-            7:  "{first}, 7 days in a row. Fair play. Keep it going.",
-            14: "{first}, two weeks straight, no misses. Nice work.",
-            21: "{first}, 21 days in a row. That's a proper run. Keep going.",
-            30: "{first}, 30 days straight — a full month. Strong.",
-            60: "{first}, 60 days in a row. That's serious consistency.",
-            90: "{first}, 90 days straight. Not many people do that. Well in.",
-        }
         for nm, streak_days in streak_hits:
-            if nm in bespoke_names:
+            if nm in bespoke_names or streak_days not in _streak_msgs:
                 continue
             note_key = f"streak_{streak_days}d"
-            existing_notes = str(data_by_name_all.get(nm, {}).get("Coaching Notes", ""))
-            if note_key in existing_notes:
+            if note_key in str(data_by_name_all.get(nm, {}).get("Coaching Notes", "")):
                 continue  # already sent this milestone
-            room_id = room_id_by_name.get(nm)
-            if not room_id:
+            if not room_id_by_name.get(nm):
                 continue
-            first = nm.split()[0]
-            msg = _streak_msgs.get(streak_days, "").format(first=first)
-            if not msg:
-                continue
-            try:
-                fitr.send_chat_message(room_id, msg)
-                _streak_notes[nm] = f"[{TODAY.isoformat()} — {note_key}]"
-                _streak_sent += 1
-                messages_sent_log.append({
-                    "Date": TODAY.isoformat(), "Athlete Name": nm,
-                    "Message Type": note_key, "Room ID": room_id,
-                })
-                import time as _time; _time.sleep(0.5)
-            except FitrError as exc:
-                print(f"  ! Streak message failed for {nm}: {exc}")
-        if _streak_notes:
-            append_coaching_notes(sheets, _streak_notes)
-        if _streak_sent:
-            print(f"Streak milestone messages sent: {_streak_sent}")
+            _pending_streaks[nm] = streak_days
     elif streak_hits and config.DRY_RUN:
         for nm, sd in streak_hits:
             print(f"[DRY_RUN] Streak {sd}d milestone for {nm}")
+
+    _streak_notes = {}
+    _streak_sent = 0
+
+    if _wins_by_name:
+        congrats_sent = 0
+        for name, wins in _wins_by_name.items():
+            room_id = room_id_by_name.get(name)
+            first = name.split()[0]
+            goal_wins = [w for w in wins if w[0] == "goal"]
+            pb_wins = [w for w in wins if w[0] == "pb"]
+            first_wins = [w for w in wins if w[0] == "first"]
+
+            if goal_wins:
+                _, bench, value, _ = goal_wins[0]
+                msg = f"{first}, {bench}: {value} — that's the goal you set. Nice work."
+            elif len(wins) == 1 and pb_wins:
+                _, bench, value, prev = pb_wins[0]
+                direction = "down" if analytics.is_lower_better(bench) else "up"
+                msg = f"{first}, {bench} {direction} to {value} (from {prev}). Nice."
+            elif len(wins) == 1 and first_wins:
+                _, bench, value, _ = first_wins[0]
+                msg = f"{first}, first result logged for {bench}: {value}. Good starting point."
+            elif pb_wins:
+                items = ", ".join(f"{b} to {v}" for _, b, v, _ in pb_wins[:4])
+                more = f" (+{len(pb_wins) - 4} more)" if len(pb_wins) > 4 else ""
+                msg = f"{first}, good week — {items}{more}. Nice."
+            else:
+                items = ", ".join(f"{b}: {v}" for _, b, v, _ in wins[:4])
+                msg = f"{first}, results logged: {items}."
+
+            _ride_along_streak = _pending_streaks.get(name)
+            if _ride_along_streak:
+                msg += f" And {_ride_along_streak} days in a row — keep it going."
+
+            try:
+                fitr.send_chat_message(room_id, msg)
+                congrats_sent += 1
+                messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": name,
+                                          "Message Type": "congrats", "Room ID": room_id})
+                if _ride_along_streak:
+                    note_key = f"streak_{_ride_along_streak}d"
+                    _streak_notes[name] = f"[{TODAY.isoformat()} — {note_key}]"
+                    _streak_sent += 1
+                    messages_sent_log.append({
+                        "Date": TODAY.isoformat(), "Athlete Name": name,
+                        "Message Type": note_key, "Room ID": room_id,
+                    })
+                    del _pending_streaks[name]
+                import time as _time; _time.sleep(0.5)
+            except FitrError as exc:
+                print(f"  ! Congrats message failed for {name}: {exc}")
+        print(f"Congratulations messages sent: {congrats_sent}")
+
+    # Standalone streak messages — athletes with a milestone but no PBs this run
+    for nm, streak_days in _pending_streaks.items():
+        room_id = room_id_by_name.get(nm)
+        first = nm.split()[0]
+        note_key = f"streak_{streak_days}d"
+        msg = _streak_msgs[streak_days].format(first=first)
+        try:
+            fitr.send_chat_message(room_id, msg)
+            _streak_notes[nm] = f"[{TODAY.isoformat()} — {note_key}]"
+            _streak_sent += 1
+            messages_sent_log.append({
+                "Date": TODAY.isoformat(), "Athlete Name": nm,
+                "Message Type": note_key, "Room ID": room_id,
+            })
+            import time as _time; _time.sleep(0.5)
+        except FitrError as exc:
+            print(f"  ! Streak message failed for {nm}: {exc}")
+    if _streak_notes:
+        append_coaching_notes(sheets, _streak_notes)
+    if _streak_sent:
+        print(f"Streak milestone messages sent: {_streak_sent}")
 
     # ---- weekly AI coaching digest per athlete ----
     digests_written = generate_weekly_athlete_digests(
