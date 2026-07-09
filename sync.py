@@ -1423,15 +1423,18 @@ def main():
         declining_singles=declining_singles,
     )
 
-    # ---- per-coach re-engagement alerts (inactive athletes) ----
-    if coach_channel_map:
+    # ---- per-coach re-engagement alerts + squad summaries (Mondays only) ----
+    # Both are per-coach Slack briefings with no per-athlete dedup — sent daily
+    # they'd repeat the same inactive athletes to the same coach every morning
+    # (and the squad summary is "weekly" by name). One Monday briefing per coach.
+    # The daily digest to the main channel still surfaces inactive athletes daily.
+    if coach_channel_map and TODAY.weekday() == 0:
         reeng_sent = notifier.send_reengagement_alerts(
             engagement_results, programme_by_name, coach_channel_map,
         )
         if reeng_sent:
             print(f"Re-engagement alerts sent to {reeng_sent} coach channel(s)")
 
-        # ---- weekly coach squad summaries ----
         from collections import defaultdict
         athletes_by_coach = defaultdict(list)
         for a in athletes:
