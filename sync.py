@@ -1034,14 +1034,11 @@ def main():
     if bespoke_names:
         print(f"Bespoke athletes (automated messages suppressed): {len(bespoke_names)}")
 
-    # ---- auto-congratulations: collect wins now, send later ----
-    # Collection only — the actual DMs go out further down, after streak
-    # milestones are computed, so an athlete whose PBs and streak land on the
-    # same run gets ONE combined message instead of two. Declines are never
-    # sent to the athlete as a "well done" — they're collected here and
-    # surfaced to coaches instead.
+    # ---- declining results: collected daily for the coach digest ----
+    # Athlete-facing congrats moved to a weekly Monday roundup (built further
+    # down from the past week's PR Log), but coaches still hear about a result
+    # coming in WORSE the same day — that's actionable now, not next Monday.
     declining_singles = []  # (name, bench, value, prev)
-    _wins_by_name = {}      # name -> list of (kind, bench, value, prev)
     if bench_rows and not config.DRY_RUN:
         for row in bench_rows:
             if len(row) < 5:
@@ -1052,22 +1049,9 @@ def main():
             bench = row[3]
             value = row[4]
             prev = row[6] if len(row) > 6 else ""
-            room_id = room_id_by_name.get(name)
-            if not room_id:
-                continue
-            goal = goals_by_name.get(name, "")
-            if goal and _goal_achieved(goal, bench, value):
-                _wins_by_name.setdefault(name, []).append(("goal", bench, value, prev))
-            elif prev and prev not in ("", "first entry"):
-                comparison = analytics.compare_result(bench, prev, value)
-                if comparison == "declined":
+            if prev and prev not in ("", "first entry"):
+                if analytics.compare_result(bench, prev, value) == "declined":
                     declining_singles.append((name, bench, value, prev))
-                    continue  # not messaged to the athlete — flagged to coaches instead
-                if comparison != "improved":
-                    continue  # flat or unparseable — nothing worth messaging about
-                _wins_by_name.setdefault(name, []).append(("pb", bench, value, prev))
-            else:
-                _wins_by_name.setdefault(name, []).append(("first", bench, value, prev))
         if declining_singles:
             print(f"Declining results flagged to coaches (not messaged to athlete): {len(declining_singles)}")
 
@@ -1126,9 +1110,40 @@ def main():
     streak_hits = analytics.daily_streak_check(pr_records, athletes)
     rec_alert_rows = analytics.recovery_alerts(rec_by_name)
 
-    # ---- PB congrats + streak milestones: one DM per athlete per run ----
-    # Streaks that coincide with a PB roundup ride along in the same message;
-    # only athletes with a streak milestone and no PBs get a standalone DM.
+    # ---- weekly PB roundup (Mondays): wins from the past 7 days ----
+    # PB congrats are weekly, not per-result: on Monday each athlete gets one
+    # roundup DM covering the whole week. Streak milestones stay on their exact
+    # day (they're milestones, like anniversaries) — on a Monday they ride
+    # along in the roundup; any other day they send standalone.
+    _wins_by_name = {}  # name -> list of (kind, bench, value, prev)
+    if TODAY.weekday() == 0 and not config.DRY_RUN:
+        _roundup_window_start = TODAY - dt.timedelta(days=7)
+        _latest_result = {}  # (name, bench) -> (date, value, prev) — best-dated row per benchmark
+        for _rec in pr_records:
+            _d = _parse_date(str(_rec.get("Date", "")))
+            if not _d or _d <= _roundup_window_start:
+                continue
+            _nm = str(_rec.get("Athlete Name", "")).strip()
+            _b  = str(_rec.get("Benchmark Name", "")).strip()
+            _v  = str(_rec.get("Value", "")).strip()
+            _p  = str(_rec.get("Previous Value", "")).strip()
+            if not _nm or not _b or not _v or _nm in bespoke_names:
+                continue
+            if not room_id_by_name.get(_nm):
+                continue
+            _key = (_nm, _b)
+            if _key not in _latest_result or _d > _latest_result[_key][0]:
+                _latest_result[_key] = (_d, _v, _p)
+        for (_nm, _b), (_d, _v, _p) in _latest_result.items():
+            _goal = goals_by_name.get(_nm, "")
+            if _goal and _goal_achieved(_goal, _b, _v):
+                _wins_by_name.setdefault(_nm, []).append(("goal", _b, _v, _p))
+            elif _p and _p != "first entry":
+                if analytics.compare_result(_b, _p, _v) == "improved":
+                    _wins_by_name.setdefault(_nm, []).append(("pb", _b, _v, _p))
+            else:
+                _wins_by_name.setdefault(_nm, []).append(("first", _b, _v, _p))
+
     _streak_msgs = {
         7:  "{first}, 7 days in a row. Fair play. Keep it going.",
         14: "{first}, two weeks straight, no misses. Nice work.",
@@ -1278,8 +1293,12 @@ def main():
     sheets.write_churn_snapshot(churn_snapshot_rows)
     print(f"Churn history snapshot written: {len(churn_snapshot_rows)} athletes")
 
-    # ---- off-boarding: final check-in when 60d inactive + critical risk ----
-    if not config.DRY_RUN:
+    # ---- off-boarding: final check-in around 60d inactive + critical risk ----
+    # Weekly (Mondays), catching anyone who crossed 60 days in the past week.
+    # The 60-66 window spans exactly one Monday per athlete, so it still fires
+    # once — and unlike the old exact-day-60 gate, a failed sync on their
+    # day 60 no longer means they're skipped forever.
+    if TODAY.weekday() == 0 and not config.DRY_RUN:
         offboarding_sent = 0
         for snap in churn_snapshot_rows:
             nm = snap["Athlete Name"]
@@ -1288,7 +1307,8 @@ def main():
             if snap["Score"] < 60:
                 continue
             e = next((x for x in engagement_results if x["name"] == nm), {})
-            if e.get("days_since") != 60:
+            _days_inactive = e.get("days_since")
+            if not isinstance(_days_inactive, int) or not (60 <= _days_inactive <= 66):
                 continue
             room_id = room_id_by_name.get(nm)
             if not room_id:
