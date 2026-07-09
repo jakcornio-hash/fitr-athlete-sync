@@ -1786,6 +1786,7 @@ def main():
     # with a comp booked were getting the "weekly snapshot" every single day.
     # Gate to Mondays, and widen the PR window to the past 7 days so the
     # snapshot covers the whole week rather than just Monday morning's rows.
+    emails_sent = 0  # referenced unconditionally by the Sync Log row below
     if TODAY.weekday() == 0:  # Monday
         archetype_rows = sheets.load_archetype_assessments()
         archetype_by_name = {
