@@ -676,33 +676,67 @@ def send_progress_page_email(smtp_from, smtp_password, to_addr, athlete_name, js
     _send_html_email_to(smtp_from, smtp_password, to_addr, subject, plain, html)
 
 
-def send_draft_reply_alerts(names, webhook_url=None):
-    """Send a Slack notification when AI draft replies are ready for review.
+def send_draft_reply_alerts(pending, programme_by_name=None, coach_channel_map=None,
+                            webhook_url=None):
+    """Nag the right coach about athletes waiting on a reply.
 
-    names: list of athlete names with pending draft replies.
-    Uses the provided webhook_url or falls back to SLACK_WEBHOOK_URL.
-    Returns True if sent successfully, False otherwise.
+    pending: list of (athlete_name, waiting_since_date) — waiting_since_date may
+    be None. Routes each athlete to their coach's own Slack channel when the bot
+    token and Coaches-tab mapping allow; anything unroutable goes to the main
+    webhook so no waiting athlete is ever silently dropped. The alert repeats
+    daily until someone actually replies — that's deliberate.
+    Returns the number of channels/webhooks notified.
     """
+    if not pending:
+        return 0
+    import datetime as _dt
+
+    def _fmt_line(nm, since):
+        if since:
+            days = (_dt.date.today() - since).days
+            if days >= 1:
+                return f"  • *{nm}* — waiting {days} day{'s' if days != 1 else ''} (since {since.strftime('%d %b')})"
+        return f"  • *{nm}* — messaged you today"
+
+    def _body(entries):
+        n = len(entries)
+        lines = [f"📨 *{n} athlete{'s' if n != 1 else ''} waiting on a reply from you:*", ""]
+        # longest-waiting first
+        lines += [_fmt_line(nm, since) for nm, since in
+                  sorted(entries, key=lambda e: e[1] or _dt.date.today())]
+        lines += ["", "Draft replies are ready: dashboard → Athletes → select athlete → Draft Reply."]
+        return "\n".join(lines)
+
+    by_coach_channel = {}
+    unrouted = []
+    for nm, since in pending:
+        channel = (coach_channel_map or {}).get((programme_by_name or {}).get(nm, ""))
+        if channel and config.SLACK_BOT_TOKEN:
+            by_coach_channel.setdefault(channel, []).append((nm, since))
+        else:
+            unrouted.append((nm, since))
+
+    sent = 0
+    for channel, entries in by_coach_channel.items():
+        try:
+            send_slack_message(channel, _body(entries))
+            sent += 1
+        except Exception as e:
+            print(f"  ! Draft reply nag failed → {channel}: {e}")
+            unrouted.extend(entries)  # don't lose them — fall back to the webhook
+
     url = webhook_url or config.SLACK_WEBHOOK_URL
-    if not url or not names:
-        return False
-    n = len(names)
-    name_list = "\n".join(f"  • {nm}" for nm in sorted(names))
-    text = (
-        f"📨 *{n} AI draft repl{'y' if n == 1 else 'ies'} ready for review*\n\n"
-        f"{name_list}\n\n"
-        f"Open the dashboard → Athletes tab → select athlete → scroll to Draft Reply."
-    )
-    try:
-        payload = json.dumps({"text": text}).encode()
-        req = urllib.request.Request(
-            url, data=payload, headers={"Content-Type": "application/json"}
-        )
-        urllib.request.urlopen(req, timeout=10, context=_SSL_CONTEXT)
-        return True
-    except Exception as e:
-        print(f"  ! Draft reply Slack alert failed: {e}")
-        return False
+    if unrouted and url:
+        try:
+            payload = json.dumps({"text": _body(unrouted)}).encode()
+            req = urllib.request.Request(
+                url, data=payload, headers={"Content-Type": "application/json"}
+            )
+            urllib.request.urlopen(req, timeout=10, context=_SSL_CONTEXT)
+            sent += 1
+        except Exception as e:
+            print(f"  ! Draft reply Slack alert failed: {e}")
+    return sent
 
 
 def send_digest(date, engagement_results, trend_results,

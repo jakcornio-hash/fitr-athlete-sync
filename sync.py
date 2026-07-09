@@ -211,9 +211,10 @@ def collect_challenges(fitr, existing_keys):
 
 
 def collect_chat_summaries(rooms, valid_names, fitr):
-    """Return ({athlete_name: summary_line}, {athlete_name: (room_id, thread_text)}).
+    """Return ({athlete_name: summary_line}, {athlete_name: (room_id, thread_text, msg_date)}).
 
-    Second dict contains athletes whose most recent message is FROM them (needs a reply).
+    Second dict contains athletes whose most recent message is FROM them (needs a reply);
+    msg_date is when that message arrived, so alerts can say how long they've waited.
     Accepts pre-fetched rooms to avoid a second API call.
     """
     chat_cutoff = TODAY - dt.timedelta(days=config.CHAT_LOOKBACK_DAYS)
@@ -233,7 +234,7 @@ def collect_chat_summaries(rooms, valid_names, fitr):
         candidates.append((room["id"], name, msg_date))
 
     out = {}
-    pending_reply_candidates = {}  # name -> (room_id, thread_text)
+    pending_reply_candidates = {}  # name -> (room_id, thread_text, msg_date)
     for room_id, name, msg_date in candidates[: config.MAX_CHAT_SUMMARIES]:
         try:
             messages = fitr.chat_messages(room_id, max_messages=40)
@@ -247,7 +248,7 @@ def collect_chat_summaries(rooms, valid_names, fitr):
         if messages:
             last_author = (messages[0].get("author") or {}).get("full_name", "").strip()
             if last_author.lower() == name.lower():
-                pending_reply_candidates[name] = (room_id, thread_text)
+                pending_reply_candidates[name] = (room_id, thread_text, msg_date)
         summary = summariser.summarise_conversation(name, thread_text, activity_date=msg_date)
         if summary:
             out[name] = f"[{TODAY.isoformat()} — chat] {summary}"
@@ -1074,20 +1075,23 @@ def main():
     sheets.append_rows(config.TAB_PR_LOG, bench_rows + chal_rows)
 
     # ---- draft replies for pending athlete messages ----
+    coach_channel_map = sheets.load_coaches()
     if pending_reply_candidates and not config.DRY_RUN:
-        drafted_names = []
-        for nm, (room_id, thread_text) in pending_reply_candidates.items():
+        drafted = []  # (name, waiting_since_date)
+        for nm, (room_id, thread_text, msg_date) in pending_reply_candidates.items():
             profile = data_by_name_all.get(nm, {})
             draft = summariser.draft_reply(nm, thread_text, profile_data=profile)
             if draft:
                 sheets.write_draft_reply(nm, room_id, draft)
-                drafted_names.append(nm)
-        if drafted_names:
-            print(f"Reply drafts generated: {len(drafted_names)}")
-            notifier.send_draft_reply_alerts(drafted_names)
+                drafted.append((nm, msg_date))
+        if drafted:
+            print(f"Reply drafts generated: {len(drafted)}")
+            notifier.send_draft_reply_alerts(
+                drafted, programme_by_name=programme_by_name,
+                coach_channel_map=coach_channel_map,
+            )
 
     # ---- per-coach Slack notifications ----
-    coach_channel_map = sheets.load_coaches()
     if coach_channel_map and (bench_rows or chal_rows):
         notified = notifier.send_coach_notifications(
             bench_rows, chal_rows, programme_by_name, coach_channel_map,
