@@ -567,6 +567,44 @@ class SheetsClient:
                     ws.update_cell(row_idx, notes_col + 1, combined)
                 return
 
+    # --------------------------------------------------------- exit autopsy (CRM)
+    def load_exit_autopsy(self):
+        """Read cancellation records from the CRM's Exit Autopsy tab.
+
+        Returns [{"name", "cancel_date", "outcome"}, ...] or [] if unavailable.
+        Parsed by position because the tab has a duplicate 'Cancel Date' header,
+        which get_all_records() refuses.
+        """
+        if not config.CRM_SHEET_ID:
+            return []
+        try:
+            sh = self.gc.open_by_key(config.CRM_SHEET_ID)
+            vals = sh.worksheet("Exit Autopsy").get_all_values()
+        except Exception as e:
+            print(f"  ! Exit Autopsy read failed: {e}")
+            return []
+        if not vals:
+            return []
+        header = vals[0]
+        try:
+            name_i = header.index("Athlete Name")
+            date_i = header.index("Cancel Date (dd-mm-yyyy)")  # first occurrence
+            outcome_i = header.index("Outcome")
+        except ValueError:
+            print("  ! Exit Autopsy tab missing expected columns")
+            return []
+        rows = []
+        for r in vals[1:]:
+            name = r[name_i].strip() if name_i < len(r) else ""
+            if not name:
+                continue
+            rows.append({
+                "name": name,
+                "cancel_date": r[date_i].strip() if date_i < len(r) else "",
+                "outcome": r[outcome_i].strip() if outcome_i < len(r) else "",
+            })
+        return rows
+
     # --------------------------------------------------------- intake form
     def load_intake_responses(self):
         """Read athlete intake Typeform responses from an external sheet."""

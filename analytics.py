@@ -1651,3 +1651,43 @@ def gym_credit_summary(gym_referrals, gym_directory, today=None):
 
     results.sort(key=lambda x: x["active_count"], reverse=True)
     return results
+
+
+# ─────────────────────────── Cancellations (CRM Exit Autopsy) ───────────────
+
+_REJOIN_GRACE_DAYS = 14  # logs within this window after cancelling are just final sessions
+
+
+def cancelled_athletes(exit_rows, pr_records):
+    """Determine which athletes have genuinely left, from the CRM Exit Autopsy tab.
+
+    An athlete counts as cancelled when they appear in Exit Autopsy with any
+    outcome other than "Continue on as normal" (a save). Safeguard: anyone who
+    has logged training more than _REJOIN_GRACE_DAYS after their cancel date has
+    evidently come back — they are NOT excluded, and are returned separately so
+    the sync can prompt someone to update the CRM.
+
+    Returns (cancelled_names_lower: set, rejoined_names: sorted list).
+    """
+    last_log_by_name = {}
+    for rec in (pr_records or []):
+        nm = str(rec.get("Athlete Name", "")).strip().lower()
+        d = _parse_date(str(rec.get("Date", "")))
+        if nm and d and (nm not in last_log_by_name or d > last_log_by_name[nm]):
+            last_log_by_name[nm] = d
+
+    cancelled = set()
+    rejoined = []
+    for row in (exit_rows or []):
+        name = str(row.get("name", "")).strip()
+        outcome = str(row.get("outcome", "")).strip().lower()
+        if not name or outcome == "continue on as normal":
+            continue
+        nm_lower = name.lower()
+        cancel_date = _parse_date(str(row.get("cancel_date", "")))
+        last_log = last_log_by_name.get(nm_lower)
+        if cancel_date and last_log and (last_log - cancel_date).days > _REJOIN_GRACE_DAYS:
+            rejoined.append(name)
+            continue
+        cancelled.add(nm_lower)
+    return cancelled, sorted(set(rejoined))

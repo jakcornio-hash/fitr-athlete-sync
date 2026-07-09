@@ -1097,17 +1097,33 @@ def main():
 
     # ---- analytics: trends + engagement + milestones + consistency ----
     pr_records = sheets.read_records(config.TAB_PR_LOG)
+
+    # Cancelled athletes (CRM Exit Autopsy) are excluded from all engagement
+    # flags and athlete-facing messages — someone who consciously cancelled
+    # shouldn't be counted as "at risk" or get a check-in DM months later.
+    # Anyone in Exit Autopsy who has logged training well after their cancel
+    # date has evidently come back and is NOT excluded.
+    exit_rows = sheets.load_exit_autopsy()
+    cancelled_names_lower, rejoined_names = analytics.cancelled_athletes(exit_rows, pr_records)
+    active_athletes = [a for a in athletes if a["name"].lower() not in cancelled_names_lower]
+    if cancelled_names_lower:
+        print(f"Cancelled athletes excluded from flags/messages (Exit Autopsy): "
+              f"{len(athletes) - len(active_athletes)} of {len(athletes)} on roster")
+    if rejoined_names:
+        print(f"  ! In Exit Autopsy but training again — NOT excluded, update the CRM: "
+              f"{', '.join(rejoined_names)}")
+
     trend_results = analytics.trend_analysis(pr_records)
     # Athletes contacted in this sync run count as recently reached — don't flag them
     last_contact_by_name = {name: TODAY for name in chat_notes}
     engagement_results = analytics.engagement_check(
-        pr_records, athletes,
+        pr_records, active_athletes,
         threshold_days=config.ENGAGEMENT_THRESHOLD_DAYS,
         last_contact_by_name=last_contact_by_name,
     )
     milestones = analytics.milestone_detection(bench_rows)
-    consistency_wins = analytics.consistency_check(pr_records, athletes)
-    streak_hits = analytics.daily_streak_check(pr_records, athletes)
+    consistency_wins = analytics.consistency_check(pr_records, active_athletes)
+    streak_hits = analytics.daily_streak_check(pr_records, active_athletes)
     rec_alert_rows = analytics.recovery_alerts(rec_by_name)
 
     # ---- weekly PB roundup (Mondays): wins from the past 7 days ----
@@ -1128,6 +1144,8 @@ def main():
             _v  = str(_rec.get("Value", "")).strip()
             _p  = str(_rec.get("Previous Value", "")).strip()
             if not _nm or not _b or not _v or _nm in bespoke_names:
+                continue
+            if _nm.lower() in cancelled_names_lower:
                 continue
             if not room_id_by_name.get(_nm):
                 continue
@@ -1461,7 +1479,7 @@ def main():
 
         from collections import defaultdict
         athletes_by_coach = defaultdict(list)
-        for a in athletes:
+        for a in active_athletes:
             prog = programme_by_name.get(a["name"], "")
             if prog:
                 athletes_by_coach[prog].append(a["name"])
@@ -1500,7 +1518,7 @@ def main():
                 first_log_by_name[nm] = d
     anniversaries_sent = 0
     summit_flag_names = []
-    for a in athletes:
+    for a in active_athletes:
         nm = a["name"]
         if nm in bespoke_names:
             continue
@@ -1573,7 +1591,7 @@ def main():
 
     # ---- new athlete onboarding (first log == today) ----
     onboarding_sent = 0
-    for a in athletes:
+    for a in active_athletes:
         nm = a["name"]
         if nm in bespoke_names:
             continue
@@ -1626,7 +1644,7 @@ def main():
     comp_msgs_sent = 0
     for row in competition_rows:
         nm = str(row.get("Athlete Name", "")).strip()
-        if not nm or nm in bespoke_names:
+        if not nm or nm in bespoke_names or nm.lower() in cancelled_names_lower:
             continue
         comp_nm = str(row.get("Competition Name", "")).strip() or "your competition"
         comp_type = str(row.get("Type", "A")).strip().upper()
@@ -1686,7 +1704,7 @@ def main():
     post_comp_msgs_sent = 0
     for row in competition_rows:
         nm = str(row.get("Athlete Name", "")).strip()
-        if not nm or nm in bespoke_names:
+        if not nm or nm in bespoke_names or nm.lower() in cancelled_names_lower:
             continue
         comp_nm = str(row.get("Competition Name", "")).strip() or "your competition"
         comp_type = str(row.get("Type", "A")).strip().upper()
@@ -1739,7 +1757,7 @@ def main():
     comp_result_msgs_sent = 0
     for row in competition_rows:
         nm = str(row.get("Athlete Name", "")).strip()
-        if not nm or nm in bespoke_names:
+        if not nm or nm in bespoke_names or nm.lower() in cancelled_names_lower:
             continue
         result = str(row.get("Result", "")).strip()
         comp_nm = str(row.get("Competition Name", "")).strip()
@@ -1806,7 +1824,10 @@ def main():
             if _nm and _b:
                 # same positional shape as bench_rows: [date, name, email, bench, value]
                 _weekly_pr_rows.append([str(_rec.get("Date", "")), _nm, "", _b, _v])
-        non_bespoke_email_by_name = {k: v for k, v in email_by_name.items() if k not in bespoke_names}
+        non_bespoke_email_by_name = {
+            k: v for k, v in email_by_name.items()
+            if k not in bespoke_names and k.lower() not in cancelled_names_lower
+        }
         emails_sent = notifier.send_all_athlete_progress_emails(
             _weekly_pr_rows, consistency_wins, competition_rows, non_bespoke_email_by_name,
             archetype_by_name=archetype_by_name,
@@ -1823,6 +1844,7 @@ def main():
         monthly_data_recs = [
             r for r in monthly_data_recs
             if str(r.get("Full Name", "")).strip() not in bespoke_names
+            and str(r.get("Full Name", "")).strip().lower() not in cancelled_names_lower
         ]
         monthly_sent = notifier.send_monthly_athlete_reports(monthly_data_recs, email_by_name, pr_records)
         if monthly_sent:
@@ -1849,7 +1871,7 @@ def main():
         _mfitr_notes: dict = {}
         _mfitr_sent = 0
         for _nm, _sess_dates in _month_sessions.items():
-            if _nm in bespoke_names:
+            if _nm in bespoke_names or _nm.lower() in cancelled_names_lower:
                 continue
             _room = room_id_by_name.get(_nm)
             if not _room:

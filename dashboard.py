@@ -145,7 +145,20 @@ def load_all():
     except Exception:
         pass
 
-    return pr_records, athletes, rec_latest, data_records, archetype_rows, competition_rows
+    # Cancelled athletes (CRM Exit Autopsy) come off the working roster so
+    # they don't appear in at-risk lists, engagement flags, or athlete tables.
+    # Anyone who has logged training well after their cancel date is treated
+    # as rejoined and kept. data_records stay intact (history/profiles remain).
+    cancelled_names = set()
+    try:
+        exit_rows = sheets.load_exit_autopsy()
+        cancelled_names, _rejoined = analytics.cancelled_athletes(exit_rows, pr_records)
+        if cancelled_names:
+            athletes = [a for a in athletes if a["name"].lower() not in cancelled_names]
+    except Exception:
+        pass
+
+    return pr_records, athletes, rec_latest, data_records, archetype_rows, competition_rows, cancelled_names
 
 
 def run_analytics(pr_records, athletes, rec_latest, data_records=None, competition_rows=None):  # noqa: too-many-locals
@@ -6913,7 +6926,7 @@ def page_marketing(pr_records, grandslam_results, data_records, athletes,
 
 # ── Finance ───────────────────────────────────────────────────────────────────
 
-def page_finance(data_records, pr_records, athletes):
+def page_finance(data_records, pr_records, athletes, cancelled_names=None):
     """Money view — MRR, revenue at risk, gym credits payable, net position."""
     st.header("💷 Finance")
     st.caption(
@@ -6922,10 +6935,17 @@ def page_finance(data_records, pr_records, athletes):
     )
 
     prices = getattr(config, "SUBSCRIPTION_PRICES", {})
+    # Cancelled athletes (CRM Exit Autopsy) are gone revenue, not at-risk
+    # revenue — exclude them from MRR entirely rather than counting their
+    # old subscription as "inactive" money.
+    _cancelled = cancelled_names or set()
     data_by_nm = {
         str(r.get("Full Name", "")).strip(): r for r in (data_records or [])
         if str(r.get("Full Name", "")).strip()
+        and str(r.get("Full Name", "")).strip().lower() not in _cancelled
     }
+    if _cancelled:
+        st.caption(f"ℹ️ {len(_cancelled)} cancelled athlete(s) from the CRM Exit Autopsy are excluded from these numbers.")
 
     # Last log date per athlete
     last_log_by_nm = {}
@@ -7532,12 +7552,19 @@ def main():
         st.markdown("### 📱 Phone view")
         st.caption("Bookmark this for a fast morning check-in on your phone:")
         st.code("?mode=daily", language=None)
+        if st.session_state.get("_cancelled_count"):
+            st.divider()
+            st.caption(
+                f"🚪 {st.session_state['_cancelled_count']} cancelled athlete(s) "
+                f"(CRM Exit Autopsy) are hidden from all views and stats."
+            )
 
     st.title("🏋️ JST Compete — Coaching Dashboard")
     st.caption(f"Data refreshes every 15 minutes · Last loaded: {dt.datetime.now().strftime('%H:%M')}")
 
     with st.spinner("Loading..."):
-        pr_records, athletes, rec_latest, data_records, archetype_rows, competition_rows = load_all()
+        pr_records, athletes, rec_latest, data_records, archetype_rows, competition_rows, cancelled_names = load_all()
+        st.session_state["_cancelled_count"] = len(cancelled_names)
         trend_results, engagement_results, consistency_wins, rec_alert_rows, rec_by_name, comp_results = run_analytics(
             pr_records, athletes, rec_latest, data_records, competition_rows=competition_rows
         )
@@ -7628,7 +7655,7 @@ def main():
     with tabs[16]:
         page_gym_referrals(athletes=athletes)
     with tabs[17]:
-        page_finance(data_records, pr_records, athletes)
+        page_finance(data_records, pr_records, athletes, cancelled_names=cancelled_names)
     with tabs[18]:
         page_sync_health()
     with tabs[19]:
