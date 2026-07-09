@@ -2,8 +2,12 @@ name: Daily Fitr Sync
 
 on:
   schedule:
-    # 06:00 UTC daily (07:00 BST / 06:00 GMT)
-    - cron: "0 6 * * *"
+    # Tue–Sun: 06:00 UTC (07:00 BST / 06:00 GMT)
+    - cron: "0 6 * * 0,2-6"
+    # Monday: 08:00 UTC (09:00 BST) — the weekly roundup DMs, progress emails,
+    # and offboarding batch all fire on Mondays, so run later with eyes on it.
+    # NOTE: GitHub cron is UTC; in winter this lands 08:00 GMT, an hour earlier.
+    - cron: "0 8 * * 1"
   workflow_dispatch:
     # Allow manual trigger from GitHub Actions tab
 
