@@ -1753,20 +1753,38 @@ def main():
     if post_comp_replies:
         print(f"Post-competition responses captured: {post_comp_replies}")
 
-    # ---- weekly athlete progress emails ----
-    archetype_rows = sheets.load_archetype_assessments()
-    archetype_by_name = {
-        str(r.get("Athlete Name", "")).strip(): r
-        for r in archetype_rows
-        if str(r.get("Athlete Name", "")).strip()
-    }
-    non_bespoke_email_by_name = {k: v for k, v in email_by_name.items() if k not in bespoke_names}
-    emails_sent = notifier.send_all_athlete_progress_emails(
-        bench_rows, consistency_wins, competition_rows, non_bespoke_email_by_name,
-        archetype_by_name=archetype_by_name,
-    )
-    if emails_sent:
-        print(f"Athlete weekly progress emails sent: {emails_sent}")
+    # ---- weekly athlete progress emails (Mondays only) ----
+    # The sync runs daily, but this email fired every run — and because
+    # "has an upcoming competition" stays true for weeks at a time, athletes
+    # with a comp booked were getting the "weekly snapshot" every single day.
+    # Gate to Mondays, and widen the PR window to the past 7 days so the
+    # snapshot covers the whole week rather than just Monday morning's rows.
+    if TODAY.weekday() == 0:  # Monday
+        archetype_rows = sheets.load_archetype_assessments()
+        archetype_by_name = {
+            str(r.get("Athlete Name", "")).strip(): r
+            for r in archetype_rows
+            if str(r.get("Athlete Name", "")).strip()
+        }
+        _week_cutoff = TODAY - dt.timedelta(days=7)
+        _weekly_pr_rows = []
+        for _rec in pr_records:
+            _d = _parse_date(str(_rec.get("Date", "")))
+            if not _d or _d < _week_cutoff:
+                continue
+            _nm = str(_rec.get("Athlete Name", "")).strip()
+            _b  = str(_rec.get("Benchmark Name", "")).strip()
+            _v  = str(_rec.get("Value", "")).strip()
+            if _nm and _b:
+                # same positional shape as bench_rows: [date, name, email, bench, value]
+                _weekly_pr_rows.append([str(_rec.get("Date", "")), _nm, "", _b, _v])
+        non_bespoke_email_by_name = {k: v for k, v in email_by_name.items() if k not in bespoke_names}
+        emails_sent = notifier.send_all_athlete_progress_emails(
+            _weekly_pr_rows, consistency_wins, competition_rows, non_bespoke_email_by_name,
+            archetype_by_name=archetype_by_name,
+        )
+        if emails_sent:
+            print(f"Athlete weekly progress emails sent: {emails_sent}")
 
     # ---- monthly athlete reports (fires on the 1st of each month) ----
     if TODAY.day == 1:
