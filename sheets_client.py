@@ -593,6 +593,22 @@ class SheetsClient:
         except ValueError:
             print("  ! Exit Autopsy tab missing expected columns")
             return []
+
+        def _opt(label):
+            """Optional column index — None if the column doesn't exist."""
+            try:
+                return header.index(label)
+            except ValueError:
+                return None
+
+        email_i = _opt("Email")
+        track_i = _opt("Track/ Bias")
+        bucket_i = _opt("Bucket (Reason)")
+        reason_i = _opt("Free-text Reason")
+
+        def _cell(r, i):
+            return r[i].strip() if i is not None and i < len(r) else ""
+
         rows = []
         for r in vals[1:]:
             name = r[name_i].strip() if name_i < len(r) else ""
@@ -600,8 +616,12 @@ class SheetsClient:
                 continue
             rows.append({
                 "name": name,
-                "cancel_date": r[date_i].strip() if date_i < len(r) else "",
-                "outcome": r[outcome_i].strip() if outcome_i < len(r) else "",
+                "cancel_date": _cell(r, date_i),
+                "outcome": _cell(r, outcome_i),
+                "email": _cell(r, email_i),
+                "track": _cell(r, track_i),
+                "bucket": _cell(r, bucket_i),
+                "reason_text": _cell(r, reason_i),
             })
         return rows
 

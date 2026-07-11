@@ -252,6 +252,15 @@ def _load_recovery_all_cached():
         return {}
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_exit_autopsy_cached():
+    """Exit Autopsy rows from the CRM. TTL=10min."""
+    try:
+        return get_sheets().load_exit_autopsy()
+    except Exception:
+        return []
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _get_fitr_room_ids():
     """Return {athlete_name: room_id} from Fitr chat rooms. Cached 1hr."""
@@ -3872,7 +3881,7 @@ def page_crm(athletes, engagement_results, data_records, pr_records=None):
     crm_tabs = st.tabs([
         "🔄 Lifecycle", "🚀 Pipeline", "👥 Rosters", "⚠️ Discrepancies", "✏️ Bulk Reassign",
         "💰 Revenue", "📨 Msg Effectiveness", "📊 Coach Stats", "🔍 Duplicates",
-        "🌱 Onboarding",
+        "🌱 Onboarding", "🚪 Former Athletes",
     ])
 
     with crm_tabs[0]:
@@ -3895,6 +3904,8 @@ def page_crm(athletes, engagement_results, data_records, pr_records=None):
         _crm_dedup(athletes, data_records, pr_records or [])
     with crm_tabs[9]:
         _crm_onboarding(athletes, pr_records or [], data_records)
+    with crm_tabs[10]:
+        _crm_former_athletes(pr_records or [], data_records)
 
 
 def _crm_message_effectiveness():
@@ -4107,6 +4118,126 @@ def _crm_onboarding(athletes, pr_records, data_records):
             st.caption(f"📥 {len(intake)} intake form response(s) on record.")
     except Exception:
         pass
+
+
+def _crm_former_athletes(pr_records, data_records):
+    """Former athletes (CRM Exit Autopsy) — hidden from active views, shown here for win-back."""
+    st.markdown("### 🚪 Former Athletes")
+    st.caption(
+        "Everyone recorded as cancelled in the CRM's Exit Autopsy tab. They're excluded "
+        "from all active views, flags, and MRR — this is where they live now. "
+        "Their training history and coaching notes are preserved."
+    )
+
+    exit_rows = _load_exit_autopsy_cached()
+    if not exit_rows:
+        st.info("No Exit Autopsy records found in the CRM.")
+        return
+
+    cancelled_lower, rejoined = analytics.cancelled_athletes(exit_rows, pr_records or [])
+
+    # Per-athlete training stats from the full PR Log (history is preserved)
+    from collections import defaultdict, Counter
+    first_log, last_log = {}, {}
+    session_days = defaultdict(set)
+    for rec in (pr_records or []):
+        nm = str(rec.get("Athlete Name", "")).strip().lower()
+        d = _parse_date(str(rec.get("Date", "")))
+        if not nm or not d:
+            continue
+        if nm not in first_log or d < first_log[nm]:
+            first_log[nm] = d
+        if nm not in last_log or d > last_log[nm]:
+            last_log[nm] = d
+        session_days[nm].add(d)
+
+    rows = []
+    bucket_counts = Counter()
+    for r in exit_rows:
+        nm = r["name"]
+        nml = nm.lower()
+        if nml not in cancelled_lower:
+            continue  # saves and rejoiners aren't "former"
+        cancel_d = _parse_date(r.get("cancel_date", ""))
+        days_since_cancel = (TODAY - cancel_d).days if cancel_d else None
+        fl, ll = first_log.get(nml), last_log.get(nml)
+        tenure_days = (ll - fl).days if fl and ll else None
+        bucket = r.get("bucket", "") or "—"
+        bucket_counts[bucket] += 1
+        # Win-back candidates: invested athletes (90+ day tenure) who left recently
+        winback = bool(tenure_days and tenure_days >= 90
+                       and days_since_cancel is not None and days_since_cancel <= 90)
+        rows.append({
+            "": "⭐" if winback else "",
+            "Athlete": nm,
+            "Cancelled": cancel_d.isoformat() if cancel_d else r.get("cancel_date", ""),
+            "Days Ago": days_since_cancel if days_since_cancel is not None else "—",
+            "Reason": bucket,
+            "Detail": r.get("reason_text", ""),
+            "Track": r.get("track", ""),
+            "Tenure (days)": tenure_days if tenure_days is not None else "—",
+            "Sessions": len(session_days.get(nml, set())) or "—",
+            "Last Log": ll.isoformat() if ll else "never",
+            "_cancel_sort": cancel_d.isoformat() if cancel_d else "",
+        })
+
+    n_total = len(rows)
+    n_30 = sum(1 for r in rows if isinstance(r["Days Ago"], int) and r["Days Ago"] <= 30)
+    n_90 = sum(1 for r in rows if isinstance(r["Days Ago"], int) and r["Days Ago"] <= 90)
+    n_winback = sum(1 for r in rows if r[""] == "⭐")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Former Athletes", n_total)
+    c2.metric("Cancelled — last 30d", n_30)
+    c3.metric("Cancelled — last 90d", n_90)
+    c4.metric("⭐ Win-back Candidates", n_winback,
+              help="90+ days of training history and cancelled within the last 90 days — "
+                   "invested athletes worth a personal win-back message.")
+
+    # Why people leave
+    if bucket_counts:
+        _reason_df = pd.DataFrame(
+            [{"Reason": b, "Athletes": c} for b, c in bucket_counts.most_common()]
+        )
+        chart = (
+            alt.Chart(_reason_df)
+            .mark_bar()
+            .encode(
+                x=alt.X("Athletes:Q"),
+                y=alt.Y("Reason:N", sort="-x", title=""),
+                tooltip=["Reason:N", "Athletes:Q"],
+            )
+            .properties(height=max(120, len(bucket_counts) * 32), title="Cancellation reasons")
+        )
+        st.altair_chart(chart, width='stretch')
+
+    # Table — most recent cancellations first, win-back stars at the top
+    _q = st.text_input("🔍 Search former athletes", key="former_search",
+                       placeholder="Name, reason, or track…")
+    display = sorted(rows, key=lambda r: r["_cancel_sort"], reverse=True)
+    display.sort(key=lambda r: r[""] != "⭐")  # stable: stars first, each group newest-first
+    if _q:
+        _ql = _q.lower()
+        display = [r for r in display
+                   if _ql in r["Athlete"].lower() or _ql in r["Reason"].lower()
+                   or _ql in r["Detail"].lower() or _ql in r["Track"].lower()]
+    for r in display:
+        r.pop("_cancel_sort", None)
+    if display:
+        st.dataframe(pd.DataFrame(display), width='stretch', hide_index=True)
+    else:
+        st.info("No former athletes match that search.")
+
+    if rejoined:
+        with st.expander(f"↩️ In Exit Autopsy but training again ({len(rejoined)}) — update the CRM"):
+            st.caption(
+                "These athletes have logged training well after their recorded cancel date, "
+                "so they're treated as active (not excluded). Set their Outcome to "
+                "\"Continue on as normal\" in the Exit Autopsy tab, or delete the row, "
+                "to clear this list."
+            )
+            for nm in rejoined:
+                st.markdown(f"- {nm}")
 
 
 def _crm_lifecycle(athletes, engagement_results, data_records, crm_by_name):
