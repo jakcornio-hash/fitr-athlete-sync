@@ -719,11 +719,11 @@ def auto_onboard_new_athletes(sheets, rooms, fitr=None, room_id_by_name=None,
                 continue
             first = name.split()[0]
             intake_msg = (
-                f"Hey {first}, you've been added to the JST Compete coaching system — good to have you in.\n\n"
+                f"Hey {first}, you've been added to the JST Compete coaching system. Good to have you in.\n\n"
                 f"Two things to get started:\n\n"
-                f"1. Athlete intake form (3 minutes — tells me everything I need to set your programming up properly):\n"
+                f"1. Athlete intake form (3 minutes, tells me everything I need to set your programming up properly):\n"
                 f"https://jstcompete.typeform.com/to/Q1tL7MmR\n\n"
-                f"2. Weekly recovery check-in — same link. Once you're training, do this each week. "
+                f"2. Weekly recovery check-in, same link. Once you're training, do this each week. "
                 f"It takes 2 minutes and is how I manage your load week to week.\n\n"
                 f"Message me here anytime."
             )
@@ -1147,6 +1147,8 @@ def main():
                 continue
             if _nm.lower() in cancelled_names_lower:
                 continue
+            if not config.is_achievement_benchmark(_b):
+                continue  # heart rate, bodyweight, food/macros, steps — data, not a PB
             if not room_id_by_name.get(_nm):
                 continue
             _key = (_nm, _b)
@@ -1162,13 +1164,15 @@ def main():
             else:
                 _wins_by_name.setdefault(_nm, []).append(("first", _b, _v, _p))
 
+    # Fallbacks only — used if the Claude message generator is unavailable.
+    # No em dashes; each ends with a genuine question.
     _streak_msgs = {
-        7:  "{first}, 7 days in a row. Fair play. Keep it going.",
-        14: "{first}, two weeks straight, no misses. Nice work.",
-        21: "{first}, 21 days in a row. That's a proper run. Keep going.",
-        30: "{first}, 30 days straight — a full month. Strong.",
-        60: "{first}, 60 days in a row. That's serious consistency.",
-        90: "{first}, 90 days straight. Not many people do that. Well in.",
+        7:  "{first}, 7 days on the bounce. Fair play. What's making it easier to show up?",
+        14: "{first}, two weeks straight, no misses. What's driving it at the moment?",
+        21: "{first}, 21 days in a row. Proper run that. How's the body feeling?",
+        30: "{first}, 30 days straight. A full month. What's changed for you?",
+        60: "{first}, 60 days in a row. Serious consistency. Still enjoying it?",
+        90: "{first}, 90 days straight. Not many people manage that. What's it taught you?",
     }
     _pending_streaks = {}  # name -> streak_days, guards already applied
     if streak_hits and not config.DRY_RUN:
@@ -1188,6 +1192,9 @@ def main():
     _streak_notes = {}
     _streak_sent = 0
 
+    def _tidy_bench(b):
+        return str(b).replace(" - ", " ")
+
     if _wins_by_name:
         congrats_sent = 0
         for name, wins in _wins_by_name.items():
@@ -1197,27 +1204,39 @@ def main():
             pb_wins = [w for w in wins if w[0] == "pb"]
             first_wins = [w for w in wins if w[0] == "first"]
 
+            # Build a plain-English situation for the Claude generator, plus a
+            # safe tone-compliant fallback used if the API is unavailable.
             if goal_wins:
                 _, bench, value, _ = goal_wins[0]
-                msg = f"{first}, {bench}: {value} — that's the goal you set. Nice work."
+                situation = f'Goal hit, {first} reached their goal on "{bench}" at {value}.'
+                fallback = f"{first}, {_tidy_bench(bench)} at {value}. That's the goal you set. How does it feel?"
             elif len(wins) == 1 and pb_wins:
                 _, bench, value, prev = pb_wins[0]
-                direction = "down" if analytics.is_lower_better(bench) else "up"
-                msg = f"{first}, {bench} {direction} to {value} (from {prev}). Nice."
+                direction = "down to" if analytics.is_lower_better(bench) else "up to"
+                situation = f'PB, {first} improved "{bench}" from {prev} to {value}.'
+                fallback = f"{first}, {_tidy_bench(bench)} {direction} {value} from {prev}. What's clicked for you there?"
             elif len(wins) == 1 and first_wins:
                 _, bench, value, _ = first_wins[0]
-                msg = f"{first}, first result logged for {bench}: {value}. Good starting point."
+                situation = f'First result, {first} logged "{bench}" at {value}.'
+                fallback = f"{first}, first {_tidy_bench(bench)} number in at {value}. How did it feel?"
             elif pb_wins:
-                items = ", ".join(f"{b} to {v}" for _, b, v, _ in pb_wins[:4])
-                more = f" (+{len(pb_wins) - 4} more)" if len(pb_wins) > 4 else ""
-                msg = f"{first}, good week — {items}{more}. Nice."
+                items = "; ".join(f'"{b}" {v} (from {p})' for _, b, v, p in pb_wins[:4])
+                situation = f"Multiple PBs this week, {first} improved: {items}."
+                fb_items = ", ".join(f"{_tidy_bench(b)} to {v}" for _, b, v, _ in pb_wins[:4])
+                fallback = f"{first}, good week. {fb_items}. What's been working?"
             else:
-                items = ", ".join(f"{b}: {v}" for _, b, v, _ in wins[:4])
-                msg = f"{first}, results logged: {items}."
+                items = "; ".join(f'"{b}" {v}' for _, b, v, _ in wins[:4])
+                situation = f"First results logged, {first}: {items}."
+                fb_items = ", ".join(f"{_tidy_bench(b)}: {v}" for _, b, v, _ in wins[:4])
+                fallback = (f"{first}, first results logged: {fb_items}. Good to look back on. "
+                            f"Give us a shout if you want any pointers.")
 
             _ride_along_streak = _pending_streaks.get(name)
             if _ride_along_streak:
-                msg += f" And {_ride_along_streak} days in a row — keep it going."
+                situation += f" Also on a {_ride_along_streak}-day training streak this week."
+                fallback += f" And {_ride_along_streak} days on the bounce, keep it going."
+
+            msg = summariser.athlete_message(situation, fallback)
 
             try:
                 fitr.send_chat_message(room_id, msg)
@@ -1243,7 +1262,9 @@ def main():
         room_id = room_id_by_name.get(nm)
         first = nm.split()[0]
         note_key = f"streak_{streak_days}d"
-        msg = _streak_msgs[streak_days].format(first=first)
+        _streak_situation = f"Streak, {first} has logged {streak_days} training days in a row."
+        msg = summariser.athlete_message(
+            _streak_situation, _streak_msgs[streak_days].format(first=first))
         try:
             fitr.send_chat_message(room_id, msg)
             _streak_notes[nm] = f"[{TODAY.isoformat()} — {note_key}]"
@@ -1332,7 +1353,11 @@ def main():
             if not room_id:
                 continue
             first = nm.split()[0]
-            msg = f"{first}, haven't seen you in a while — no pressure, just checking in. Everything alright?"
+            _off_situation = (f"Re-engagement, {first} has not logged any training in about "
+                              f"{_days_inactive} days. Gentle, low-pressure check-in.")
+            _off_fallback = (f"{first}, haven't seen you in a while, no pressure, just checking in. "
+                             f"Everything alright?")
+            msg = summariser.athlete_message(_off_situation, _off_fallback)
             try:
                 fitr.send_chat_message(room_id, msg)
                 offboarding_sent += 1
@@ -1401,7 +1426,7 @@ def main():
             if _status == "Pending" and not _join_ack:
                 if _referred_full and _pr_dates_ref.get(_referred_full):
                     _referred_first = _referred_full.split()[0]
-                    _msg = f"{_referrer_first}, {_referred_first} just joined — nice, thanks for the introduction. How do you know them?"
+                    _msg = f"{_referrer_first}, {_referred_first} just joined. Nice one, thanks for the introduction. How do you know them?"
                     if not config.DRY_RUN:
                         try:
                             _sent = _send_referral_msg(_msg)
@@ -1430,7 +1455,7 @@ def main():
                     if _last_log and (TODAY - _last_log).days <= 30:
                         _referred_first = (_referred_full or _referred).split()[0]
                         _msg = (
-                            f"{_referrer_first}, {_referred_first}'s stuck around after their trial — nice. "
+                            f"{_referrer_first}, {_referred_first}'s stuck around after their trial. Nice one. "
                             f"Your free month's on its way, sorted this week."
                         )
                         if not config.DRY_RUN:
@@ -1546,8 +1571,8 @@ def main():
             )
         elif days_training == 180:
             msg = (
-                f"{first}, six months in. We send a JST t-shirt at this point — "
-                f"drop your address and size here: {_tshirt_url}\n\n"
+                f"{first}, six months in. We send a JST t-shirt at this point. "
+                f"Drop your address and size here: {_tshirt_url}\n\n"
                 f"If you know anyone who'd benefit from training with us, send them our way."
             )
         elif days_training == 270:
@@ -1556,7 +1581,7 @@ def main():
             summit_flag_names.append(nm)
             msg = (
                 f"{first}, one year since your first log ({first_log.strftime('%d %b %Y')}). "
-                f"That's a proper milestone — we want to get you to our next training summit, on us. "
+                f"That's a proper milestone. We want to get you to our next training summit, on us. "
                 f"I'll send details when it's confirmed."
             )
         elif days_training == 730:
@@ -1603,9 +1628,9 @@ def main():
             continue
         first = nm.split()[0]
         msg = (
-            f"{first}, first log's in — nice one. Two things to help me coach you well from day one:\n\n"
+            f"{first}, first log's in. Nice one. Two things to help me coach you well from day one:\n\n"
             f"1. Log every session as soon as you finish, even a quick note. Makes a big difference.\n"
-            f"2. Weekly recovery check-in: https://jstcompete.typeform.com/to/Q1tL7MmR — "
+            f"2. Weekly recovery check-in: https://jstcompete.typeform.com/to/Q1tL7MmR. "
             f"2 minutes, helps me manage your load week to week.\n\n"
             f"Message me here anytime."
         )
@@ -1624,19 +1649,19 @@ def main():
     # A comp milestones: send once on exact day (sync runs daily)
     _COMP_MSG_DAYS = {
         70: ("10 weeks out",
-             "Hey {first} — 10 weeks to {comp} starts {today}. "
+             "Hey {first}, 10 weeks to {comp} starts {today}. "
              "Everything from here is pointed at that day. "
-             "Before I lock in your programme — what does a successful performance look like to you at {comp}?"),
+             "Before I lock in your programme, what does a successful performance look like to you at {comp}?"),
         21: ("3 weeks out",
-             "Hey {first} — three weeks to {comp}. "
-             "The preparation is in — this is the sharpening phase now. "
+             "Hey {first}, three weeks to {comp}. "
+             "The preparation is in. This is the sharpening phase now. "
              "What's your headspace going into the final stretch?"),
         7:  ("race week",
-             "Hey {first} — {comp} is seven days away. "
+             "Hey {first}, {comp} is seven days away. "
              "The work is done. "
              "How are you feeling going into race week?"),
         1:  ("day before",
-             "Hey {first} — {comp} is tomorrow. "
+             "Hey {first}, {comp} is tomorrow. "
              "I've watched what you've put into this prep and you've done the work. "
              "How are you feeling going into the day?"),
     }
@@ -1883,10 +1908,10 @@ def main():
             _first    = _nm.split()[0]
             _pr_line  = (
                 f" {_prs[0][0]} came in at {_prs[0][1]}." if len(_prs) == 1
-                else f" You hit {len(_prs)} results — {_prs[0][0]} at {_prs[0][1]} stands out."
+                else f" You hit {len(_prs)} results, {_prs[0][0]} at {_prs[0][1]} stands out."
             ) if _prs else ""
             _msg = (
-                f"{_first}, {_month_label} done —{_pr_line} "
+                f"{_first}, {_month_label} done.{_pr_line} "
                 f"{_sessions} session{'s' if _sessions != 1 else ''} logged. Solid month."
             )
             try:

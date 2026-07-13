@@ -97,6 +97,27 @@ TAB_SUMMIT_TICKETS = "Summit Tickets"
 TAB_GYM_DIRECTORY = "Gym Directory"
 TAB_GYM_REFERRALS = "Gym Referrals"
 
+# Benchmarks that are data logs, not achievements — never trigger a "well done"
+# message or appear in the weekly PR roundup. Matched case-insensitively against
+# the exact benchmark name; NON_ACHIEVEMENT_KEYWORDS also catches variants.
+NON_ACHIEVEMENT_BENCHMARKS = {
+    "max heart rate", "bodyweight", "body weight", "resting heart rate",
+    "carbs", "fat (macros)", "protein", "total calories", "total daily steps",
+}
+NON_ACHIEVEMENT_KEYWORDS = ("heart rate", "bodyweight", "body weight",
+                            "macros", "calories", "daily steps")
+
+
+def is_achievement_benchmark(name):
+    """False for data-log benchmarks (heart rate, bodyweight, food/macros, steps)
+    that should never trigger a congrats message or appear in the PR roundup."""
+    n = str(name or "").strip().lower()
+    if not n:
+        return False
+    if n in NON_ACHIEVEMENT_BENCHMARKS:
+        return False
+    return not any(k in n for k in NON_ACHIEVEMENT_KEYWORDS)
+
 # Recovery survey (Typeform sheet — separate from main athlete sheet)
 RECOVERY_SHEET_ID = _get("RECOVERY_SHEET_ID", "")
 RECOVERY_TAB = "New form"

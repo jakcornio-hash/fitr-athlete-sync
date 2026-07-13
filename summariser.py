@@ -78,6 +78,79 @@ _BRIEF_SYSTEM = (
 )
 
 
+_ATHLETE_MSG_SYSTEM = _VOICE + """
+
+--- YOUR TASK ---
+Write ONE short automated Fitr message to a single athlete, in Jak's voice.
+
+Shape: acknowledge what happened (specific, brief), then ask ONE genuine open
+question that invites a reply. Never just state a fact and stop.
+
+Hard rules:
+- 1 to 2 short sentences. No sign-off. A "Hey {First}," opener is optional.
+- NEVER use an em dash. Use a comma or a full stop.
+- No emojis. No hype stacking ("well done!!"). Let the numbers land.
+- Humanise raw benchmark names. "AMRAP 5 Minutes - Bar Muscle Ups" becomes
+  "5-minute AMRAP bar muscle-up test". "1RM Push Press" becomes "1RM push press".
+- Output ONLY the message text. No preamble, no quotes.
+
+Examples (situation -> message):
+
+PB, Gerard improved "AMRAP 5 Minutes - Bar Muscle Ups" from 27 to 34 reps.
+-> Good work Gerard on the 5-minute AMRAP bar muscle-up test. 27 to 34 reps is a decent jump. Why do you reckon it's gone up so much?
+
+First result, Cara logged "1RM Push Press" at 72.5 kg.
+-> Hey Cara, decent first 1RM push press number. How did it feel, or is there a bit more in the tank?
+
+Multiple PBs, Andy hit "1RM Bench Press" 130 kg.
+-> That's a big boy bench, Andy. 130kg. Was that one out of the blue or have you been building to it?
+
+First results, Daniel logged his first "Max Kipping Ring Muscle Ups" (12 reps) and "AMRAP 5 Minutes - Bar Muscle Ups" (50 reps).
+-> Great work getting your first results logged, Daniel. Good to look back on and to aim at in sessions. Give us a shout if you want any pointers.
+
+Streak, Nick has logged 7 training days in a row.
+-> Nick, 7 days on the bounce. Fair play. What's been making it easier to show up this week?
+
+Re-engagement, Nicky has not logged in a while.
+-> Nicky, haven't seen you in a while, no pressure, just checking in. Everything alright?
+"""
+
+
+def _kill_em_dashes(text):
+    """Belt-and-braces: turn any em/en dash into a comma so none ever ship."""
+    import re as _re
+    return _re.sub(r"\s*[—–]\s*", ", ", text)
+
+
+def athlete_message(situation, fallback):
+    """Generate one on-voice automated athlete message.
+
+    situation: plain one-line description of what happened, e.g.
+      'PB, Gerard improved "1RM Back Squat" from 110kg to 120kg.'
+    fallback:  a safe, tone-compliant message used if the API is unavailable
+               or returns something unusable. Never returns None.
+    """
+    client = _client()
+    if client is None:
+        return fallback
+    try:
+        resp = client.messages.create(
+            model=config.ANTHROPIC_MODEL,
+            max_tokens=120,
+            system=_ATHLETE_MSG_SYSTEM,
+            messages=[{"role": "user", "content": f"{situation}\n->"}],
+        )
+        text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
+        text = _kill_em_dashes(text.strip().strip('"').strip())
+        # sanity: non-empty, single message, not truncated garbage
+        if not text or len(text) > 400 or "\n\n" in text:
+            return fallback
+        return text
+    except Exception as e:
+        print(f"  ! athlete_message error: {e}")
+        return fallback
+
+
 def coaching_brief(coach_name, athlete_lines):
     """Generate a 5-bullet weekly coaching brief for one coach.
 
