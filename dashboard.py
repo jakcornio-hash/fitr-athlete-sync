@@ -261,6 +261,15 @@ def _load_exit_autopsy_cached():
         return []
 
 
+@st.cache_data(ttl=120, show_spinner=False)
+def _load_comp_outreach_cached():
+    """Set of (athlete, competition, action) already messaged. TTL=2min."""
+    try:
+        return get_sheets().load_comp_outreach()
+    except Exception:
+        return set()
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _get_fitr_room_ids():
     """Return {athlete_name: room_id} from Fitr chat rooms. Cached 1hr."""
@@ -2476,39 +2485,81 @@ def page_competitions(comp_results, athletes, data_records, competition_rows=Non
             mc3.metric("C-Race / Training Days", len(c_comps))
         st.divider()
 
-    # Actionable panel: A-competition transitions (only A comps require programme switches)
+    # Actionable panel: competition messages a coach needs to send, each with a
+    # "messaged" check-off that persists across days and is shared across coaches.
+    import hashlib
     action_items = [c for c in comp_results if c["action"]]
     a_actions = [c for c in action_items if c.get("comp_type") == "A"]
     bc_actions = [c for c in action_items if c.get("comp_type") in ("B", "C")]
 
+    messaged = _load_comp_outreach_cached()
+
+    def _comp_done(c):
+        return (str(c["name"]).strip().lower(),
+                str(c.get("comp_name") or "").strip().lower(),
+                str(c.get("action") or "").strip().lower()) in messaged
+
+    def _comp_btn_key(c):
+        raw = f"{c['name']}|{c.get('comp_name','')}|{c.get('action','')}"
+        return hashlib.md5(raw.encode()).hexdigest()[:10]
+
+    if action_items:
+        n_done = sum(1 for c in action_items if _comp_done(c))
+        total = len(action_items)
+        hc1, hc2 = st.columns([3, 1])
+        with hc1:
+            st.subheader("📨 Competition Messages to Send")
+            st.caption(
+                "Copy the message, send it, then mark it messaged. "
+                "Saved across days and shared with all coaches."
+            )
+        with hc2:
+            if total and n_done == total:
+                st.success(f"All {total} sent")
+            else:
+                st.metric("Messaged", f"{n_done} / {total}")
+        if total:
+            st.progress(n_done / total)
+
+    def _render_comp_action(c, badge_prefix="", default_open=True):
+        done = _comp_done(c)
+        emoji = _PHASE_EMOJI.get(c["phase"], chr(9889))
+        title = f"{'✅ ' if done else ''}{badge_prefix}{emoji} {c['name']} — {c['action']}"
+        with st.expander(title, expanded=(default_open and not done)):
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                st.metric(c["comp_name"] or "Competition", c["comp_date"].strftime("%d %b %Y"))
+                w, d = divmod(max(c["days_out"], 0), 7)
+                st.caption(f"{w}w {d}d out — {c['phase']}")
+            with col2:
+                st.markdown("**Ready-to-send message:**")
+                st.code(c["message_template"], language=None)
+                k = _comp_btn_key(c)
+                if done:
+                    st.caption("✅ Marked as messaged.")
+                    if st.button("↩️ Unmark", key=f"cu_{k}"):
+                        get_sheets().unmark_comp_outreach(
+                            c["name"], c.get("comp_name", ""), c.get("action", ""))
+                        _load_comp_outreach_cached.clear()
+                        st.rerun()
+                else:
+                    if st.button("✅ Mark as messaged", key=f"cm_{k}", type="primary"):
+                        get_sheets().mark_comp_outreach(
+                            c["name"], c.get("comp_name", ""), c.get("action", ""))
+                        _load_comp_outreach_cached.clear()
+                        st.rerun()
+
     if a_actions:
-        st.subheader("⚡ A-Race: Actions Required Now")
-        for c in a_actions:
-            emoji = _PHASE_EMOJI.get(c["phase"], chr(9889))
-            with st.expander(f"{emoji} {c['name']} — {c['action']}", expanded=True):
-                col1, col2 = st.columns([1, 2])
-                with col1:
-                    st.metric(c["comp_name"] or "Competition", c["comp_date"].strftime("%d %b %Y"))
-                    w, d = divmod(max(c["days_out"], 0), 7)
-                    st.caption(f"{w}w {d}d out — {c['phase']}")
-                with col2:
-                    st.markdown("**Ready-to-send message:**")
-                    st.code(c["message_template"], language=None)
+        st.markdown("**⚡ A-Race — Actions Required Now**")
+        for c in sorted(a_actions, key=_comp_done):  # un-messaged first
+            _render_comp_action(c, default_open=True)
 
     if bc_actions:
-        st.subheader("B/C Race Reminders")
-        for c in bc_actions:
+        st.markdown("**B/C Race Reminders**")
+        for c in sorted(bc_actions, key=_comp_done):
             ct = c.get("comp_type", "B")
-            badge = _COMP_TYPE_LABEL.get(ct, ct)
-            emoji = _PHASE_EMOJI.get(c["phase"], chr(9898))
-            with st.expander(f"{badge} {emoji} {c['name']} — {c['action']}", expanded=False):
-                col1, col2 = st.columns([1, 2])
-                with col1:
-                    st.metric(c["comp_name"] or "Competition", c["comp_date"].strftime("%d %b %Y"))
-                    w, d = divmod(max(c["days_out"], 0), 7)
-                    st.caption(f"{w}w {d}d out — {c['phase']}")
-                with col2:
-                    st.code(c["message_template"], language=None)
+            badge = _COMP_TYPE_LABEL.get(ct, ct) + " "
+            _render_comp_action(c, badge_prefix=badge, default_open=False)
 
     if action_items:
         st.divider()

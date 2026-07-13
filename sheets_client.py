@@ -625,6 +625,85 @@ class SheetsClient:
             })
         return rows
 
+    # ------------------------------------------------ competition outreach log
+    # Tracks which competition messages a coach has manually sent, so the
+    # "messaged" check-offs on the Competitions tab persist across days and are
+    # shared across all coaches (unlike per-browser session state). Keyed by
+    # (athlete, competition, action) — when a comp moves to a new prep phase the
+    # action string changes, so it correctly reappears as a new message to send.
+    TAB_COMP_OUTREACH = "Comp Outreach"
+    _COMP_OUTREACH_HEADERS = ["Date Marked", "Athlete", "Competition", "Action"]
+
+    def load_comp_outreach(self):
+        """Return set of (athlete_lower, competition_lower, action_lower) already messaged."""
+        try:
+            vals = self.worksheet(self.TAB_COMP_OUTREACH).get_all_values()
+        except Exception:
+            return set()
+        if not vals or len(vals) < 2:
+            return set()
+        header = vals[0]
+        try:
+            a_i = header.index("Athlete")
+            c_i = header.index("Competition")
+            act_i = header.index("Action")
+        except ValueError:
+            return set()
+        out = set()
+        for r in vals[1:]:
+            a = r[a_i].strip().lower() if a_i < len(r) else ""
+            if not a:
+                continue
+            c = r[c_i].strip().lower() if c_i < len(r) else ""
+            act = r[act_i].strip().lower() if act_i < len(r) else ""
+            out.add((a, c, act))
+        return out
+
+    def mark_comp_outreach(self, athlete, competition, action):
+        """Record that a coach has sent this competition message. Idempotent."""
+        if config.DRY_RUN:
+            return
+        key = (athlete.strip().lower(), (competition or "").strip().lower(),
+               (action or "").strip().lower())
+        if key in self.load_comp_outreach():
+            return
+        import datetime as _dt
+        ws = self.get_or_create(self.TAB_COMP_OUTREACH, self._COMP_OUTREACH_HEADERS)
+        ws.append_rows(
+            [[_dt.date.today().isoformat(), athlete, competition or "", action or ""]],
+            value_input_option="USER_ENTERED",
+        )
+
+    def unmark_comp_outreach(self, athlete, competition, action):
+        """Remove a previously-recorded competition message (undo a mis-click)."""
+        if config.DRY_RUN:
+            return
+        try:
+            ws = self.worksheet(self.TAB_COMP_OUTREACH)
+            vals = ws.get_all_values()
+        except Exception:
+            return
+        if not vals or len(vals) < 2:
+            return
+        header = vals[0]
+        try:
+            a_i = header.index("Athlete")
+            c_i = header.index("Competition")
+            act_i = header.index("Action")
+        except ValueError:
+            return
+        key = (athlete.strip().lower(), (competition or "").strip().lower(),
+               (action or "").strip().lower())
+        to_delete = []
+        for idx, r in enumerate(vals[1:], start=2):
+            a = r[a_i].strip().lower() if a_i < len(r) else ""
+            c = r[c_i].strip().lower() if c_i < len(r) else ""
+            act = r[act_i].strip().lower() if act_i < len(r) else ""
+            if (a, c, act) == key:
+                to_delete.append(idx)
+        for idx in reversed(to_delete):  # bottom-up so indices stay valid
+            ws.delete_rows(idx)
+
     # --------------------------------------------------------- intake form
     def load_intake_responses(self):
         """Read athlete intake Typeform responses from an external sheet."""
