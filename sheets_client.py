@@ -567,6 +567,32 @@ class SheetsClient:
                     ws.update_cell(row_idx, notes_col + 1, combined)
                 return
 
+    # ------------------------------------------------ weekly-send once-per-week guard
+    # Prevents the Monday weekly sends (PB roundup, progress emails, offboarding)
+    # from firing twice when the sync runs more than once on a Monday — e.g. a
+    # manual trigger plus a delayed scheduled run, or a rare double GitHub cron.
+    TAB_WEEKLY_MARKER = "Weekly Send Log"
+    _WEEKLY_MARKER_HEADERS = ["Week Of (Monday)", "Marked At"]
+
+    def weekly_send_done(self, monday_iso):
+        """True if the weekly sends have already run for the week of monday_iso."""
+        try:
+            vals = self.worksheet(self.TAB_WEEKLY_MARKER).get_all_values()
+        except Exception:
+            return False
+        return any(row and row[0].strip() == monday_iso for row in vals[1:])
+
+    def mark_weekly_send_done(self, monday_iso):
+        """Record that the weekly sends ran for the week of monday_iso."""
+        if config.DRY_RUN:
+            return
+        if self.weekly_send_done(monday_iso):
+            return
+        import datetime as _dt
+        ws = self.get_or_create(self.TAB_WEEKLY_MARKER, self._WEEKLY_MARKER_HEADERS)
+        ws.append_rows([[monday_iso, _dt.datetime.utcnow().isoformat(timespec="seconds")]],
+                       value_input_option="USER_ENTERED")
+
     # --------------------------------------------------------- exit autopsy (CRM)
     def load_exit_autopsy(self):
         """Read cancellation records from the CRM's Exit Autopsy tab.

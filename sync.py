@@ -1126,13 +1126,26 @@ def main():
     streak_hits = analytics.daily_streak_check(pr_records, active_athletes)
     rec_alert_rows = analytics.recovery_alerts(rec_by_name)
 
+    # ---- weekly-send guard: run the Monday sends at most once per week ----
+    # If the sync runs more than once on a Monday (manual trigger + a delayed
+    # scheduled run, or a rare double cron), the PB roundup / progress emails /
+    # offboarding must not fire twice. Mark the week done up front so any later
+    # run today sees it and skips.
+    # Checked here, marked done at the END of the weekly block (after the
+    # progress emails) so a mid-run crash doesn't skip the week permanently.
+    _this_monday = TODAY - dt.timedelta(days=TODAY.weekday())
+    _do_weekly = TODAY.weekday() == 0 and not config.DRY_RUN
+    if _do_weekly and sheets.weekly_send_done(_this_monday.isoformat()):
+        _do_weekly = False
+        print(f"Weekly sends already ran for week of {_this_monday.isoformat()} — skipping (guard).")
+
     # ---- weekly PB roundup (Mondays): wins from the past 7 days ----
     # PB congrats are weekly, not per-result: on Monday each athlete gets one
     # roundup DM covering the whole week. Streak milestones stay on their exact
     # day (they're milestones, like anniversaries) — on a Monday they ride
     # along in the roundup; any other day they send standalone.
     _wins_by_name = {}  # name -> list of (kind, bench, value, prev)
-    if TODAY.weekday() == 0 and not config.DRY_RUN:
+    if _do_weekly:
         _roundup_window_start = TODAY - dt.timedelta(days=7)
         _latest_result = {}  # (name, bench) -> (date, value, prev) — best-dated row per benchmark
         for _rec in pr_records:
@@ -1336,8 +1349,8 @@ def main():
     # Weekly (Mondays), catching anyone who crossed 60 days in the past week.
     # The 60-66 window spans exactly one Monday per athlete, so it still fires
     # once — and unlike the old exact-day-60 gate, a failed sync on their
-    # day 60 no longer means they're skipped forever.
-    if TODAY.weekday() == 0 and not config.DRY_RUN:
+    # day 60 no longer means they're skipped forever. Guarded by _do_weekly.
+    if _do_weekly:
         offboarding_sent = 0
         for snap in churn_snapshot_rows:
             nm = snap["Athlete Name"]
@@ -1830,7 +1843,7 @@ def main():
     # Gate to Mondays, and widen the PR window to the past 7 days so the
     # snapshot covers the whole week rather than just Monday morning's rows.
     emails_sent = 0  # referenced unconditionally by the Sync Log row below
-    if TODAY.weekday() == 0:  # Monday
+    if _do_weekly:  # Monday, once per week (see weekly-send guard)
         archetype_rows = sheets.load_archetype_assessments()
         archetype_by_name = {
             str(r.get("Athlete Name", "")).strip(): r
@@ -1859,6 +1872,9 @@ def main():
         )
         if emails_sent:
             print(f"Athlete weekly progress emails sent: {emails_sent}")
+
+        # All Monday sends done — mark the week so any later run today skips them.
+        sheets.mark_weekly_send_done(_this_monday.isoformat())
 
     # ---- monthly athlete reports (fires on the 1st of each month) ----
     if TODAY.day == 1:
