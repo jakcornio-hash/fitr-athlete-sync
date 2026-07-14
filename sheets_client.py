@@ -593,6 +593,36 @@ class SheetsClient:
         ws.append_rows([[monday_iso, _dt.datetime.utcnow().isoformat(timespec="seconds")]],
                        value_input_option="USER_ENTERED")
 
+    # ------------------------------------- archetype self-assessment Typeform (CRM)
+    TAB_ARCHETYPE_FORM = "What Kind of Athlete Are You?"
+
+    def load_archetype_form_responses(self):
+        """Read athlete archetype self-assessment responses from the CRM sheet.
+
+        Returns [{header: value}, ...]. Read by position (not get_all_records)
+        because the tab has trailing blank header columns.
+        """
+        if not config.CRM_SHEET_ID:
+            return []
+        try:
+            sh = self.gc.open_by_key(config.CRM_SHEET_ID)
+            vals = sh.worksheet(self.TAB_ARCHETYPE_FORM).get_all_values()
+        except Exception as e:
+            print(f"  ! archetype form read failed: {e}")
+            return []
+        if len(vals) < 2:
+            return []
+        header = vals[0]
+        rows = []
+        for r in vals[1:]:
+            if not any(c.strip() for c in r):
+                continue
+            rows.append({
+                h.strip(): (r[i].strip() if i < len(r) else "")
+                for i, h in enumerate(header) if h.strip()
+            })
+        return rows
+
     # --------------------------------------------------------- exit autopsy (CRM)
     def load_exit_autopsy(self):
         """Read cancellation records from the CRM's Exit Autopsy tab.

@@ -110,3 +110,46 @@ def score_rating(ratings, pairs=None):
                 scores[aid] = max(0, scores.get(aid, 0) - 0.6)
 
     return _build_output(scores, top_n=5)
+
+
+# ── Typeform intake helpers ──────────────────────────────────────────────────
+# The athlete self-assessment is collected via a Typeform whose questions and
+# answer options mirror the forced-choice instrument. Responses arrive as answer
+# TEXT, so map that text back to the option index and score with the canonical
+# engine (never Typeform's own tallies) — that keeps self-reads directly
+# comparable with coach reads.
+
+def _norm_text(s):
+    """Lowercase, strip everything but alphanumerics. Survives punctuation edits
+    (e.g. an em dash swapped for a comma)."""
+    return "".join(ch for ch in str(s or "").lower() if ch.isalnum())
+
+
+def forced_choice_question_texts():
+    """The 10 athlete-voice question strings, in order (match the form headers)."""
+    return [q.get("q_athlete", "") for q in FORCED_CHOICE.get("questions", [])]
+
+
+def forced_choice_answer_index(q_idx, answer_text):
+    """Map a chosen answer's TEXT back to its option index for question q_idx.
+
+    Returns None if it can't be matched, so the caller can skip rather than
+    silently score a wrong archetype.
+    """
+    questions = FORCED_CHOICE.get("questions", [])
+    if q_idx >= len(questions):
+        return None
+    target = _norm_text(answer_text)
+    if not target:
+        return None
+    options = questions[q_idx].get("options", [])
+
+    for i, o in enumerate(options):
+        if _norm_text(o.get("athlete", "")) == target:
+            return i
+    # Tolerant fallback: one is a prefix of the other (handles truncation/edits)
+    for i, o in enumerate(options):
+        n = _norm_text(o.get("athlete", ""))
+        if n and (n.startswith(target[:40]) or target.startswith(n[:40])):
+            return i
+    return None

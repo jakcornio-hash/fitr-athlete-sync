@@ -18,12 +18,14 @@ Run:  python sync.py            (live)
       DRY_RUN=1 python sync.py  (pull + print, write nothing)
 """
 import datetime as dt
+import json
 import sys
 
 import config
 from fitr_client import FitrClient, FitrError, format_thread, profiles_from_rooms
 from sheets_client import SheetsClient
 import analytics
+import archetypes
 import notifier
 import summariser
 import recovery
@@ -408,6 +410,120 @@ def sync_competition_from_typeform(sheets, email_by_name):
 
 
 # ------------------------------------------- athlete intake Typeform sync
+def sync_archetype_from_typeform(sheets, email_by_name):
+    """Import athlete archetype self-assessments from the Typeform response tab.
+
+    Scores the RAW answers with the canonical forced-choice engine rather than
+    trusting Typeform's own variable tallies, so an athlete's self-read is
+    directly comparable with their coach read (the two must be scored the same
+    way or any "divergence" is just a scoring artefact).
+
+    Deduped on the Typeform response Token, stored in the assessment's Notes,
+    so re-running never double-imports. Returns count imported.
+    """
+    rows = sheets.load_archetype_form_responses()
+    if not rows:
+        return 0
+
+    # Tokens we've already imported
+    seen_tokens = set()
+    for r in sheets.load_archetype_assessments():
+        note = str(r.get("Notes", "")).strip()
+        if note.startswith("typeform:"):
+            seen_tokens.add(note.split("typeform:", 1)[1].strip())
+
+    # Athlete resolution: email -> exact name -> fuzzy name
+    merged = dict(email_by_name)
+    try:
+        for rec in sheets.read_records(config.TAB_DATA):
+            nm2 = str(rec.get("Full Name", "")).strip()
+            em2 = str(rec.get("Email", "")).strip().lower()
+            if nm2 and em2:
+                merged.setdefault(nm2, em2)
+    except Exception:
+        pass
+    email_to_name = {v.lower(): k for k, v in merged.items()}
+    all_known = list(merged.keys())
+
+    def _submitted_date(s):
+        for fmt in ("%m/%d/%Y %H:%M:%S", "%m/%d/%Y", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+            try:
+                return dt.datetime.strptime(str(s).strip(), fmt).date()
+            except (ValueError, TypeError):
+                continue
+        return None
+
+    q_texts = archetypes.forced_choice_question_texts()
+    imported = 0
+    unresolved, unmapped = [], []
+
+    for row in rows:
+        token = str(row.get("Token", "")).strip()
+        if not token or token in seen_tokens:
+            continue
+
+        email = str(row.get("What's your email?", "")).strip().lower()
+        raw_name = str(row.get("What's your name?", "")).strip()
+
+        nm = email_to_name.get(email)
+        if not nm and raw_name:
+            for known in all_known:
+                if known.lower() == raw_name.lower():
+                    nm = known
+                    break
+        if not nm and raw_name:
+            import difflib as _difflib
+            matches = _difflib.get_close_matches(
+                raw_name.lower(), [k.lower() for k in all_known], n=1, cutoff=0.6,
+            )
+            if matches:
+                nm = next(k for k in all_known if k.lower() == matches[0])
+                print(f"  [archetype form] fuzzy matched '{raw_name}' → '{nm}'")
+        if not nm:
+            unresolved.append(raw_name or f"<{email or 'no id'}>")
+            continue
+
+        # Map each answer's text back to its option index
+        answers = []
+        for i, qt in enumerate(q_texts):
+            idx = archetypes.forced_choice_answer_index(i, row.get(qt, ""))
+            if idx is None:
+                break
+            answers.append(idx)
+        if len(answers) != len(q_texts):
+            unmapped.append(nm)
+            continue
+
+        result = archetypes.score_forced_choice(answers)
+        taken = _submitted_date(row.get("Submitted At", "")) or TODAY
+        if config.DRY_RUN:
+            print(f"[DRY_RUN] archetype self-read for {nm}: {result.get('primary')}")
+            imported += 1
+            seen_tokens.add(token)
+            continue
+        sheets.write_archetype_assessment({
+            "Athlete Name": nm,
+            "Assessor": "Athlete (Self)",
+            "Instrument": "forced_choice",
+            "Version": str(archetypes.FORCED_CHOICE.get("version", 1)),
+            "Taken At": taken.isoformat(),
+            "Primary Archetype": result.get("primary", ""),
+            "Profile JSON": json.dumps(result),
+            "Raw Answers JSON": json.dumps(answers),
+            "Notes": f"typeform:{token}",
+        })
+        seen_tokens.add(token)
+        imported += 1
+
+    if unresolved:
+        print(f"  ! [archetype form] couldn't match to an athlete (add their email to _DATA): "
+              f"{', '.join(unresolved[:10])}")
+    if unmapped:
+        print(f"  ! [archetype form] answers didn't map to the instrument, skipped: "
+              f"{', '.join(unmapped[:10])}")
+    return imported
+
+
 def sync_intake_from_typeform(sheets, email_by_name):
     """Populate _DATA from athlete intake Typeform responses.
 
@@ -1006,6 +1122,10 @@ def main():
 
     comps_updated = sync_competition_from_typeform(sheets, email_by_name)
     print(f"Competition dates synced from Typeform: {comps_updated}")
+
+    archetypes_imported = sync_archetype_from_typeform(sheets, email_by_name)
+    if archetypes_imported:
+        print(f"Archetype self-assessments imported from Typeform: {archetypes_imported}")
 
     intake_updated = sync_intake_from_typeform(sheets, email_by_name)
     if intake_updated:
