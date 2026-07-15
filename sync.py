@@ -410,6 +410,36 @@ def sync_competition_from_typeform(sheets, email_by_name):
 
 
 # ------------------------------------------- athlete intake Typeform sync
+def _compose_archetype_dm(name, primary):
+    """Athlete-facing 'here's your confirmed archetype' Fitr message.
+
+    Delivers the accurate, dashboard-scored result (the Typeform only shows a
+    provisional one). Pulls athlete-voice copy from archetypes.json, strips em
+    dashes per the tone guidelines, ends with an open question.
+    """
+    import re as _re
+    arch = archetypes.get_archetype(primary)
+    if not arch:
+        return None
+    first = name.split()[0]
+    athlete = arch.get("athlete", {})
+    arch_name = arch.get("name", primary.replace("_", " ").title())
+    tagline = str(athlete.get("tagline", "")).strip()
+    works = athlete.get("works", []) or []
+
+    def _clean(s):
+        return _re.sub(r"\s*[—–]\s*", ", ", str(s)).strip()
+
+    _article = "an" if arch_name[:1].lower() in "aeiou" else "a"
+    msg = f"{first}, your athlete profile's confirmed. You've come out as {_article} {arch_name}."
+    if tagline:
+        msg += f" {_clean(tagline)}"
+    if works:
+        msg += f" One thing that tends to work for you: {_clean(works[0]).rstrip('.').lower()}."
+    msg += " Have a think, does that ring true? Knowing this helps me coach you the way you actually respond to."
+    return msg
+
+
 def sync_archetype_from_typeform(sheets, email_by_name):
     """Import athlete archetype self-assessments from the Typeform response tab.
 
@@ -423,7 +453,7 @@ def sync_archetype_from_typeform(sheets, email_by_name):
     """
     rows = sheets.load_archetype_form_responses()
     if not rows:
-        return 0
+        return 0, []
 
     # Tokens we've already imported
     seen_tokens = set()
@@ -455,6 +485,7 @@ def sync_archetype_from_typeform(sheets, email_by_name):
 
     q_texts = archetypes.forced_choice_question_texts()
     imported = 0
+    new_reads = []  # (name, primary_archetype) for athletes newly scored this run
     unresolved, unmapped = [], []
 
     for row in rows:
@@ -514,6 +545,7 @@ def sync_archetype_from_typeform(sheets, email_by_name):
         })
         seen_tokens.add(token)
         imported += 1
+        new_reads.append((nm, result.get("primary", "")))
 
     if unresolved:
         print(f"  ! [archetype form] couldn't match to an athlete (add their email to _DATA): "
@@ -521,7 +553,7 @@ def sync_archetype_from_typeform(sheets, email_by_name):
     if unmapped:
         print(f"  ! [archetype form] answers didn't map to the instrument, skipped: "
               f"{', '.join(unmapped[:10])}")
-    return imported
+    return imported, new_reads
 
 
 def sync_intake_from_typeform(sheets, email_by_name):
@@ -1123,7 +1155,7 @@ def main():
     comps_updated = sync_competition_from_typeform(sheets, email_by_name)
     print(f"Competition dates synced from Typeform: {comps_updated}")
 
-    archetypes_imported = sync_archetype_from_typeform(sheets, email_by_name)
+    archetypes_imported, archetype_new_reads = sync_archetype_from_typeform(sheets, email_by_name)
     if archetypes_imported:
         print(f"Archetype self-assessments imported from Typeform: {archetypes_imported}")
 
@@ -1413,6 +1445,33 @@ def main():
         append_coaching_notes(sheets, _streak_notes)
     if _streak_sent:
         print(f"Streak milestone messages sent: {_streak_sent}")
+
+    # ---- deliver confirmed archetype to athletes who just self-assessed ----
+    # The Typeform shows a provisional result; this DMs the accurate, dashboard
+    # scored one. Fires once per submission (the import is deduped on Token).
+    if archetype_new_reads and not config.DRY_RUN:
+        _arch_sent = 0
+        for _nm, _primary in archetype_new_reads:
+            if not _primary or _nm.lower() in cancelled_names_lower:
+                continue
+            _room = room_id_by_name.get(_nm)
+            if not _room:
+                continue
+            _amsg = _compose_archetype_dm(_nm, _primary)
+            if not _amsg:
+                continue
+            try:
+                fitr.send_chat_message(_room, _amsg)
+                _arch_sent += 1
+                messages_sent_log.append({
+                    "Date": TODAY.isoformat(), "Athlete Name": _nm,
+                    "Message Type": "archetype_result", "Room ID": _room,
+                })
+                import time as _time; _time.sleep(0.5)
+            except FitrError as exc:
+                print(f"  ! Archetype result message failed for {_nm}: {exc}")
+        if _arch_sent:
+            print(f"Archetype result messages sent: {_arch_sent}")
 
     # ---- weekly AI coaching digest per athlete ----
     digests_written = generate_weekly_athlete_digests(
