@@ -623,6 +623,103 @@ class SheetsClient:
             })
         return rows
 
+    # ------------------------------------------------- movement analysis (Form)
+    VIDEO_REVIEW_HEADER = [
+        "Submitted At", "Athlete Name", "Movement", "Bottleneck",
+        "Video Link", "Track", "Reviewed", "Reviewed By", "Reviewed At",
+        "Submitter Email",
+    ]
+
+    def load_video_form_responses(self):
+        """Read movement-analysis video submissions from the Google Form sheet.
+
+        Read by position rather than get_all_records: the form has two columns
+        both named some case-variant of "Email address" (one auto-collected on
+        sign-in, one typed), and get_all_records would silently collapse them.
+        """
+        if not config.VIDEO_FORM_SHEET_ID:
+            return []
+        try:
+            sh = self.gc.open_by_key(config.VIDEO_FORM_SHEET_ID)
+            vals = sh.worksheet(config.VIDEO_FORM_TAB).get_all_values()
+        except Exception as e:
+            print(f"  ! video form read failed: {e}")
+            return []
+        if len(vals) < 2:
+            return []
+        header = [h.strip() for h in vals[0]]
+        rows = []
+        for r in vals[1:]:
+            if not any(c.strip() for c in r):
+                continue
+            row = {}
+            for i, h in enumerate(header):
+                if not h:
+                    continue
+                val = r[i].strip() if i < len(r) else ""
+                # Keep the FIRST occurrence of a duplicated header (the
+                # auto-collected email precedes the typed one in this form).
+                if h not in row:
+                    row[h] = val
+                else:
+                    row.setdefault(f"{h} (2)", val)
+            rows.append(row)
+        return rows
+
+    def load_video_reviews(self):
+        try:
+            return self.read_records(config.TAB_VIDEO_REVIEWS)
+        except gspread.WorksheetNotFound:
+            return []
+
+    def append_video_reviews(self, rows):
+        """Append video submissions to the Video Reviews tab (creates if absent)."""
+        if not rows:
+            return 0
+        ws = self.get_or_create(config.TAB_VIDEO_REVIEWS, self.VIDEO_REVIEW_HEADER)
+        ws.append_rows(
+            [[r.get(h, "") for h in self.VIDEO_REVIEW_HEADER] for r in rows],
+            value_input_option="USER_ENTERED",
+        )
+        return len(rows)
+
+    def mark_video_reviewed(self, video_link, coach, when):
+        """Mark the submission with this video link as reviewed."""
+        vals = self.read_values(config.TAB_VIDEO_REVIEWS)
+        if not vals:
+            return False
+        header = vals[0]
+        try:
+            link_i = header.index("Video Link")
+        except ValueError:
+            return False
+        rowmap = {}
+        for i, r in enumerate(vals[1:], start=2):
+            if link_i < len(r) and r[link_i].strip() == str(video_link).strip():
+                rowmap[i] = True
+        if not rowmap:
+            return False
+        for col, val in (
+            ("Reviewed", "Yes"), ("Reviewed By", coach), ("Reviewed At", when),
+        ):
+            try:
+                ci = header.index(col)
+            except ValueError:
+                continue
+            letter = self._idx_to_col(ci + 1)
+            self.update_cells_by_rowmap(
+                config.TAB_VIDEO_REVIEWS, letter, {i: val for i in rowmap}
+            )
+        return True
+
+    @staticmethod
+    def _idx_to_col(idx):
+        s = ""
+        while idx > 0:
+            idx, rem = divmod(idx - 1, 26)
+            s = chr(65 + rem) + s
+        return s
+
     # --------------------------------------------------------- exit autopsy (CRM)
     def load_exit_autopsy(self):
         """Read cancellation records from the CRM's Exit Autopsy tab.

@@ -270,6 +270,15 @@ def _load_comp_outreach_cached():
         return set()
 
 
+@st.cache_data(ttl=120, show_spinner=False)
+def _load_video_reviews_cached():
+    """Movement-analysis video submissions. TTL=2min (matches comp outreach)."""
+    try:
+        return get_sheets().load_video_reviews()
+    except Exception:
+        return []
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _get_fitr_room_ids():
     """Return {athlete_name: room_id} from Fitr chat rooms. Cached 1hr."""
@@ -1454,9 +1463,48 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
     # ── Coaching notes timeline ───────────────────────────────────────────────
     notes_raw = str(profile.get("Coaching Notes", "")).strip()
     timeline = _parse_notes_timeline(notes_raw)
+    # ---- movement analysis history ----
+    _vids = [
+        v for v in _load_video_reviews_cached()
+        if str(v.get("Athlete Name", "")).strip() == name
+    ]
+    if _vids:
+        _vids.sort(key=lambda x: str(x.get("Submitted At", "")), reverse=True)
+        _open = sum(
+            1 for v in _vids
+            if str(v.get("Reviewed", "")).strip().lower() != "yes"
+        )
+        _hdr = f"**🎥 Movement Analysis** ({len(_vids)})"
+        if _open:
+            _hdr += f" — ⏳ {_open} awaiting review"
+        st.markdown(_hdr)
+        for _v in _vids:
+            _rev = str(_v.get("Reviewed", "")).strip().lower() == "yes"
+            _mv = str(_v.get("Movement", "")).strip() or "Movement"
+            with st.expander(
+                f"{'✅' if _rev else '⏳'} {_v.get('Submitted At', '')} — {_mv}",
+                expanded=False,
+            ):
+                _bn = str(_v.get("Bottleneck", "")).strip()
+                if _bn:
+                    st.write(_bn)
+                _lk = str(_v.get("Video Link", "")).strip()
+                if _lk:
+                    st.markdown(f"▶️ [Open video in Drive]({_lk})")
+                if _rev:
+                    _by = str(_v.get("Reviewed By", "")).strip()
+                    _at = str(_v.get("Reviewed At", "")).strip()
+                    st.caption(
+                        f"✅ Reviewed{f' by {_by}' if _by else ''}"
+                        f"{f' on {_at}' if _at else ''}."
+                    )
+                else:
+                    st.caption("⏳ Not yet reviewed — see the Videos tab.")
+
     st.markdown("**📝 Coaching Notes**")
     if timeline:
-        kind_icons = {"chat": "💬", "result": "🏆", "recovery": "💤", "weekly_digest": "🤖"}
+        kind_icons = {"chat": "💬", "result": "🏆", "recovery": "💤",
+                      "weekly_digest": "🤖", "video": "🎥"}
         for entry in timeline:
             icon = kind_icons.get(entry["kind"], "📌")
             with st.expander(f"{icon} {entry['date']} — {entry['kind']}", expanded=False):
@@ -3087,6 +3135,29 @@ def page_action_list(engagement_results, trend_results, rec_alert_rows, mileston
                      consistency_wins, comp_results=None, archetype_by_name=None, data_records=None):
     """Ed's daily task list — checkable action cards with messages ready to copy or send."""
     import hashlib
+
+    # Waiting videos are surfaced as a banner rather than folded into the rows
+    # below: this list is a message queue and every card carries a draft to
+    # send, whereas a video needs the coach to actually watch it and write real
+    # feedback. Slotting it in here would invite a canned reply.
+    _pending_vids = [
+        v for v in _load_video_reviews_cached()
+        if str(v.get("Reviewed", "")).strip().lower() != "yes"
+    ]
+    if _pending_vids:
+        _oldest = max(
+            (d for d in (_video_days_waiting(v) for v in _pending_vids)
+             if d is not None),
+            default=None,
+        )
+        _msg = (
+            f"🎥 **{len(_pending_vids)} video{'s' if len(_pending_vids) > 1 else ''} "
+            f"awaiting movement analysis**"
+        )
+        if _oldest:
+            _msg += f" — oldest has been waiting {_oldest} day{'s' if _oldest > 1 else ''}."
+        _msg += "  See the **🎥 Videos** tab."
+        (st.error if (_oldest or 0) >= 7 else st.warning)(_msg)
 
     rows = _build_outreach_rows(
         engagement_results, trend_results, rec_alert_rows, milestones,
@@ -7573,6 +7644,123 @@ def page_gym_referrals(athletes=None):
 
 # ── Daily mobile view ─────────────────────────────────────────────────────────
 
+def _video_days_waiting(row):
+    d = _parse_date(str(row.get("Submitted At", "")))
+    return (TODAY - d).days if d else None
+
+
+def page_video_reviews(data_records=None):
+    """Movement analysis queue — videos athletes have submitted for review.
+
+    Stays open until a coach ticks it off, the same as Ed's competition
+    check-off: a review can sit for days and other coaches need to see who has
+    already picked it up, so the state lives in the sheet, not session state.
+    """
+    st.markdown("## 🎥 Movement Analysis")
+    st.caption(
+        "Videos athletes have submitted for review. Nothing is auto-sent to the "
+        "athlete — the feedback is yours to give. Ticking one off only clears it "
+        "from this queue."
+    )
+
+    rows = _load_video_reviews_cached()
+    if not rows:
+        st.info(
+            "No video submissions yet. They arrive via the Movement Analysis form "
+            "and import on the daily sync."
+        )
+        return
+
+    pending = [r for r in rows if str(r.get("Reviewed", "")).strip().lower() != "yes"]
+    done = [r for r in rows if str(r.get("Reviewed", "")).strip().lower() == "yes"]
+
+    def _sort_key(r):
+        d = _video_days_waiting(r)
+        return -(d if d is not None else -1)
+
+    pending.sort(key=_sort_key)
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("⏳ Awaiting review", len(pending))
+    c2.metric("✅ Reviewed", len(done))
+    waits = [d for d in (_video_days_waiting(r) for r in pending) if d is not None]
+    c3.metric("⏱️ Longest wait", f"{max(waits)}d" if waits else "—")
+    if rows:
+        st.progress(len(done) / len(rows))
+
+    # Who's reviewing. There's no global "current coach" in the dashboard, so
+    # ask once per session rather than stamping every row with a generic
+    # "Coach" — the point of the field is knowing who picked it up.
+    try:
+        _coach_opts = sorted({c for c in get_sheets().load_coach_names().values() if c})
+    except Exception:
+        _coach_opts = []
+    coach = ""
+    if _coach_opts:
+        _sel = st.selectbox(
+            "Reviewing as", ["— select —"] + _coach_opts, key="_video_coach",
+            help="Recorded against anything you tick off, so the team can see who took it.",
+        )
+        coach = "" if _sel == "— select —" else _sel
+
+    def _render(r, is_done):
+        nm = str(r.get("Athlete Name", "")).strip()
+        mv = str(r.get("Movement", "")).strip() or "Movement"
+        days = _video_days_waiting(r)
+        wait = ""
+        if days is not None and not is_done:
+            # Chase the queue honestly: a week-old video is a broken promise.
+            flag = "🔴 " if days >= 7 else ("🟠 " if days >= 3 else "")
+            wait = f" — {flag}{days}d waiting" if days else " — today"
+        title = f"{'✅ ' if is_done else ''}{nm} — {mv}{wait}"
+        with st.expander(title, expanded=(not is_done and len(pending) <= 8)):
+            link = str(r.get("Video Link", "")).strip()
+            bottleneck = str(r.get("Bottleneck", "")).strip()
+            if bottleneck:
+                st.markdown("**What they said the problem is:**")
+                st.info(bottleneck)
+            meta = []
+            if r.get("Track"):
+                meta.append(f"Track: {r['Track']}")
+            if r.get("Submitted At"):
+                meta.append(f"Submitted: {r['Submitted At']}")
+            if meta:
+                st.caption(" · ".join(meta))
+            if link:
+                st.markdown(f"▶️ **[Open video in Drive]({link})**")
+            if is_done:
+                by = str(r.get("Reviewed By", "")).strip()
+                at = str(r.get("Reviewed At", "")).strip()
+                st.caption(f"✅ Reviewed{f' by {by}' if by else ''}{f' on {at}' if at else ''}.")
+            else:
+                if st.button("✅ Mark as reviewed", key=f"vr_{link}", type="primary"):
+                    get_sheets().mark_video_reviewed(
+                        link, coach or "Coach", TODAY.isoformat()
+                    )
+                    _load_video_reviews_cached.clear()
+                    st.rerun()
+
+    if pending:
+        st.markdown("### ⏳ Awaiting review")
+        for r in pending:
+            _render(r, False)
+    else:
+        st.success("🎉 Nothing waiting — every submitted video has been reviewed.")
+
+    if done:
+        with st.expander(f"✅ Reviewed ({len(done)})", expanded=False):
+            for r in sorted(done, key=lambda x: str(x.get("Reviewed At", "")), reverse=True):
+                nm = str(r.get("Athlete Name", "")).strip()
+                mv = str(r.get("Movement", "")).strip()
+                at = str(r.get("Reviewed At", "")).strip()
+                by = str(r.get("Reviewed By", "")).strip()
+                link = str(r.get("Video Link", "")).strip()
+                st.markdown(
+                    f"- **{nm}** — {mv} · {at}{f' · {by}' if by else ''}"
+                    f"{f' · [video]({link})' if link else ''}"
+                )
+
+
 def page_daily():
     """Phone-friendly morning check-in — shown when ?mode=daily.
 
@@ -7792,7 +7980,7 @@ def main():
 
     tabs = st.tabs([
         "✅ Actions", "📋 Outreach List", "🚨 Alerts", "🃏 Squad", "👥 Athletes",
-        "🗓️ Week Plan", "🏁 Competitions", "📊 Programmes", "🏋️ Load",
+        "🗓️ Week Plan", "🏁 Competitions", "🎥 Videos", "📊 Programmes", "🏋️ Load",
         "📈 Trends", "🏆 Leaderboard", "💤 Recovery", "🌐 CRM",
         "📚 Playbook", "💎 Grandslam", "📣 Marketing", "🏋️ Gym Referrals",
         "💷 Finance", "⚙️ Sync", "❓ Help",
@@ -7815,32 +8003,34 @@ def main():
     with tabs[6]:
         page_competitions(comp_results, athletes, data_records, competition_rows=competition_rows, pr_records=pr_records)
     with tabs[7]:
-        page_programmes(athletes, pr_records, trend_results, data_records, load_results=load_results, engagement_results=engagement_results)
+        page_video_reviews(data_records=data_records)
     with tabs[8]:
-        page_load(load_results)
+        page_programmes(athletes, pr_records, trend_results, data_records, load_results=load_results, engagement_results=engagement_results)
     with tabs[9]:
-        page_trends(pr_records, athletes)
+        page_load(load_results)
     with tabs[10]:
-        page_leaderboard(pr_records, athletes)
+        page_trends(pr_records, athletes)
     with tabs[11]:
-        page_recovery(rec_by_name, pr_records=pr_records)
+        page_leaderboard(pr_records, athletes)
     with tabs[12]:
-        page_crm(athletes, engagement_results, data_records, pr_records=pr_records)
+        page_recovery(rec_by_name, pr_records=pr_records)
     with tabs[13]:
-        page_coaching_playbook()
+        page_crm(athletes, engagement_results, data_records, pr_records=pr_records)
     with tabs[14]:
-        page_grandslam(grandslam_results, data_records, pr_records=pr_records, athletes=athletes, competition_rows=competition_rows)
+        page_coaching_playbook()
     with tabs[15]:
+        page_grandslam(grandslam_results, data_records, pr_records=pr_records, athletes=athletes, competition_rows=competition_rows)
+    with tabs[16]:
         page_marketing(pr_records, grandslam_results, data_records, athletes,
                        competition_rows=competition_rows, consistency_wins=consistency_wins,
                        milestones=milestones)
-    with tabs[16]:
-        page_gym_referrals(athletes=athletes)
     with tabs[17]:
-        page_finance(data_records, pr_records, athletes, cancelled_names=cancelled_names)
+        page_gym_referrals(athletes=athletes)
     with tabs[18]:
-        page_sync_health()
+        page_finance(data_records, pr_records, athletes, cancelled_names=cancelled_names)
     with tabs[19]:
+        page_sync_health()
+    with tabs[20]:
         page_help()
 
 

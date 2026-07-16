@@ -19,6 +19,7 @@ Run:  python sync.py            (live)
 """
 import datetime as dt
 import json
+import re
 import sys
 
 import config
@@ -462,18 +463,25 @@ def sync_archetype_from_typeform(sheets, email_by_name):
         if note.startswith("typeform:"):
             seen_tokens.add(note.split("typeform:", 1)[1].strip())
 
-    # Athlete resolution: email -> exact name -> fuzzy name
+    # Athlete resolution: email -> exact name -> fuzzy name.
+    # Collect names even where we hold no email — an athlete with a blank Email
+    # cell can still be matched by name, and gating the name list on having an
+    # email silently dropped ~90 roster members from ever matching.
     merged = dict(email_by_name)
+    all_known = [n for n in merged if n]
     try:
         for rec in sheets.read_records(config.TAB_DATA):
             nm2 = str(rec.get("Full Name", "")).strip()
             em2 = str(rec.get("Email", "")).strip().lower()
-            if nm2 and em2:
+            if not nm2:
+                continue
+            if em2:
                 merged.setdefault(nm2, em2)
+            if nm2 not in all_known:
+                all_known.append(nm2)
     except Exception:
         pass
-    email_to_name = {v.lower(): k for k, v in merged.items()}
-    all_known = list(merged.keys())
+    email_to_name = {v.lower(): k for k, v in merged.items() if v}
 
     def _submitted_date(s):
         for fmt in ("%m/%d/%Y %H:%M:%S", "%m/%d/%Y", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
@@ -554,6 +562,174 @@ def sync_archetype_from_typeform(sheets, email_by_name):
         print(f"  ! [archetype form] answers didn't map to the instrument, skipped: "
               f"{', '.join(unmapped[:10])}")
     return imported, new_reads
+
+
+def sync_video_analysis(sheets, email_by_name):
+    """Import movement-analysis video submissions from the Google Form.
+
+    Three outcomes per new submission, and no fourth: a dated Coaching Notes
+    entry, a row on the Video Reviews tab that stays open until a coach marks
+    it reviewed, and nothing sent to the athlete. Video feedback is the coach's
+    job; an automated "thanks, we got it" would be the exact bot-voice noise
+    we've been stripping out everywhere else.
+
+    Deduped on the Drive video link, which is unique per upload.
+
+    Athlete resolution is deliberately conservative. Only ~30% of submitters
+    sign in with the email we have on file, so email alone silently drops most
+    rows; but attaching a video to the WRONG athlete's notes is worse than
+    dropping it, so anything that can't be resolved confidently is reported
+    for a human to place rather than guessed at.
+
+    Returns (imported, unresolved_list).
+    """
+    rows = sheets.load_video_form_responses()
+    if not rows:
+        return 0, []
+
+    seen_links = {
+        str(r.get("Video Link", "")).strip()
+        for r in sheets.load_video_reviews()
+        if str(r.get("Video Link", "")).strip()
+    }
+
+    # Roster: name -> email, from the caller's map plus _DATA.
+    # Names are collected even when we hold no email for the athlete: ~90 of
+    # them have a blank Email cell, and those are precisely the people email
+    # matching cannot rescue, so gating the name list on having an email would
+    # drop the rows that need the name fallback most.
+    merged = dict(email_by_name)
+    all_known = [n for n in merged if n]
+    try:
+        for rec in sheets.read_records(config.TAB_DATA):
+            nm2 = str(rec.get("Full Name", "")).strip()
+            em2 = str(rec.get("Email", "")).strip().lower()
+            if not nm2:
+                continue
+            if em2:
+                merged.setdefault(nm2, em2)
+            if nm2 not in all_known:
+                all_known.append(nm2)
+    except Exception:
+        pass
+    email_to_name = {v.lower(): k for k, v in merged.items() if v}
+
+    def _norm(s):
+        return re.sub(r"[^a-z]", "", str(s or "").lower())
+
+    def _resolve(auto_email, typed_name, typed_email):
+        """auto_email -> exact name -> surname+first-initial -> unique first name."""
+        nm = email_to_name.get(auto_email)
+        if nm:
+            return nm, "email"
+        # The typed name and typed email get swapped by some submitters, so
+        # treat whichever field holds a non-email string as the name candidate.
+        cands = [c for c in (typed_name, typed_email) if c and "@" not in c]
+        for cand in cands:
+            n = _norm(cand)
+            if not n:
+                continue
+            for known in all_known:
+                if _norm(known) == n:
+                    return known, "name"
+        for cand in cands:
+            parts = [p for p in re.split(r"\s+", cand.strip()) if p]
+            if len(parts) < 2:
+                continue
+            first, last = parts[0].lower(), parts[-1].lower()
+            # "Gav Donald" -> "Gavin Donald": surname must match exactly and the
+            # first name must be a prefix, and the result must be unambiguous.
+            hits = [
+                k for k in all_known
+                if (kp := [p for p in re.split(r"\s+", k.strip()) if p]) and len(kp) >= 2
+                and kp[-1].lower() == last
+                and (kp[0].lower().startswith(first) or first.startswith(kp[0].lower()))
+            ]
+            if len(hits) == 1:
+                return hits[0], "fuzzy"
+        for cand in cands:
+            parts = [p for p in re.split(r"\s+", cand.strip()) if p]
+            if len(parts) != 1:
+                continue
+            # First name only ("Luc"): accept only if exactly one athlete has it.
+            hits = [
+                k for k in all_known
+                if (kp := [p for p in re.split(r"\s+", k.strip()) if p])
+                and kp[0].lower() == parts[0].lower()
+            ]
+            if len(hits) == 1:
+                return hits[0], "first-name"
+        return None, None
+
+    def _submitted_date(s):
+        for fmt in ("%d/%m/%Y %H:%M:%S", "%m/%d/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return dt.datetime.strptime(str(s).strip(), fmt).date()
+            except (ValueError, TypeError):
+                continue
+        return None
+
+    new_rows, note_lines, unresolved = [], {}, []
+    for row in rows:
+        link = str(row.get(config.VIDEO_FORM_VIDEO_COL, "")).strip()
+        if not link or link in seen_links:
+            continue
+
+        auto_email = str(row.get(config.VIDEO_FORM_AUTO_EMAIL_COL, "")).strip().lower()
+        typed_name = str(row.get(config.VIDEO_FORM_TYPED_NAME_COL, "")).strip()
+        typed_email = str(row.get(config.VIDEO_FORM_TYPED_EMAIL_COL, "")).strip()
+        movement = str(row.get(config.VIDEO_FORM_MOVEMENT_COL, "")).strip()
+        bottleneck = str(row.get(config.VIDEO_FORM_BOTTLENECK_COL, "")).strip()
+        track = str(row.get(config.VIDEO_FORM_TRACK_COL, "")).strip()
+        submitted = _submitted_date(row.get("Timestamp", "")) or TODAY
+
+        nm, how = _resolve(auto_email, typed_name, typed_email)
+        if not nm:
+            unresolved.append(f"{typed_name or auto_email or '?'} ({movement or 'video'})")
+            continue
+        if how != "email":
+            print(f"  [video form] matched by {how}: "
+                  f"'{typed_name or auto_email}' → '{nm}'")
+
+        seen_links.add(link)
+        new_rows.append({
+            "Submitted At": submitted.isoformat(),
+            "Athlete Name": nm,
+            "Movement": movement,
+            "Bottleneck": bottleneck,
+            "Video Link": link,
+            "Track": track,
+            "Reviewed": "No",
+            "Reviewed By": "",
+            "Reviewed At": "",
+            "Submitter Email": auto_email,
+        })
+
+        # Dated Coaching Notes entry, in the established [date — kind] format
+        summary = bottleneck if len(bottleneck) <= 220 else bottleneck[:217] + "..."
+        line = f"[{submitted.isoformat()} — video] {movement or 'Movement'} submitted for analysis."
+        if summary:
+            line += f" Athlete says: {summary}"
+        line += f" Video: {link}"
+        note_lines[nm] = (note_lines.get(nm, "") + "\n" + line).strip()
+
+    if not new_rows:
+        if unresolved:
+            print(f"  ! [video form] couldn't match to an athlete: "
+                  f"{', '.join(unresolved[:10])}")
+        return 0, unresolved
+
+    if config.DRY_RUN:
+        for r in new_rows:
+            print(f"[DRY_RUN] video review: {r['Athlete Name']} — {r['Movement']}")
+        return len(new_rows), unresolved
+
+    sheets.append_video_reviews(new_rows)
+    append_coaching_notes(sheets, note_lines)
+    if unresolved:
+        print(f"  ! [video form] couldn't match to an athlete: "
+              f"{', '.join(unresolved[:10])}")
+    return len(new_rows), unresolved
 
 
 def sync_intake_from_typeform(sheets, email_by_name):
@@ -1162,6 +1338,10 @@ def main():
     intake_updated = sync_intake_from_typeform(sheets, email_by_name)
     if intake_updated:
         print(f"Athlete profiles updated from intake form: {intake_updated}")
+
+    videos_imported, videos_unresolved = sync_video_analysis(sheets, email_by_name)
+    if videos_imported:
+        print(f"Movement analysis videos imported: {videos_imported}")
 
     messages_sent_log = []  # collects all automated messages for Message Log
 

@@ -71,6 +71,32 @@ COMP_FORM_DATE_COL = "What is the competition date? (DD/MM/YYYY)"
 COMP_FORM_TYPE_COL = "What type of competition is this?"
 COMP_FORM_NOTES_COL = "Any notes for your coach about this competition? (optional)"
 
+# Movement analysis Google Form — athletes upload a lift video for review.
+# Kept on Google Forms rather than Typeform: Typeform caps uploads at 10MB on
+# every plan, and phone video of a lift is routinely 50-150MB. Google Forms
+# allows up to 10GB per file (this form is set to 100MB) straight into Drive.
+VIDEO_FORM_SHEET_ID = _get(
+    "VIDEO_FORM_SHEET_ID", "1aYaPuTeHEPVzo1l4b5eBnplDj0pE3PoH99WkcIvdSIY"
+)
+VIDEO_FORM_TAB = _get("VIDEO_FORM_TAB", "Form responses 1")
+# Column headers — must match the Google Form question text exactly.
+# NOTE: the identity anchor is the AUTO-COLLECTED Google account email
+# ("Email address"), not the typed one. Google Forms requires sign-in for file
+# uploads, so that column is always present and always correct. The typed
+# fields are self-reported and unreliable (submissions exist with a blank name
+# and the name typed into the email box).
+VIDEO_FORM_AUTO_EMAIL_COL = "Email address"
+VIDEO_FORM_TYPED_NAME_COL = "Full Name"
+VIDEO_FORM_TYPED_EMAIL_COL = "Email Address"
+VIDEO_FORM_TRACK_COL = "Current JST Track"
+VIDEO_FORM_MOVEMENT_COL = "The Movement (e.g., Snatch, Wall Ball, RMU)"
+VIDEO_FORM_BOTTLENECK_COL = (
+    "The Bottleneck: What does it feel like? Where is the pain/pump? "
+    "What is the one thing you can't get right?"
+)
+VIDEO_FORM_VIDEO_COL = "The Video Upload (Max 1 file, 100MB)"
+TAB_VIDEO_REVIEWS = "Video Reviews"
+
 # Athlete intake Typeform — new athlete onboarding form
 # Set INTAKE_FORM_SHEET_ID to the Google Sheet ID of the intake Typeform responses.
 INTAKE_FORM_SHEET_ID = _get("INTAKE_FORM_SHEET_ID", "")
