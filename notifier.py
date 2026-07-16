@@ -309,57 +309,98 @@ def _parse_date_email(s):
     return None
 
 
-def _build_athlete_progress_email(name, new_prs, streak_weeks, next_comp, archetype_id=None):
+def _archetype_athlete_tip(archetype_id):
+    """The athlete-facing archetype line, or "" if there isn't one.
+
+    Reads the `athlete` block, never `coach`. The coach block is our read ON
+    the athlete ("their biggest injury risk is their own engine") and is
+    written in the third person because it was never meant for their eyes.
+    """
+    if not archetype_id:
+        return ""
+    try:
+        import archetypes as _arch
+        from summariser import _kill_em_dashes
+        tip = ((_arch.get_archetype(archetype_id) or {}).get("athlete") or {}).get(
+            "tell_coach", ""
+        )
+        # The archetype copy is authored with em dashes; strip before sending.
+        return _kill_em_dashes(tip).strip()
+    except Exception:
+        return ""
+
+
+def _build_athlete_progress_email(name, new_prs, streak_weeks, next_comp, archetype_id=None,
+                                  month_label=None, month_sessions=None, month_prs=None):
+    """Weekly snapshot, or the month in review when month_label is passed.
+
+    On the first Monday of the month this carries the month instead of the
+    week, so an athlete gets one email rather than a monthly report stacked on
+    top of a weekly one covering the same results.
+    """
     first = name.split()[0]
-    lines = [
-        f"Hi {first},",
-        "",
-        "Here's your weekly training snapshot from JST Compete:",
-        "",
-    ]
-    if new_prs:
-        lines.append("🏆 New results this week:")
-        for bench, value in new_prs:
-            lines.append(f"  • {bench}: {value}")
+    lines = [f"Hey {first},", ""]
+
+    if month_label:
+        _sess = month_sessions or 0
+        lines.append(
+            f"{month_label} done. {_sess} session{'s' if _sess != 1 else ''} logged."
+        )
         lines.append("")
+        if month_prs:
+            lines.append("What you put on the board:")
+            for bench, value in month_prs[:8]:
+                lines.append(f"  {bench}: {value}")
+            if len(month_prs) > 8:
+                lines.append(f"  and {len(month_prs) - 8} more")
+            lines.append("")
+    elif new_prs:
+        lines.append("Your results logged this week:")
+        for bench, value in new_prs:
+            lines.append(f"  {bench}: {value}")
+        lines.append("")
+
     if streak_weeks and streak_weeks >= 4:
-        lines.append(f"✅ {streak_weeks} consecutive weeks logging — great discipline, keep it going!")
+        lines.append(f"That's {streak_weeks} weeks straight logging something.")
         lines.append("")
     if next_comp:
         comp_name, days_out = next_comp
         if days_out >= 0:
             w, d = divmod(days_out, 7)
             time_str = f"{w}w {d}d" if w else f"{d}d"
-            lines.append(f"🏁 Next competition: {comp_name} — {time_str} away. Stay sharp.")
+            lines.append(f"{comp_name} is {time_str} out.")
         else:
-            lines.append(f"🏁 {comp_name} was {abs(days_out)}d ago. Great effort — debrief coming soon.")
+            lines.append(f"{comp_name} was {abs(days_out)} days ago.")
         lines.append("")
-    # Archetype-specific coaching tip
-    if archetype_id:
-        try:
-            import archetypes as _arch
-            arch = _arch.get_archetype(archetype_id)
-            tip = (arch.get("coach") or {}).get("programming_read", "")
-            if tip:
-                lines.append(f"\U0001f4a1 Your coaching focus: {tip}")
-                lines.append("")
-        except Exception:
-            pass
-    lines.extend([
-        "Every result you log makes your coaching sharper. Keep it up.",
-        "",
-        "— JST Compete Coaching Team",
-    ])
+
+    tip = _archetype_athlete_tip(archetype_id)
+    if tip:
+        lines.append(f"Worth remembering: {tip}")
+        lines.append("")
+
+    # One open question, so this can start a conversation rather than land as
+    # a broadcast. No sign-off: this is automated, it isn't personally from Jak.
+    lines.append(
+        "What's the one thing you want to get after next month?"
+        if month_label else
+        "What's the one thing you want to get after this week?"
+    )
     return "\n".join(lines)
 
 
-def send_all_athlete_progress_emails(bench_rows, consistency_wins, competition_rows, email_by_name, archetype_by_name=None):
+def send_all_athlete_progress_emails(bench_rows, consistency_wins, competition_rows, email_by_name,
+                                     archetype_by_name=None, month_review=None):
     """Email each athlete who has news this week: new PRs, a streak milestone, or an upcoming comp.
 
     bench_rows: new PR log rows [[date, name, ..., bench, value, ...], ...]
     consistency_wins: [(name, consecutive_weeks), ...]
     competition_rows: rows from Competitions tab [{Athlete Name, Competition Name, Date, ...}]
     email_by_name: {athlete_name: email_address}
+    month_review: on the first Monday of the month, {"label": "June",
+        "by_name": {name: (sessions, [(bench, value), ...])}}. When given, an
+        athlete with a month's activity gets the month in review INSTEAD of the
+        weekly snapshot, not as well as it — the month already contains the
+        week's results, so sending both mails the same PR twice in one morning.
     Returns count of emails sent.
     """
     if config.DRY_RUN:
@@ -393,6 +434,9 @@ def send_all_athlete_progress_emails(bench_rows, consistency_wins, competition_r
             if existing is None or abs(days_out) < abs(existing[1]):
                 comp_by_name[name] = (comp_name, days_out)
 
+    month_by_name = (month_review or {}).get("by_name", {})
+    month_label = (month_review or {}).get("label")
+
     all_names = set(email_by_name.keys()) | set(prs_by_name.keys())
     sent = 0
     for name in sorted(all_names):
@@ -402,12 +446,22 @@ def send_all_athlete_progress_emails(bench_rows, consistency_wins, competition_r
         new_prs = prs_by_name.get(name, [])
         streak = streak_by_name.get(name)
         next_comp = comp_by_name.get(name)
-        if not new_prs and (not streak or streak < 4) and not next_comp:
+        m_sessions, m_prs = month_by_name.get(name, (0, []))
+        has_month = bool(month_label and m_sessions)
+        if not has_month and not new_prs and (not streak or streak < 4) and not next_comp:
             continue
         arch_row = (archetype_by_name or {}).get(name)
         arch_id = str(arch_row.get("Primary Archetype", "")).strip() if arch_row else None
-        body = _build_athlete_progress_email(name, new_prs, streak, next_comp, archetype_id=arch_id)
-        subject = "Your weekly training snapshot — JST Compete"
+        body = _build_athlete_progress_email(
+            name, new_prs, streak, next_comp, archetype_id=arch_id,
+            month_label=month_label if has_month else None,
+            month_sessions=m_sessions if has_month else None,
+            month_prs=m_prs if has_month else None,
+        )
+        subject = (
+            f"Your {month_label} in review"
+            if has_month else "Your week at JST Compete"
+        )
         try:
             _send_email_to(config.SMTP_FROM, config.SMTP_PASSWORD, email, subject, body)
             sent += 1
@@ -533,125 +587,6 @@ def send_weekly_coach_summary(athletes_by_coach, engagement_results, trend_resul
 
     return sent
 
-
-def send_monthly_athlete_reports(data_recs, email_by_name, pr_records):
-    """Email each athlete their monthly training summary on the 1st of the month.
-
-    Skips athletes with no activity in the previous calendar month.
-    Returns count of emails sent.
-    """
-    if config.DRY_RUN:
-        return 0
-    if not config.SMTP_FROM or not config.SMTP_PASSWORD:
-        return 0
-
-    import datetime as dt_mod
-    today = dt_mod.date.today()
-    last_month_end = today.replace(day=1) - dt_mod.timedelta(days=1)
-    last_month_start = last_month_end.replace(day=1)
-    month_label = last_month_end.strftime("%B %Y")
-
-    month_prs_by_name = {}
-    for r in pr_records:
-        nm = str(r.get("Athlete Name", "")).strip()
-        d_str = str(r.get("Date", "")).strip()
-        if nm and last_month_start.isoformat() <= d_str <= last_month_end.isoformat():
-            month_prs_by_name.setdefault(nm, []).append(r)
-
-    sent = 0
-    for rec in data_recs:
-        nm = str(rec.get("Full Name", "")).strip()
-        if not nm:
-            continue
-        email = email_by_name.get(nm) or str(rec.get("Email", "")).strip()
-        if not email:
-            continue
-        month_prs = month_prs_by_name.get(nm, [])
-        if not month_prs:
-            continue  # no activity — skip
-        sessions = len({r.get("Date") for r in month_prs if r.get("Date")})
-        benchmarks = [(str(r.get("Benchmark Name", "")), str(r.get("Value", "")))
-                      for r in month_prs]
-        prog = str(rec.get("Programme", "")).strip()
-        goal = str(rec.get("North Star Goal", "")).strip()
-
-        first = nm.split()[0]
-
-        # ── plain text ────────────────────────────────────────────────────────
-        plain_lines = [f"Hi {first},", "", f"Your training summary for {month_label}:", "",
-                       f"Sessions logged: {sessions}"]
-        if benchmarks:
-            plain_lines += ["", "Results this month:"]
-            for bench, val in benchmarks[:8]:
-                plain_lines.append(f"  - {bench}: {val}")
-            if len(benchmarks) > 8:
-                plain_lines.append(f"  - ...and {len(benchmarks) - 8} more")
-        if goal:
-            plain_lines += ["", f"North Star Goal: {goal}"]
-        if prog:
-            plain_lines += ["", f"Programme: {prog}"]
-        plain_lines += ["", "Every session you log makes your coaching sharper.",
-                        "", "— JST Compete Coaching Team"]
-        plain_body = "\n".join(plain_lines)
-
-        # ── HTML ──────────────────────────────────────────────────────────────
-        bench_rows_html = "".join(
-            f"<tr><td style='padding:6px 12px;border-bottom:1px solid #f0f0f0'>{b}</td>"
-            f"<td style='padding:6px 12px;border-bottom:1px solid #f0f0f0;font-weight:600'>{v}</td></tr>"
-            for b, v in benchmarks[:8]
-        )
-        bench_section = (
-            f"<h3 style='color:#1a1a1a;margin:24px 0 8px'>🏆 Results this month</h3>"
-            f"<table style='width:100%;border-collapse:collapse;font-size:14px'>"
-            f"{bench_rows_html}</table>"
-            + (f"<p style='color:#888;font-size:13px'>...and {len(benchmarks)-8} more</p>"
-               if len(benchmarks) > 8 else "")
-        ) if benchmarks else ""
-        goal_section = (
-            f"<div style='background:#f0f7ff;border-left:4px solid #0066cc;"
-            f"padding:12px 16px;margin:20px 0;border-radius:4px'>"
-            f"<strong>🎯 North Star Goal</strong><br>{goal}</div>"
-        ) if goal else ""
-        prog_section = (
-            f"<p style='color:#555;font-size:13px'>📋 Programme: <strong>{prog}</strong></p>"
-        ) if prog else ""
-
-        html_body = f"""<!DOCTYPE html>
-<html><body style='font-family:Arial,sans-serif;max-width:560px;margin:0 auto;color:#1a1a1a'>
-<div style='background:#0066cc;padding:24px 32px;border-radius:8px 8px 0 0'>
-  <h1 style='color:#fff;margin:0;font-size:22px'>JST Compete</h1>
-  <p style='color:#cce0ff;margin:4px 0 0;font-size:14px'>{month_label} Training Summary</p>
-</div>
-<div style='background:#fff;padding:24px 32px;border:1px solid #e8e8e8;border-top:none;border-radius:0 0 8px 8px'>
-  <p>Hi {first},</p>
-  <div style='display:flex;gap:16px;margin:20px 0'>
-    <div style='text-align:center;background:#f8f9fa;border-radius:8px;padding:16px 24px;flex:1'>
-      <div style='font-size:32px;font-weight:700;color:#0066cc'>{sessions}</div>
-      <div style='font-size:13px;color:#666;margin-top:4px'>sessions logged</div>
-    </div>
-    <div style='text-align:center;background:#f8f9fa;border-radius:8px;padding:16px 24px;flex:1'>
-      <div style='font-size:32px;font-weight:700;color:#0066cc'>{len(benchmarks)}</div>
-      <div style='font-size:13px;color:#666;margin-top:4px'>results recorded</div>
-    </div>
-  </div>
-  {bench_section}
-  {goal_section}
-  {prog_section}
-  <hr style='border:none;border-top:1px solid #f0f0f0;margin:24px 0'>
-  <p style='color:#555;font-size:14px'>Every session you log makes your coaching sharper.
-  Keep up the consistency.</p>
-  <p style='color:#888;font-size:13px'>— JST Compete Coaching Team</p>
-</div>
-</body></html>"""
-
-        subject = f"Your {month_label} training summary — JST Compete"
-        try:
-            _send_html_email_to(config.SMTP_FROM, config.SMTP_PASSWORD, email,
-                                subject, plain_body, html_body)
-            sent += 1
-        except Exception as exc:
-            print(f"  ! Monthly report failed for {nm} ({email}): {exc}")
-    return sent
 
 
 def send_progress_page_email(smtp_from, smtp_password, to_addr, athlete_name, jst_id, dashboard_url):

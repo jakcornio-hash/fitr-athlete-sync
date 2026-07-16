@@ -2225,31 +2225,52 @@ def main():
             k: v for k, v in email_by_name.items()
             if k not in bespoke_names and k.lower() not in cancelled_names_lower
         }
+        # On the first Monday of the month, the email carries the month in
+        # review instead of the week. Athlete emails now only ever leave on a
+        # Monday, alongside the Fitr batch, so there's one moment we speak to
+        # them rather than a monthly report landing on whatever weekday the
+        # 1st happened to be.
+        _month_review = None
+        if TODAY.day <= 7:
+            _prev_month_end   = TODAY.replace(day=1) - dt.timedelta(days=1)
+            _prev_month_start = _prev_month_end.replace(day=1)
+            _m_sessions, _m_prs = {}, {}
+            for _rec in pr_records:
+                _nm = str(_rec.get("Athlete Name", "")).strip()
+                _ds = str(_rec.get("Date", "")).strip()
+                if not _nm or not (_prev_month_start.isoformat() <= _ds <= _prev_month_end.isoformat()):
+                    continue
+                _m_sessions.setdefault(_nm, set()).add(_ds)
+                _b = str(_rec.get("Benchmark Name", "")).strip()
+                _v = str(_rec.get("Value", "")).strip()
+                if _b and _v:
+                    _m_prs.setdefault(_nm, []).append((_b, _v))
+            _month_review = {
+                "label": _prev_month_end.strftime("%B"),
+                "by_name": {
+                    _nm: (len(_dates), _m_prs.get(_nm, []))
+                    for _nm, _dates in _m_sessions.items()
+                },
+            }
+
         emails_sent = notifier.send_all_athlete_progress_emails(
             _weekly_pr_rows, consistency_wins, competition_rows, non_bespoke_email_by_name,
-            archetype_by_name=archetype_by_name,
+            archetype_by_name=archetype_by_name, month_review=_month_review,
         )
         if emails_sent:
-            print(f"Athlete weekly progress emails sent: {emails_sent}")
+            _kind = "month in review" if _month_review else "weekly progress"
+            print(f"Athlete {_kind} emails sent: {emails_sent}")
 
         # All Monday sends done — mark the week so any later run today skips them.
         sheets.mark_weekly_send_done(_this_monday.isoformat())
 
-    # ---- monthly athlete reports (fires on the 1st of each month) ----
+    # ---- monthly Fitr check-in (fires on the 1st of each month) ----
+    # The monthly REPORT EMAIL used to fire here too. It moved into the Monday
+    # block above (first Monday of the month) for two reasons: it was the only
+    # athlete-facing send with no double-send guard, so a second run on the 1st
+    # mailed everyone twice; and landing on the 1st meant it arrived on
+    # whatever weekday that was, unhooked from the Monday moment.
     if TODAY.day == 1:
-        monthly_data_recs = (
-            [r for r in data_recs if str(r.get("Full Name", "")).strip() in config.TEST_ATHLETES]
-            if config.TEST_ATHLETES else data_recs
-        )
-        monthly_data_recs = [
-            r for r in monthly_data_recs
-            if str(r.get("Full Name", "")).strip() not in bespoke_names
-            and str(r.get("Full Name", "")).strip().lower() not in cancelled_names_lower
-        ]
-        monthly_sent = notifier.send_monthly_athlete_reports(monthly_data_recs, email_by_name, pr_records)
-        if monthly_sent:
-            print(f"Monthly athlete reports sent: {monthly_sent}")
-
         # Monthly Fitr progress message — short personal check-in for every athlete with a room
         _last_month_end   = TODAY.replace(day=1) - dt.timedelta(days=1)
         _last_month_start = _last_month_end.replace(day=1)
