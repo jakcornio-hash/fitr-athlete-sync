@@ -685,20 +685,32 @@ class SheetsClient:
 
     def mark_video_reviewed(self, video_link, coach, when):
         """Mark the submission with this video link as reviewed."""
+        return self.mark_videos_reviewed([video_link], coach, when) > 0
+
+    def mark_videos_reviewed(self, video_links, coach, when):
+        """Mark many submissions reviewed in three writes rather than three per
+        video. Marking a queue's worth one at a time is how we tripped the
+        Sheets read quota before.
+
+        Returns the number of rows matched.
+        """
+        wanted = {str(l).strip() for l in video_links if str(l).strip()}
+        if not wanted:
+            return 0
         vals = self.read_values(config.TAB_VIDEO_REVIEWS)
         if not vals:
-            return False
+            return 0
         header = vals[0]
         try:
             link_i = header.index("Video Link")
         except ValueError:
-            return False
-        rowmap = {}
-        for i, r in enumerate(vals[1:], start=2):
-            if link_i < len(r) and r[link_i].strip() == str(video_link).strip():
-                rowmap[i] = True
-        if not rowmap:
-            return False
+            return 0
+        rows = [
+            i for i, r in enumerate(vals[1:], start=2)
+            if link_i < len(r) and r[link_i].strip() in wanted
+        ]
+        if not rows:
+            return 0
         for col, val in (
             ("Reviewed", "Yes"), ("Reviewed By", coach), ("Reviewed At", when),
         ):
@@ -706,11 +718,11 @@ class SheetsClient:
                 ci = header.index(col)
             except ValueError:
                 continue
-            letter = self._idx_to_col(ci + 1)
             self.update_cells_by_rowmap(
-                config.TAB_VIDEO_REVIEWS, letter, {i: val for i in rowmap}
+                config.TAB_VIDEO_REVIEWS, self._idx_to_col(ci + 1),
+                {i: val for i in rows},
             )
-        return True
+        return len(rows)
 
     @staticmethod
     def _idx_to_col(idx):

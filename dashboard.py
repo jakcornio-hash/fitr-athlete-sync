@@ -279,6 +279,20 @@ def _load_video_reviews_cached():
         return []
 
 
+def _live_video_reviews():
+    """Video submissions excluding anyone who has since cancelled.
+
+    Cancelled athletes are hidden from every other view; a video from someone
+    who left six weeks ago isn't a review anyone owes. Returns (rows, n_hidden).
+    """
+    rows = _load_video_reviews_cached()
+    gone = st.session_state.get("_cancelled_names_lower") or set()
+    if not gone:
+        return rows, 0
+    live = [r for r in rows if str(r.get("Athlete Name", "")).strip().lower() not in gone]
+    return live, len(rows) - len(live)
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _get_fitr_room_ids():
     """Return {athlete_name: room_id} from Fitr chat rooms. Cached 1hr."""
@@ -3141,7 +3155,7 @@ def page_action_list(engagement_results, trend_results, rec_alert_rows, mileston
     # send, whereas a video needs the coach to actually watch it and write real
     # feedback. Slotting it in here would invite a canned reply.
     _pending_vids = [
-        v for v in _load_video_reviews_cached()
+        v for v in _live_video_reviews()[0]
         if str(v.get("Reviewed", "")).strip().lower() != "yes"
     ]
     if _pending_vids:
@@ -7663,13 +7677,17 @@ def page_video_reviews(data_records=None):
         "from this queue."
     )
 
-    rows = _load_video_reviews_cached()
+    rows, n_hidden = _live_video_reviews()
     if not rows:
         st.info(
             "No video submissions yet. They arrive via the Movement Analysis form "
             "and import on the daily sync."
         )
         return
+    if n_hidden:
+        st.caption(
+            f"🚪 {n_hidden} submission(s) from athletes who have since cancelled are hidden."
+        )
 
     pending = [r for r in rows if str(r.get("Reviewed", "")).strip().lower() != "yes"]
     done = [r for r in rows if str(r.get("Reviewed", "")).strip().lower() == "yes"]
@@ -7935,6 +7953,7 @@ def main():
     with st.spinner("Loading..."):
         pr_records, athletes, rec_latest, data_records, archetype_rows, competition_rows, cancelled_names = load_all()
         st.session_state["_cancelled_count"] = len(cancelled_names)
+        st.session_state["_cancelled_names_lower"] = cancelled_names
         trend_results, engagement_results, consistency_wins, rec_alert_rows, rec_by_name, comp_results = run_analytics(
             pr_records, athletes, rec_latest, data_records, competition_rows=competition_rows
         )
