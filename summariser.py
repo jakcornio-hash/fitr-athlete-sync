@@ -83,36 +83,30 @@ _ATHLETE_MSG_SYSTEM = _VOICE + """
 --- YOUR TASK ---
 Write ONE short automated Fitr message to a single athlete, in Jak's voice.
 
-Shape: acknowledge what happened (specific, brief), then ask ONE genuine open
-question that invites a reply. Never just state a fact and stop.
+Shape: acknowledge what happened (specific, brief), then ask a genuine open
+question that invites a reply. Never just state a fact and stop. One question
+is usually enough; a second is fine when it offers help. Never three.
 
 Hard rules:
-- 1 to 2 short sentences. No sign-off. A "Hey {First}," opener is optional.
+- Short and readable on a phone. 2 to 4 short sentences. Where the playbook
+  below gives an example for this situation, match its length and shape.
+- No sign-off. A "Hey {First}," opener is optional.
 - NEVER use an em dash. Use a comma or a full stop.
 - No emojis. No hype stacking ("well done!!"). Let the numbers land.
 - Humanise raw benchmark names. "AMRAP 5 Minutes - Bar Muscle Ups" becomes
   "5-minute AMRAP bar muscle-up test". "1RM Push Press" becomes "1RM push press".
 - Output ONLY the message text. No preamble, no quotes.
 
-Examples (situation -> message):
+Examples (situation -> message). These are voice samples only, for situations
+the playbook doesn't cover yet. A playbook example below always beats these:
+it is written for that exact situation, these are not. As the playbook fills
+up, these retire.
 
 PB, Gerard improved "AMRAP 5 Minutes - Bar Muscle Ups" from 27 to 34 reps.
 -> Good work Gerard on the 5-minute AMRAP bar muscle-up test. 27 to 34 reps is a decent jump. Why do you reckon it's gone up so much?
 
-First result, Cara logged "1RM Push Press" at 72.5 kg.
--> Hey Cara, decent first 1RM push press number. How did it feel, or is there a bit more in the tank?
-
 Multiple PBs, Andy hit "1RM Bench Press" 130 kg.
 -> That's a big boy bench, Andy. 130kg. Was that one out of the blue or have you been building to it?
-
-First results, Daniel logged his first "Max Kipping Ring Muscle Ups" (12 reps) and "AMRAP 5 Minutes - Bar Muscle Ups" (50 reps).
--> Great work getting your first results logged, Daniel. Good to look back on and to aim at in sessions. Give us a shout if you want any pointers.
-
-Streak, Nick has logged 7 training days in a row.
--> Nick, 7 days on the bounce. Fair play. What's been making it easier to show up this week?
-
-Re-engagement, Nicky has not logged in a while.
--> Nicky, haven't seen you in a while, no pressure, just checking in. Everything alright?
 """
 
 
@@ -122,13 +116,16 @@ def _kill_em_dashes(text):
     return _re.sub(r"\s*[—–]\s*", ", ", text)
 
 
-def athlete_message(situation, fallback):
+def athlete_message(situation, fallback, playbook=""):
     """Generate one on-voice automated athlete message.
 
     situation: plain one-line description of what happened, e.g.
       'PB, Gerard improved "1RM Back Squat" from 110kg to 120kg.'
     fallback:  a safe, tone-compliant message used if the API is unavailable
                or returns something unusable. Never returns None.
+    playbook:  optional Coaching Playbook rows from
+               coaching_voice.playbook_prompt(), so the message reflects how
+               JST actually handles this rather than a generic guess.
     """
     client = _client()
     if client is None:
@@ -137,7 +134,7 @@ def athlete_message(situation, fallback):
         resp = client.messages.create(
             model=config.ANTHROPIC_MODEL,
             max_tokens=120,
-            system=_ATHLETE_MSG_SYSTEM,
+            system=_ATHLETE_MSG_SYSTEM + (playbook or ""),
             messages=[{"role": "user", "content": f"{situation}\n->"}],
         )
         text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
@@ -192,7 +189,10 @@ _REPLY_SYSTEM = (
     "1. Acknowledges what the athlete said specifically\n"
     "2. Gives actionable coaching guidance or reassurance\n"
     "3. Asks one follow-up question if relevant\n\n"
-    "Keep it under 100 words. No markdown. Follow the tone rules above exactly.\n"
+    "Keep it under 100 words. No markdown. Follow the tone rules above exactly.\n\n"
+    "SIGN-OFF: do not add one. End on the last line of the message itself. The coach "
+    "who sends this adds their own name, and it is not always Jak, so signing it here "
+    "would put the wrong coach's name on it.\n\n"
     "If the last message in the thread is clearly from the coach (not the athlete), reply exactly: SKIP.\n"
     "If there is nothing meaningful to reply to, reply exactly: SKIP."
 )
@@ -342,13 +342,17 @@ def annual_athlete_review(athlete_name, months_training, pr_summary, comp_summar
         return None
 
 
-def draft_reply(athlete_name, thread_text, profile_data=None):
+def draft_reply(athlete_name, thread_text, profile_data=None, playbook=""):
     """Draft a coaching reply to an athlete's most recent message.
 
     thread_text: plain-text transcript built by format_thread() — chronological,
                  newest message is LAST.
     profile_data: optional dict with keys like Programme, North Star Goal,
                   Tier, Injury Status pulled from _DATA for this athlete.
+    playbook: optional Coaching Playbook rows from
+              coaching_voice.playbook_prompt(). A reply answers whatever the
+              athlete raised, so there's no scenario to look up: this gets the
+              standing principles rather than situation-specific plays.
 
     Returns a draft reply string, or None if no reply is warranted.
     """
@@ -361,7 +365,7 @@ def draft_reply(athlete_name, thread_text, profile_data=None):
         resp = client.messages.create(
             model=config.ANTHROPIC_MODEL,
             max_tokens=200,
-            system=_REPLY_SYSTEM,
+            system=_REPLY_SYSTEM + (playbook or ""),
             messages=[{
                 "role": "user",
                 "content": (

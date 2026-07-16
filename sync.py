@@ -29,6 +29,7 @@ import analytics
 import archetypes
 import notifier
 import summariser
+import coaching_voice
 import recovery
 
 TODAY = dt.date.today()
@@ -1343,6 +1344,12 @@ def main():
     if videos_imported:
         print(f"Movement analysis videos imported: {videos_imported}")
 
+    # A scenario with no Playbook rows injects nothing and says nothing, so the
+    # message still sends, just unguided. Name them so they get written.
+    _pb_gaps = coaching_voice.playbook_gaps(sheets)
+    if _pb_gaps:
+        print(f"  ! Coaching Playbook has no rows for: {', '.join(_pb_gaps)}")
+
     messages_sent_log = []  # collects all automated messages for Message Log
 
     # ---- load _DATA once for use throughout the rest of main() ----
@@ -1396,7 +1403,10 @@ def main():
         drafted = []  # (name, waiting_since_date)
         for nm, (room_id, thread_text, msg_date) in pending_reply_candidates.items():
             profile = data_by_name_all.get(nm, {})
-            draft = summariser.draft_reply(nm, thread_text, profile_data=profile)
+            draft = summariser.draft_reply(
+                nm, thread_text, profile_data=profile,
+                playbook=coaching_voice.playbook_prompt(sheets),
+            )
             if draft:
                 sheets.write_draft_reply(nm, room_id, draft)
                 drafted.append((nm, msg_date))
@@ -1581,7 +1591,13 @@ def main():
                 situation += f" Also on a {_ride_along_streak}-day training streak this week."
                 fallback += f" And {_ride_along_streak} days on the bounce, keep it going."
 
-            msg = summariser.athlete_message(situation, fallback)
+            # first_result and new_pr are different conversations: one is "here's
+            # your baseline", the other "you beat your baseline".
+            _pb_scenario = "first_result" if situation.startswith("First results") else "new_pr"
+            msg = summariser.athlete_message(
+                situation, fallback,
+                playbook=coaching_voice.playbook_prompt(sheets, _pb_scenario),
+            )
 
             try:
                 fitr.send_chat_message(room_id, msg)
@@ -1609,7 +1625,8 @@ def main():
         note_key = f"streak_{streak_days}d"
         _streak_situation = f"Streak, {first} has logged {streak_days} training days in a row."
         msg = summariser.athlete_message(
-            _streak_situation, _streak_msgs[streak_days].format(first=first))
+            _streak_situation, _streak_msgs[streak_days].format(first=first),
+            playbook=coaching_voice.playbook_prompt(sheets, "consistency"))
         try:
             fitr.send_chat_message(room_id, msg)
             _streak_notes[nm] = f"[{TODAY.isoformat()} — {note_key}]"
@@ -1729,7 +1746,9 @@ def main():
                               f"{_days_inactive} days. Gentle, low-pressure check-in.")
             _off_fallback = (f"{first}, haven't seen you in a while, no pressure, just checking in. "
                              f"Everything alright?")
-            msg = summariser.athlete_message(_off_situation, _off_fallback)
+            msg = summariser.athlete_message(
+                _off_situation, _off_fallback,
+                playbook=coaching_voice.playbook_prompt(sheets, "inactive_60d"))
             try:
                 fitr.send_chat_message(room_id, msg)
                 offboarding_sent += 1

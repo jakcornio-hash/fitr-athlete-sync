@@ -279,6 +279,27 @@ def _load_video_reviews_cached():
         return []
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _active_coaches():
+    """Active coach names from the Coaches tab.
+
+    Reads the Programme column, not Coach Name: on the Coaches tab the
+    programme IS the coach ("Ed Cook", "Denis Smith"), and Coach Name is only
+    filled in on 4 of the 9 rows, so load_coach_names() silently omits Ed, Jak,
+    Huw, Pete and Jamie Warr.
+    """
+    try:
+        rows = get_sheets().read_records("Coaches")
+    except Exception:
+        return []
+    return sorted({
+        str(r.get("Programme", "")).strip()
+        for r in rows
+        if str(r.get("Programme", "")).strip()
+        and str(r.get("Active", "")).strip().upper() in ("TRUE", "YES", "1")
+    })
+
+
 def _live_video_reviews():
     """Video submissions excluding anyone who has since cancelled.
 
@@ -1799,6 +1820,33 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
             st.caption(f"Generated {athlete_draft.get('Date', '')} — based on most recent Fitr message")
             draft_text = str(athlete_draft.get("Draft Reply", "")).strip()
             room_id = str(athlete_draft.get("Room ID", "")).strip()
+
+            # A draft is sent by a person, so it goes out with that person's
+            # name. The draft itself is generated unsigned: the sync doesn't
+            # know who'll send it, and defaulting to Jak would sign his name to
+            # Ed's messages. Default to the athlete's own coach where _DATA
+            # records one (it holds a coach name for the bespoke athletes and is
+            # blank for the rest).
+            _coaches = _active_coaches()
+            _opts = ["— none —"] + _coaches
+            # Prefer the athlete's own coach; fall back to whoever this session
+            # last signed as, so a coach working through the queue picks once
+            # rather than on every athlete. _DATA's Programme holds a coach name
+            # only for the bespoke athletes, so most fall through to the latter.
+            _their_coach = str(profile.get("Programme", "")).strip()
+            _last = st.session_state.get("_last_signer", "")
+            _pref = _their_coach if _their_coach in _coaches else _last
+            _default = _opts.index(_pref) if _pref in _opts else 0
+            _signer = st.selectbox(
+                "Sending as", _opts, index=_default, key=f"draft_signer_{name}",
+                help="Signs the message off with this coach's first name. "
+                     "Defaults to the athlete's coach where we hold one, "
+                     "otherwise whoever you last sent as.",
+            )
+            if _signer != "— none —":
+                st.session_state["_last_signer"] = _signer
+            _sign = "" if _signer == "— none —" else _signer.split()[0]
+            draft_text = f"{draft_text}\n\n{_sign}" if _sign else draft_text
             st.code(draft_text, language=None)
             fitr_messaging_on = st.session_state.get("fitr_messaging_on", False)
             _per_draft_key = f"fitr_allow_draft_{name}"
