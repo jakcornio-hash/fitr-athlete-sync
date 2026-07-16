@@ -381,7 +381,10 @@ def draft_reply(athlete_name, thread_text, profile_data=None, playbook=""):
         text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
         if not text or text.upper().startswith("SKIP"):
             return None
-        return text
+        # Same belt-and-braces as athlete_message. Without it the em dash rule
+        # was prompt-only here and the model ignored it in 9 of 16 live drafts,
+        # which is the single clearest AI tell we have.
+        return _kill_em_dashes(text)
     except Exception as e:
         print(f"  ! draft_reply error for {athlete_name}: {e}")
         return None
