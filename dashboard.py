@@ -534,10 +534,15 @@ def page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_w
         for alert in rec_alert_rows:
             name = alert[0]
             prog = _prog(name)
+            _raw = alert[2] if len(alert) > 2 else ""
+            _age = _survey_age(_raw)
             rec_rows.append({
                 "Athlete": name,
                 "Issue": alert[1],
-                "Submitted": alert[2] if len(alert) > 2 else "",
+                "Submitted": _raw,
+                # A raw timestamp makes the coach do the arithmetic before they
+                # know whether to trust the flag. Say it outright.
+                "Age": _age_phrase(_age) if _age is not None else "",
                 "Programme": _prog_short(prog),
                 "Contact": _programme_contact(prog),
             })
@@ -3004,6 +3009,42 @@ def page_programmes(athletes, pr_records, trend_results, data_records, load_resu
         st.dataframe(cohort_df, width='stretch', hide_index=True)
 
 
+_SURVEY_DATE_FORMATS = (
+    "%d/%m/%Y %H:%M:%S", "%m/%d/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S",
+    "%d/%m/%Y", "%m/%d/%Y", "%Y-%m-%d",
+)
+
+
+def _survey_age(raw):
+    """Days since a form was submitted, or None if the timestamp won't parse.
+
+    Returns None rather than guessing: no date at all is better than a wrong
+    one, because the whole point is telling the coach how much to trust this.
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    for fmt in _SURVEY_DATE_FORMATS:
+        try:
+            return (TODAY - dt.datetime.strptime(s, fmt).date()).days
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def _age_phrase(days):
+    """How the survey age reads on a card. Flags anything over a fortnight,
+    which is where 'how's the stress?' starts sounding like we haven't been
+    paying attention."""
+    if days <= 0:
+        return "logged today"
+    if days == 1:
+        return "logged yesterday"
+    if days <= 13:
+        return f"logged {days} days ago"
+    return f"⚠️ logged {days} days ago, may be out of date"
+
+
 def _build_outreach_rows(engagement_results, trend_results, rec_alert_rows, milestones,
                           consistency_wins, comp_results, data_records):
     """Build the full prioritised outreach row list shared by page_outreach and page_action_list."""
@@ -3016,15 +3057,28 @@ def _build_outreach_rows(engagement_results, trend_results, rec_alert_rows, mile
 
     # Group recovery alerts by athlete — one card per athlete even if multiple issues flagged
     _rec_issues: dict = {}
+    _rec_when: dict = {}
     for alert in rec_alert_rows:
         _rec_issues.setdefault(alert[0], []).append(alert[1])
+        # alert[2] is when they submitted the survey. Carry it: a flag with no
+        # date reads as "right now" even when the survey is a fortnight old,
+        # and the coach opens with "how's the stress?" about a bad week the
+        # athlete has long since forgotten.
+        when = _survey_age(alert[2] if len(alert) > 2 else "")
+        if when is not None:
+            _rec_when[alert[0]] = when if alert[0] not in _rec_when else min(_rec_when[alert[0]], when)
     for nm, issues in _rec_issues.items():
         combined = " · ".join(issues)
+        days = _rec_when.get(nm)
+        reason = combined
+        if days is not None:
+            reason = f"{combined} · {_age_phrase(days)}"
         rows.append({
             "Priority": "🔴 Contact Today", "Athlete": nm,
-            "Reason": combined, "Action": "Recovery check-in",
+            "Reason": reason, "Action": "Recovery check-in",
             "_order": 0, "_reason_type": "recovery_flag",
             "_ctx": {"issue": combined}, "_programme": _prog(nm),
+            "_stale_days": days,
         })
 
     for m in milestones:
