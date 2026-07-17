@@ -3091,7 +3091,10 @@ def _build_outreach_rows(engagement_results, trend_results, rec_alert_rows, mile
                 "Priority": "⚠️ Check In", "Athlete": e["name"],
                 "Reason": f"{days} days inactive (last: {e['last_logged']})",
                 "Action": "Check-in message",
-                "_order": 5, "_reason_type": "re_engage",
+                # check_in_28d, not re_engage: this window is "about a month
+                # quiet", which is a different conversation from someone who's
+                # been gone 45+ days. They used to share one template.
+                "_order": 5, "_reason_type": "check_in_28d",
                 "_ctx": {"days": days}, "_programme": _prog(e["name"]),
             })
 

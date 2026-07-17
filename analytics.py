@@ -497,7 +497,10 @@ def comp_phase(days_out, comp_type="A"):
         elif days_out <= 14:
             return "2-Week Peak Prep", None
         elif days_out <= 22:
-            return "Switch → 2-Week Prep", "Switch to 2-week peak programme now"
+            # A prompt, not an instruction. The athlete-facing messages no
+            # longer put anyone on a peak programme, so this is the coach
+            # deciding case by case rather than a switch that always happens.
+            return "Switch → 2-Week Prep", "Consider mentioning the two-week peak"
         elif days_out <= 70:
             return "10-Week Prep", None
         elif days_out <= 77:
