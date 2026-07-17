@@ -1945,26 +1945,39 @@ def main():
         milestone_label = _ANNIVERSARY_MILESTONES.get(days_training)
         if not milestone_label:
             continue
-        # Bespoke athletes get the 90-day reward message; skip all other milestones for them
-        if nm in bespoke_names and days_training != 90:
-            continue
         room_id = room_id_by_name.get(nm)
         if not room_id or config.DRY_RUN:
             continue
         first = nm.split()[0]
-        _booking_url = getattr(config, "CONSULTATION_BOOKING_URL", "")
+        # No booking link here any more: the 90-day message offers to send one
+        # if they want it rather than pushing a calendar at them.
         _tshirt_url = getattr(config, "TSHIRT_FORM_URL", "")
         if days_training == 90:
+            # Jak's copy. Note "your first result", not "you joined us": the
+            # milestone counts from their first logged result because Join Date
+            # in _DATA can't be trusted (for the median athlete it lands months
+            # AFTER their first log, which can't happen). First log is the only
+            # date here we can stand behind.
             msg = (
-                f"{first}, 90 days since your first log ({first_log.strftime('%d %b %Y')}). "
-                f"Worth getting on a call at this point to check in and make sure the programme's "
-                f"still right for where you're headed. Book here: {_booking_url}"
+                f"Hey {first}, that's 90 days since your first result with us. Worth a "
+                f"proper catch up at this point. Not because anything's wrong, but because "
+                f"three months in is when we can actually see what's working and what "
+                f"isn't, and we want to make sure you are on the right track rather than "
+                f"guessing from your numbers.\n\n"
+                f"If you are keen, let us know and we can send you a booking link. If not, "
+                f"that's all good as well.\n\n"
+                f"One final thing is, what's felt like the biggest change since you started?"
             )
         elif days_training == 180:
             msg = (
-                f"{first}, six months in. We send a JST t-shirt at this point. "
-                f"Drop your address and size here: {_tshirt_url}\n\n"
-                f"If you know anyone who'd benefit from training with us, send them our way."
+                f"Hey {first}, six months with us! The core of our community is down to "
+                f"committed athletes like yourself.\n\n"
+                f"We send a JST tee at this point, so drop your address and size here: "
+                f"{_tshirt_url}\n\n"
+                f"And if you know anyone who'd do really well joining JST, please send them "
+                f"our way. If it's anyone within your gym or any friends, let us know and we "
+                f"can also give you a code for them.\n\n"
+                f"What are you chasing during your next 6 months?"
             )
         elif days_training == 270:
             msg = f"{first}, nine months in. Still showing up."
