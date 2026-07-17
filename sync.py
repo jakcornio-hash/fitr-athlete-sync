@@ -1980,20 +1980,44 @@ def main():
                 f"What are you chasing during your next 6 months?"
             )
         elif days_training == 270:
-            msg = f"{first}, nine months in. Still showing up."
+            msg = (
+                f"Hey {first}, that's nine months of results logged with us now. No ask "
+                f"here, we just don't think that kind of consistency should go "
+                f"unmentioned. You're three months out from your first full year, so if "
+                f"there's anything in your training you want us to look at before then, "
+                f"this is a good time to say. How's it all feeling compared to when you "
+                f"started?"
+            )
         elif days_training == 365:
+            # The athlete is still flagged for the summit list, but the message no
+            # longer promises it. "I'll send details when it's confirmed" is a
+            # promise the system can't keep: if nothing is booked when this fires,
+            # it sits unanswered at the biggest milestone we have. The invite goes
+            # out personally once dates exist.
             summit_flag_names.append(nm)
             msg = (
-                f"{first}, one year since your first log ({first_log.strftime('%d %b %Y')}). "
-                f"That's a proper milestone. We want to get you to our next training summit, on us. "
-                f"I'll send details when it's confirmed."
+                f"Hey {first}, one year today since your first result with us. That's a "
+                f"proper milestone and we don't say it lightly. We'd like to do a full "
+                f"year-one review with you, sit down with your coach, go through the "
+                f"whole year's numbers, and set year two up properly. If you're keen, let "
+                f"us know and we'll send a booking link. And so we mark it right: what's "
+                f"the one result from this year you're proudest of?"
             )
         elif days_training == 730:
-            msg = f"{first}, two years in. Keep going."
-        else:
             msg = (
-                f"{first}, {milestone_label} since your first log "
-                f"({first_log.strftime('%d %b %Y')}). Nice consistency."
+                f"Hey {first}, two years with us today. Very few athletes stay this "
+                f"consistent with anything, and honestly, athletes like you are why JST "
+                f"works. Thank you. Going into year three, is there anything about your "
+                f"programming or how we work with you that you'd change? We'd rather hear "
+                f"it from you than guess."
+            )
+        else:
+            # Safety net: only fires if a milestone is added to the table above
+            # without copy of its own. Same shape as the rest so a forgotten
+            # milestone still sounds like us.
+            msg = (
+                f"Hey {first}, that's {milestone_label} of training logged with us. Worth "
+                f"marking. How's it feeling compared to when you started?"
             )
         try:
             fitr.send_chat_message(room_id, msg)
