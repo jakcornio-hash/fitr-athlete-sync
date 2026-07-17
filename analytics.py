@@ -511,83 +511,98 @@ def comp_phase(days_out, comp_type="A"):
 
 
 def comp_message(name, comp_label, days_out, comp_type="A"):
-    """Return a ready-to-send coaching message appropriate for this phase and type."""
+    """Return a ready-to-send coaching message appropriate for this phase and type.
+
+    Copy for these is Jak's, not paraphrased. Every variant used to carry an em
+    dash and open "Hi": they live here rather than in message_templates.py, so
+    the tone rewrite that cleaned that file never touched them, and Ed has been
+    copying them out of the dashboard ever since.
+
+    Nothing here mentions a separate peak programme. Competition prep is the
+    normal programme handled sensibly (lower reps, swap in released comp
+    workouts, move high-priority progressions earlier, rest Thursday, light
+    Friday), and the three-week message offers that help rather than
+    announcing a programme switch.
+    """
     first = name.split()[0]
     weeks = round(abs(days_out) / 7)
     label = comp_label or "your competition"
     ct = str(comp_type).upper() if comp_type else "A"
 
+    # The lead-up check-in. Same for every race type: we don't know what they
+    # need, so we ask rather than assume, and make saying no genuinely fine.
+    def _check_in():
+        return (
+            f"Hey {first}, we know you're competing in a few weeks' time. How are you "
+            f"feeling for it? Do you need any guidance or help in the lead up to "
+            f"{label}? Whether that's knowing how to organise training, or maybe it's "
+            f"mentally you're a little bit worried. If you do, feel free to drop us a "
+            f"message back, and we'll do our best to help you out. If not, that's also cool."
+        )
+
     if ct == "C":
         if days_out < 0:
             return (
-                f"Hi {first}, how did {label} go? Good benchmark — "
-                f"let's use that data to inform your training going forward."
+                f"Hey {first}, how did {label} go? Good benchmark. Let's use that data "
+                f"to inform your training going forward."
             )
         elif days_out <= 7:
             return (
-                f"Hi {first}, {label} is this week — race it as a training stimulus, "
-                f"no taper. Great chance to test your fitness under race conditions."
+                f"Hey {first}, {label} is this week. Race it as a training stimulus, no "
+                f"taper. Good chance to test your fitness under race conditions."
             )
         else:
-            return (
-                f"Hi {first}, {label} is coming up in {weeks} week{'s' if weeks != 1 else ''} — "
-                f"no changes to your training, just treat it as a hard training day."
-            )
+            return _check_in()
 
     elif ct == "B":
         if days_out < 0:
             return (
-                f"Hi {first}, how did {label} go? Great practice run — "
-                f"take a day or two to recover and then back into your main training block."
+                f"Hey {first}, how did {label} go? Good practice run. Take a day or two "
+                f"to recover and then back into your main training block."
             )
         elif days_out <= 7:
             return (
-                f"Hi {first}, {label} is this week — I've trimmed the volume slightly "
-                f"so you go in feeling fresh. Race hard and enjoy it."
+                f"Hey {first}, {label} is this week. Follow the lower reps in the week's "
+                f"programme. Rest Thursday, then Friday keep it light, some recovery and "
+                f"movement mechanics that make you feel good going into the weekend. "
+                f"Race hard and enjoy it."
             )
         else:
-            return (
-                f"Hi {first}, {label} is {weeks} week{'s' if weeks != 1 else ''} away — "
-                f"we'll keep your main training running as planned. "
-                f"Think of it as a race-pace effort within your training block."
-            )
+            return _check_in()
 
     else:  # A competition
         if days_out < 0:
             return (
-                f"Hi {first}, how did {label} go? "
-                f"Brilliant effort — take a few days to recover properly and then "
-                f"let's sit down and plan what's next. You've earned the rest."
+                f"Hey {first}, how did {label} go? Take a few days properly off, then "
+                f"we'll sit down and go through it while it's fresh."
+            )
+        elif days_out <= 7:
+            return (
+                f"Hey {first}, {label} is this week. Follow the lower reps in the week's "
+                f"programme. If there's a comp workout you want to test, swap it in. Rest "
+                f"Thursday, then Friday keep it light, some recovery and movement "
+                f"mechanics that make you feel good going into the weekend."
             )
         elif days_out <= 14:
             return (
-                f"Hi {first}, {label} is {days_out} day{'s' if days_out != 1 else ''} away. "
-                f"You're in the final peak block — everything has been building to this. "
-                f"Trust the process, stay sharp, and we'll have you firing on the day."
+                f"Hey {first}, {label} is {weeks} week{'s' if weeks != 1 else ''} out. "
+                f"Follow the lower reps in the programme from here. If the comp workouts "
+                f"are out and there's one you want to test, swap it in for what's "
+                f"scheduled. And if there's a big progression you'd miss because of the "
+                f"comp, let's get it in earlier in the week. Want a hand mapping that out?"
             )
         elif days_out <= 22:
-            return (
-                f"Hi {first}, 3 weeks out from {label} — time to switch to the "
-                f"2-week peak programme. This block is about sharpening everything up "
-                f"right before competition day. Stay focused and trust your training."
-            )
+            return _check_in()
         elif days_out <= 77:
             return (
-                f"Hi {first}, you're {weeks} weeks out from {label} and deep into "
-                f"the 10-week competition prep block. Keep the quality high — "
-                f"we've planned this so you peak exactly when it counts."
-            )
-        elif days_out <= 91:
-            return (
-                f"Hi {first}, {label} is {weeks} weeks away. "
-                f"In about 2 weeks I'll be switching you onto the 10-week peak competition "
-                f"prep programme — keep training hard until then, we're building momentum."
+                f"Hey {first}, you're {weeks} weeks out from {label}. Keep the quality "
+                f"high. We've planned this so you peak exactly when it counts."
             )
         else:
             return (
-                f"Hi {first}, great to see you've got {label} in the calendar — "
-                f"{weeks} weeks away. Plenty of time to build something special. "
-                f"Stay consistent and we'll plan your peak timing as we get closer."
+                f"Hey {first}, good to see you've got {label} in the calendar, {weeks} "
+                f"weeks away. Plenty of time to build something special. Stay consistent "
+                f"and we'll plan the run-in as we get closer."
             )
 
 
