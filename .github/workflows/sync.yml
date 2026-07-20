@@ -2,13 +2,23 @@ name: Daily Fitr Sync
 
 on:
   schedule:
-    # Every day at 06:00 UTC (07:00 BST / 06:00 GMT). GitHub's scheduler
-    # backlog usually pushes the actual start 2-3 hours later, so the run
-    # tends to land ~08:00-09:30 UTC in practice.
+    # THE ONLY SCHEDULED SYNC. Every day at 06:00 UTC (07:00 BST / 06:00 GMT).
+    # GitHub's scheduler backlog usually pushes the actual start 2-3 hours
+    # later, so the run tends to land ~08:00-09:30 UTC in practice.
+    #
     # Monday's weekly sends (PB roundup, progress emails, offboarding) are
-    # gated in code by weekday, not by cron, so no separate Monday schedule
-    # is needed. The weekly-send guard prevents double-firing if the sync
-    # ever runs more than once on a Monday.
+    # gated in code by weekday, not by cron, so no separate Monday or Sunday
+    # schedule is needed. The weekly-send guard prevents double-firing if the
+    # sync ever runs more than once on a Monday.
+    #
+    # A second workflow (weekly-sync.yml) used to run this same script every
+    # Sunday at 17:00 UTC. It was removed: this schedule already covers
+    # Sunday, and it passed a smaller set of secrets, so without
+    # COMP_FORM_SHEET_ID and SLACK_BOT_TOKEN the competition import and the
+    # per-coach Slack posts silently did nothing on that run. Two workflows
+    # driving one script is also how the original double-send happened.
+    # If another schedule is ever needed, add a cron line here rather than a
+    # second file, so the secrets are only listed in one place.
     - cron: "0 6 * * *"
   workflow_dispatch:
     # Allow manual trigger from GitHub Actions tab
