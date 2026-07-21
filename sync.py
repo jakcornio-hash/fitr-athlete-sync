@@ -35,6 +35,20 @@ import recovery
 TODAY = dt.date.today()
 CUTOFF = TODAY - dt.timedelta(days=config.LOOKBACK_DAYS)
 
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[a-zA-Z]{2,}$")
+
+
+def _looks_like_email(s):
+    """True only for a plausibly-deliverable address.
+
+    The PR Log has been imported from a client export that redacted some
+    addresses to the literal string 'Hidden by client'. Stored as-is, that
+    string was handed to the mail server as a recipient and bounced. Anything
+    that isn't shaped like an email is treated as no email at all, so the
+    _DATA address (where we hold a real one) is used instead.
+    """
+    return bool(_EMAIL_RE.match(str(s or "").strip()))
+
 
 def _parse_date(s):
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%b-%Y", "%d %b %Y", "%d %b, %Y"):
@@ -136,7 +150,7 @@ def load_existing_prlog(sheets):
         value = str(r.get("Value", "")).strip()
         date = str(r.get("Date", "")).strip()
         keys.add((name.lower(), bench.lower(), value.lower(), date))
-        if name and r.get("Email"):
+        if name and _looks_like_email(r.get("Email")):
             email_by_name.setdefault(name, str(r["Email"]).strip())
         if name and bench:
             prev_by_name_bench[(name.lower(), bench.lower())] = value
@@ -2277,8 +2291,20 @@ def main():
             if _nm and _b:
                 # same positional shape as bench_rows: [date, name, email, bench, value]
                 _weekly_pr_rows.append([str(_rec.get("Date", "")), _nm, "", _b, _v])
+        # Start from the PR Log emails, then backfill from _DATA for anyone we
+        # don't have a valid address for. email_by_name comes from PR Log only,
+        # and _DATA often holds a real address where PR Log holds none or held
+        # a redacted "Hidden by client" that has now been filtered out. Without
+        # this backfill those athletes are silently skipped despite us having
+        # their email one tab over.
+        _email_map = dict(email_by_name)
+        for _rec in data_recs:
+            _nm = str(_rec.get("Full Name", "")).strip()
+            _em = str(_rec.get("Email", "")).strip()
+            if _nm and _nm not in _email_map and _looks_like_email(_em):
+                _email_map[_nm] = _em
         non_bespoke_email_by_name = {
-            k: v for k, v in email_by_name.items()
+            k: v for k, v in _email_map.items()
             if k not in bespoke_names and k.lower() not in cancelled_names_lower
         }
         # On the first Monday of the month, the email carries the month in
