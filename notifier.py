@@ -9,6 +9,7 @@ import smtplib
 import ssl
 import urllib.request
 from email.message import EmailMessage
+from email.utils import formataddr
 
 import analytics
 import config
@@ -259,26 +260,45 @@ def send_email(subject, plain_text):
         return
     msg = EmailMessage()
     msg["Subject"] = subject
-    msg["From"] = config.SMTP_FROM
+    msg["From"] = _from_header(config.SMTP_FROM)
     msg["To"] = config.SMTP_TO
     msg.set_content(plain_text)
     with smtplib.SMTP("smtp.gmail.com", 587) as s:
         s.ehlo()
         s.starttls()
-        s.login(config.SMTP_FROM, config.SMTP_PASSWORD)
+        s.login(_smtp_login_user(config.SMTP_FROM), config.SMTP_PASSWORD)
         s.send_message(msg)
+
+
+def _from_header(smtp_from):
+    """From line as an athlete sees it: display name plus address.
+
+    A bare address reads like a system. formataddr handles the quoting so a
+    name containing a comma or non-ascii can't break the header.
+    """
+    name = str(getattr(config, "SMTP_FROM_NAME", "") or "").strip()
+    return formataddr((name, smtp_from)) if name else smtp_from
+
+
+def _smtp_login_user(smtp_from):
+    """The mailbox to authenticate as, which is not always the one we send as.
+
+    Sending from an alias means logging in as the account that owns it, so this
+    falls back to smtp_from only when no explicit user is configured.
+    """
+    return str(getattr(config, "SMTP_USER", "") or "").strip() or smtp_from
 
 
 def _send_email_to(smtp_from, smtp_password, to_addr, subject, body):
     msg = EmailMessage()
     msg["Subject"] = subject
-    msg["From"] = smtp_from
+    msg["From"] = _from_header(smtp_from)
     msg["To"] = to_addr
     msg.set_content(body)
     with smtplib.SMTP("smtp.gmail.com", 587) as s:
         s.ehlo()
         s.starttls()
-        s.login(smtp_from, smtp_password)
+        s.login(_smtp_login_user(smtp_from), smtp_password)
         s.send_message(msg)
 
 
@@ -288,14 +308,14 @@ def _send_html_email_to(smtp_from, smtp_password, to_addr, subject, plain_body, 
     from email.mime.text import MIMEText
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = smtp_from
+    msg["From"] = _from_header(smtp_from)
     msg["To"] = to_addr
     msg.attach(MIMEText(plain_body, "plain"))
     msg.attach(MIMEText(html_body, "html"))
     with smtplib.SMTP("smtp.gmail.com", 587) as s:
         s.ehlo()
         s.starttls()
-        s.login(smtp_from, smtp_password)
+        s.login(_smtp_login_user(smtp_from), smtp_password)
         s.send_message(msg)
 
 

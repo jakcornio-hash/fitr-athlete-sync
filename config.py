@@ -55,9 +55,20 @@ SLACK_WEBHOOK_URL = _get("SLACK_WEBHOOK_URL", "")
 # Bot token for per-coach channel routing (xoxb-...). When set, sync.py will
 # send one Slack message per athlete to the channel mapped in the Coaches tab.
 SLACK_BOT_TOKEN = _get("SLACK_BOT_TOKEN", "")
+# The address athletes see in the From line. This is the business address, not
+# a personal one: athletes reply to it, and replies should reach whoever is on
+# the inbox rather than one person's Gmail.
 SMTP_FROM = _get("SMTP_FROM", "")
+# The mailbox we authenticate as. Usually the same as SMTP_FROM, but they have
+# to be separable: if SMTP_FROM is a "send as" alias rather than its own
+# mailbox, the login still has to use the underlying account. Defaults to
+# SMTP_FROM so existing setups keep working untouched.
+SMTP_USER = _get("SMTP_USER", "") or SMTP_FROM
 SMTP_PASSWORD = _get("SMTP_PASSWORD", "")
 SMTP_TO = _get("SMTP_TO", "")
+# Display name shown beside the address in an athlete's inbox. Without it they
+# see a bare address, which reads like a system rather than the coaching team.
+SMTP_FROM_NAME = _get("SMTP_FROM_NAME", "JST Compete")
 
 # Competition planner Typeform — athletes submit once per competition
 # Set COMP_FORM_SHEET_ID to the Google Sheet ID of the Typeform responses sheet.

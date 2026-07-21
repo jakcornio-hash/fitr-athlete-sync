@@ -61,6 +61,9 @@ jobs:
           RECOVERY_SHEET_ID: ${{ secrets.RECOVERY_SHEET_ID }}
           COMP_FORM_SHEET_ID: ${{ secrets.COMP_FORM_SHEET_ID }}
           SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          # Only needed when SMTP_FROM is a send-as alias rather than its own
+          # mailbox. Left unset, the login falls back to SMTP_FROM.
+          SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           SMTP_TO: ${{ secrets.SMTP_TO }}
           LOOKBACK_DAYS: "7"
