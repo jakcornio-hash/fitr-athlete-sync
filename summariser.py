@@ -13,7 +13,9 @@ try:
 except ImportError:  # anthropic not installed yet
     Anthropic = None
 
-_VOICE = coaching_voice.VOICE_PROMPT
+# Read the voice rules at call time via coaching_voice.voice_prompt(): they
+# now come from the Sheet, which is loaded after this module is imported, so
+# snapshotting them here would pin the stale local copy forever.
 
 _SYSTEM = (
     "You summarise a coaching conversation thread for an athlete CRM. "
@@ -78,7 +80,7 @@ _BRIEF_SYSTEM = (
 )
 
 
-_ATHLETE_MSG_SYSTEM = _VOICE + """
+_ATHLETE_MSG_SUFFIX = """
 
 --- YOUR TASK ---
 Write ONE short automated Fitr message to a single athlete, in Jak's voice.
@@ -134,7 +136,7 @@ def athlete_message(situation, fallback, playbook=""):
         resp = client.messages.create(
             model=config.ANTHROPIC_MODEL,
             max_tokens=120,
-            system=_ATHLETE_MSG_SYSTEM + (playbook or ""),
+            system=coaching_voice.voice_prompt() + _ATHLETE_MSG_SUFFIX + (playbook or ""),
             messages=[{"role": "user", "content": f"{situation}\n->"}],
         )
         text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
@@ -180,9 +182,8 @@ def coaching_brief(coach_name, athlete_lines):
         return None
 
 
-_REPLY_SYSTEM = (
-    _VOICE
-    + "\n\n---\n\n"
+_REPLY_SUFFIX = (
+    "\n\n---\n\n"
     "You are drafting a Fitr DM reply from a JST Compete coach to an athlete's message. "
     "The conversation transcript is chronological. The LAST message is the athlete's most recent message.\n\n"
     "Draft a reply that:\n"
@@ -294,9 +295,8 @@ def analyse_competition_result(athlete_name, comp_name, result, post_comp_respon
         return None
 
 
-_ANNUAL_REVIEW_SYSTEM = (
-    _VOICE
-    + "\n\n---\n\n"
+_ANNUAL_REVIEW_SUFFIX = (
+    "\n\n---\n\n"
     "You are writing a personalised annual training review for a JST Compete athlete. "
     "This is sent directly to the athlete as a coaching email from Jak.\n\n"
     "Include: a specific headline achievement from the year (benchmark or competition result), "
@@ -321,7 +321,7 @@ def annual_athlete_review(athlete_name, months_training, pr_summary, comp_summar
         resp = client.messages.create(
             model=config.ANTHROPIC_MODEL,
             max_tokens=400,
-            system=_ANNUAL_REVIEW_SYSTEM,
+            system=coaching_voice.voice_prompt() + _ANNUAL_REVIEW_SUFFIX,
             messages=[{
                 "role": "user",
                 "content": (
@@ -365,7 +365,7 @@ def draft_reply(athlete_name, thread_text, profile_data=None, playbook=""):
         resp = client.messages.create(
             model=config.ANTHROPIC_MODEL,
             max_tokens=200,
-            system=_REPLY_SYSTEM + (playbook or ""),
+            system=coaching_voice.voice_prompt() + _REPLY_SUFFIX + (playbook or ""),
             messages=[{
                 "role": "user",
                 "content": (

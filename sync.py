@@ -1289,6 +1289,13 @@ def main():
     sheets = SheetsClient()
     print("Sheets: connected")
 
+    # Load the tone-of-voice document before anything generates a message.
+    # It lives in the Sheet rather than the repo, so this has to happen at
+    # runtime; without it every generated message falls back to the built-in
+    # summary, which is a fraction of the real rules.
+    if coaching_voice.refresh_from_sheet(sheets):
+        print("Tone of voice: loaded from Sheet")
+
     athletes = load_athletes(sheets)
     print(f"Athletes with Fitr IDs: {len(athletes)}")
 

@@ -47,10 +47,53 @@ The rules above are the voice. This section is the shape of the message.
 """
 
 
+# The document lives in the "Tone of Voice" tab of the main Google Sheet, one
+# line per row in column A. It used to sit in this repo, which forced the repo
+# private to keep it off the internet, which in turn broke the Streamlit
+# dashboard (Community Cloud could no longer clone the source). Keeping it in
+# the Sheet decouples the two: the repo can be public, the document stays
+# behind the same Google permissions as every other business tab, and Jak can
+# edit it without touching code.
+TONE_TAB = "Tone of Voice"
+
+_SHEET_VOICE = None
+
+
+def refresh_from_sheet(sheets):
+    """Load the tone document from the Sheet. Call once, early, per process.
+
+    Returns True if the Sheet copy was used. A short or unreadable tab is
+    ignored rather than accepted, so a half-cleared tab can't quietly strip the
+    voice rules out of every generated message.
+    """
+    global _SHEET_VOICE
+    try:
+        vals = sheets.worksheet(TONE_TAB).get_all_values()
+    except Exception as e:
+        print(f"  ! tone-of-voice tab unreadable ({e}); using local copy")
+        return False
+    text = "\n".join((r[0] if r else "") for r in vals[1:]).strip()
+    if len(text) < 2000:
+        print(f"  ! tone-of-voice tab looks truncated ({len(text)} chars); using local copy")
+        return False
+    _SHEET_VOICE = text + _MESSAGE_ADDENDUM
+    return True
+
+
+def voice_prompt():
+    """The rules to inject into any athlete-facing prompt.
+
+    Prefers the Sheet, then a local copy of the document if one is present,
+    then the built-in summary. Read this at call time rather than caching it at
+    import, so refresh_from_sheet() actually takes effect.
+    """
+    return _SHEET_VOICE or VOICE_PROMPT
+
+
 def _load_guidelines():
-    """Read the tone-of-voice document. Falls back to the old transcription if
-    the file is missing, so a bad deploy degrades rather than ships voiceless
-    copy."""
+    """Local fallback: the document if it's still beside this file, else the
+    built-in summary. The Sheet is the source of truth; this only covers a
+    process that never called refresh_from_sheet(), or a Sheets outage."""
     try:
         with open(GUIDELINES_PATH, encoding="utf-8") as f:
             text = f.read().strip()
@@ -58,7 +101,6 @@ def _load_guidelines():
             return text + _MESSAGE_ADDENDUM
     except OSError:
         pass
-    print("  ! tone-of-voice document not found; falling back to the built-in summary")
     return _FALLBACK_VOICE + _MESSAGE_ADDENDUM
 
 

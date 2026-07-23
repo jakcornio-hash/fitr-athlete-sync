@@ -9,3 +9,4 @@ state.json
 .streamlit/secrets.toml
 .DS_Store
 .claude/settings.local.json
+JST-Tone-of-Voice-Guidelines.md

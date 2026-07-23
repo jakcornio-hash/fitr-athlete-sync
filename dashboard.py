@@ -101,6 +101,13 @@ def get_sheets():
 @st.cache_data(ttl=900, show_spinner="Loading athlete data...")
 def load_all():
     sheets = get_sheets()
+    # The tone-of-voice document lives in the Sheet, not the repo, so anything
+    # here that generates athlete-facing copy needs it pulled in at runtime.
+    try:
+        import coaching_voice as _cvoice
+        _cvoice.refresh_from_sheet(sheets)
+    except Exception:
+        pass
 
     pr_records = sheets.read_records(config.TAB_PR_LOG)
     bm_values = sheets.read_values(config.TAB_BENCHMARKS)
