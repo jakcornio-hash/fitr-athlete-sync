@@ -6770,14 +6770,14 @@ _STORY_ASK = (
     "We love shouting about this stuff."
 )
 
-# The five questions live here so the form's wording has one source of truth and
-# coaches can see what they're sending an athlete into.
+# Mirrors the live Typeform (jstcompete.typeform.com/to/HRAYdg4X) so coaches can
+# see what they're sending an athlete into. Keep in step with the form.
 _STORY_QUESTIONS = [
-    "Where were you at before you started with JST, training-wise and honestly, head-wise?",
-    "What almost stopped you joining?",
-    "What's changed since? Numbers if you've got them (PBs, comp results, sessions per "
-    "week) but feelings count too.",
-    "Was there a moment it clicked? A session, a result, a message from your coach?",
+    "What were you doing for your training before JST, and what made you start "
+    "looking elsewhere?",
+    "What nearly stopped you signing up?",
+    "What made you actually do it?",
+    "What's different now?",
     "What would you say to someone sat where you were six months ago?",
 ]
 
@@ -6906,8 +6906,9 @@ def _render_story_system(pr_records, competition_rows, first_log_by_nm, data_by_
         for i, q in enumerate(_STORY_QUESTIONS, 1):
             st.markdown(f"{i}. {q}")
         st.markdown(
-            "**Plus a consent tick:** happy for JST to share this with your name / "
-            "first name only / anonymised?"
+            "**Plus two consent questions:** \"Happy for your coach to pull your "
+            "training numbers to go alongside this?\" and \"How can we use this?\" "
+            "(name / first name only / anonymised)."
         )
         if not _form:
             st.info(

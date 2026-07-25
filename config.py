@@ -285,12 +285,12 @@ TSHIRT_FORM_TAB = _get("TSHIRT_FORM_TAB", "Sheet1")
 # hits a story trigger (PB, comp, milestone, unprompted praise). The dashboard
 # hyperlinks this on each ask card. A Typeform URL isn't a secret, so it lives
 # here as the default like the other form URLs.
-STORY_FORM_URL = _get("STORY_FORM_URL", "https://jstcompete.typeform.com/to/SC6yOiRT")
-# Google Sheet the form's responses land in, for the intake queue + coverage
-# grid. Empty until the Typeform is connected to a Sheet tab and it's shared
-# with the service account; until then the queue shows "nothing collected yet".
-STORY_FORM_SHEET_ID = _get("STORY_FORM_SHEET_ID", "")
-STORY_FORM_TAB = _get("STORY_FORM_TAB", "Stories")
+STORY_FORM_URL = _get("STORY_FORM_URL", "https://jstcompete.typeform.com/to/HRAYdg4X")
+# Google Sheet the form's responses land in (the "JST Stories" sheet), for the
+# intake queue + coverage grid. The Typeform integration writes to the
+# "New form" tab.
+STORY_FORM_SHEET_ID = _get("STORY_FORM_SHEET_ID", "1sRVXI4HlqwJVtNJgVfzN2hV9wGjYpk6ZGQ1dgTTN9nA")
+STORY_FORM_TAB = _get("STORY_FORM_TAB", "New form")
 # Column headers — must match the Typeform question text exactly as it appears in the Sheet.
 TSHIRT_FORM_NAME_COL = "Full name"
 TSHIRT_FORM_SIZE_COL = "T-shirt size"
