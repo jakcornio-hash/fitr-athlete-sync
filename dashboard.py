@@ -7055,6 +7055,28 @@ def _render_story_system(pr_records, competition_rows, first_log_by_nm, data_by_
     # would cache the generic fallback for 30 minutes.
     _bridge_anthropic_config()
 
+    # Diagnostic: the personalised asks need the Anthropic key on config. If it
+    # isn't there, every ask silently drops to the generic fallback, which is
+    # exactly what "the copy won't update" looks like. Say so plainly instead.
+    if not str(getattr(config, "ANTHROPIC_API_KEY", "")).strip():
+        _in_secrets = False
+        try:
+            _in_secrets = bool(str(st.secrets.get("ANTHROPIC_API_KEY", "") or "").strip())
+        except Exception:
+            pass
+        st.warning(
+            "⚠️ These asks are the generic fallback because the Anthropic key "
+            "isn't reaching the dashboard. "
+            + (
+                "The key is in your secrets but nested under a section, the code "
+                "only reads top-level keys. Move it to its own line: "
+                "`ANTHROPIC_API_KEY = \"sk-ant-...\"` (not inside a `[block]`), then reboot."
+                if _in_secrets else
+                "Add `ANTHROPIC_API_KEY = \"sk-ant-...\"` as a top-level line in the "
+                "Streamlit app secrets (Manage app, Settings, Secrets), then reboot."
+            )
+        )
+
     triggers = _story_triggers(pr_records, competition_rows, first_log_by_nm, data_by_nm)
     _form = getattr(config, "STORY_FORM_URL", "")
 
