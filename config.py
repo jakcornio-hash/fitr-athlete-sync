@@ -280,6 +280,12 @@ TSHIRT_FORM_URL = _get("TSHIRT_FORM_URL", "https://jstcompete.typeform.com/to/Us
 # Google Sheet ID of the Typeform t-shirt responses (set via env var or Streamlit secret).
 TSHIRT_FORM_SHEET_ID = _get("TSHIRT_FORM_SHEET_ID", "")
 TSHIRT_FORM_TAB = _get("TSHIRT_FORM_TAB", "Sheet1")
+
+# Story-extraction Typeform — the five questions a coach fires when an athlete
+# hits a story trigger (PB, comp, milestone, unprompted praise). Empty until
+# the form is built; the dashboard shows the ask script either way, and only
+# hyperlinks it once this is set.
+STORY_FORM_URL = _get("STORY_FORM_URL", "")
 # Column headers — must match the Typeform question text exactly as it appears in the Sheet.
 TSHIRT_FORM_NAME_COL = "Full name"
 TSHIRT_FORM_SIZE_COL = "T-shirt size"

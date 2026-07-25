@@ -6758,6 +6758,189 @@ The subscription becomes a valued asset, not just a recurring charge.
 
 # ── Marketing ─────────────────────────────────────────────────────────────────
 
+# ── Story extraction system ───────────────────────────────────────────────────
+# A story has a half-life: a PB is a story on Tuesday and a stat by Sunday. The
+# job here is to put the freshest triggers in front of a coach with the exact
+# words to send, so the ask lands inside 48 hours. Answers are collected via a
+# Typeform into the "Stories" tab (see STORY_FORM_URL); this is the "who to ask
+# and when" half, which needs no form and no new data.
+
+_STORY_ASK = (
+    "That's class. Mind if I send you 5 quick questions? "
+    "We love shouting about this stuff."
+)
+
+# The five questions live here so the form's wording has one source of truth and
+# coaches can see what they're sending an athlete into.
+_STORY_QUESTIONS = [
+    "Where were you at before you started with JST, training-wise and honestly, head-wise?",
+    "What almost stopped you joining?",
+    "What's changed since? Numbers if you've got them (PBs, comp results, sessions per "
+    "week) but feelings count too.",
+    "Was there a moment it clicked? A session, a result, a message from your coach?",
+    "What would you say to someone sat where you were six months ago?",
+]
+
+
+def _story_triggers(pr_records, competition_rows, first_log_by_nm, data_by_nm, horizon_days=7):
+    """Athletes who hit a story-worthy trigger in the last `horizon_days`.
+
+    ONE row per athlete, not per lift: you ask a person once, and someone with
+    five PBs this week is a single (bigger) story, not five asks. Each athlete's
+    headline is their highest-narrative trigger (a competition or milestone beats
+    a PB), with a note of how many other wins they've had. Sorted freshest-first,
+    with a `hot` flag for the 48-hour window.
+
+    "Unprompted praise" can't be detected from data, so it lives in the coach
+    guide, not here.
+    """
+    from collections import defaultdict as _dd
+    per_athlete = _dd(list)  # name -> list of (rank, days_ago, trigger, detail)
+
+    def _prog(nm):
+        return str(data_by_nm.get(nm, {}).get("Programme", "")).strip() or "—"
+
+    # 1. New PBs (an improvement, so not the athlete's first-ever log for that lift)
+    hist = _dd(list)
+    for r in pr_records:
+        nm = str(r.get("Athlete Name", "")).strip()
+        bn = str(r.get("Benchmark Name", "")).strip()
+        val = _fmt_pr_val(str(r.get("Value", "")).strip())
+        d = _parse_date(str(r.get("Date", "")).strip())
+        if nm and bn and val and d:
+            hist[(nm, bn)].append((d, val))
+    for (nm, bn), recs in hist.items():
+        recs.sort()
+        for i, (d, val) in enumerate(recs):
+            days_ago = (TODAY - d).days
+            if i > 0 and 0 <= days_ago <= horizon_days:
+                per_athlete[nm].append((3, days_ago, "New PB", f"{bn}: {val}"))
+
+    # 2. Competition completed (a logged result, comp date passed)
+    for r in (competition_rows or []):
+        nm = str(r.get("Athlete Name", "")).strip()
+        comp = str(r.get("Competition Name", "")).strip()
+        result = str(r.get("Result", "")).strip()
+        d = _parse_date(str(r.get("Date", "")).strip())
+        if nm and d and result:
+            days_ago = (TODAY - d).days
+            if 0 <= days_ago <= horizon_days:
+                per_athlete[nm].append((1, days_ago, "Competition done", f"{comp}: {result}"))
+
+    # 3. Anniversary crossed in the window
+    _milestones = {90: "3 months", 180: "6 months", 365: "1 year", 730: "2 years"}
+    for nm, fl in first_log_by_nm.items():
+        days_on = (TODAY - fl).days
+        for threshold, label in _milestones.items():
+            crossed_ago = days_on - threshold
+            if 0 <= crossed_ago <= horizon_days:
+                per_athlete[nm].append((2, crossed_ago, "Milestone", f"{label} on programme"))
+
+    out = []
+    for nm, hits in per_athlete.items():
+        # Headline = highest narrative value (lowest rank), then freshest.
+        hits.sort(key=lambda h: (h[0], h[1]))
+        _, _, trigger, detail = hits[0]
+        extra = len(hits) - 1
+        if extra:
+            detail += f"  (+{extra} more win{'s' if extra > 1 else ''} this week)"
+        out.append({
+            "Athlete": nm, "Programme": _prog(nm),
+            "Trigger": trigger, "Detail": detail,
+            "days_ago": min(h[1] for h in hits),  # freshest wins the ordering
+        })
+    for o in out:
+        o["hot"] = o["days_ago"] <= 2
+    out.sort(key=lambda x: x["days_ago"])
+    return out
+
+
+def _render_story_system(pr_records, competition_rows, first_log_by_nm, data_by_nm):
+    """The story-extraction system: who to ask right now, the ask, and the
+    reference material (questions, case-study template, coach guide)."""
+    st.markdown("### 🎤 Story Extraction")
+    st.caption(
+        "Catch a story while it's warm. A PB is a story on Tuesday and a stat by "
+        "Sunday, so the ask wants to land inside 48 hours of the trigger."
+    )
+
+    triggers = _story_triggers(pr_records, competition_rows, first_log_by_nm, data_by_nm)
+    _form = getattr(config, "STORY_FORM_URL", "")
+
+    hot = [t for t in triggers if t["hot"]]
+    st.markdown(f"**Chase now** ({len(triggers)} in the last 7 days, {len(hot)} inside 48h)")
+    if not triggers:
+        st.info("No fresh triggers this week. The moment someone PBs, finishes a comp, "
+                "or hits a milestone, they show up here.")
+    else:
+        def _ago(n):
+            return "today" if n == 0 else ("yesterday" if n == 1 else f"{n} days ago")
+        for t in triggers:
+            flame = "🔥 " if t["hot"] else ""
+            first = t["Athlete"].split()[0]
+            with st.expander(
+                f"{flame}{t['Athlete']} — {t['Trigger']}: {t['Detail']} ({_ago(t['days_ago'])})",
+                expanded=t["hot"],
+            ):
+                if t["hot"]:
+                    st.caption("🔥 Inside the 48-hour window — ask today if you can.")
+                elif t["days_ago"] > 4:
+                    st.caption("⏳ Cooling off — still worth asking, lead with the specific moment.")
+                st.markdown("**Send this:**")
+                st.code(f"Hey {first}, {_STORY_ASK}", language=None)
+                if _form:
+                    st.markdown(f"Then fire the form: [{_form}]({_form})")
+                else:
+                    st.caption("Then send the 5-question form link (not set up yet — see below).")
+
+    with st.expander("📋 The five questions (what the form asks)"):
+        st.caption(
+            "One source of truth for the form's wording. Question 2 is the one that "
+            "writes your objection-handling content for you."
+        )
+        for i, q in enumerate(_STORY_QUESTIONS, 1):
+            st.markdown(f"{i}. {q}")
+        st.markdown(
+            "**Plus a consent tick:** happy for JST to share this with your name / "
+            "first name only / anonymised?"
+        )
+        if not _form:
+            st.info(
+                "The Typeform isn't wired up yet. Build it with these five questions "
+                "plus the consent tick, point its responses at a **Stories** tab in the "
+                "main Sheet, then set STORY_FORM_URL and I'll turn this into a review "
+                "queue like the video one."
+            )
+
+    with st.expander("🕵️ Coach guide — spotting a story in the wild"):
+        st.markdown(
+            "A story is walking past you when an athlete:\n"
+            "- Mentions a life-change from training (\"my back doesn't hurt at work anymore\")\n"
+            "- Beats someone or something they'd named as the goal\n"
+            "- Does their first comp, or comes back after injury or a break\n"
+            "- Says anything you'd screenshot\n\n"
+            "When you spot one, don't interview them on the spot. One line: "
+            f"*\"{_STORY_ASK}\"* Then fire the form. Done."
+        )
+
+    with st.expander("📄 Case study template — the shape every one follows"):
+        st.markdown(
+            "Same shape every time, so they're comparable and quick to produce:\n\n"
+            "1. **The athlete** — name, age bracket, job, training background (2 lines)\n"
+            "2. **The starting point** — situation plus the specific frustration that brought them to JST\n"
+            "3. **What we did** — track/tier, the key coaching interventions, anything adjusted for them\n"
+            "4. **The results** — DATA FIRST: PBs with numbers, comp placings, consistency, time on "
+            "programme. Then the softer wins.\n"
+            "5. **In their words** — one quote, verbatim\n"
+            "6. **The pattern** — one line on what this proves for the reader\n\n"
+            "**Bar:** no case study ships without at least two verifiable numbers and written "
+            "consent. If it can't clear that, it's a testimonial, not a case study. Still useful, "
+            "different shelf."
+        )
+
+    st.divider()
+
+
 def page_marketing(pr_records, grandslam_results, data_records, athletes,
                    competition_rows=None, consistency_wins=None, milestones=None):
     """Marketing assets — avatar profile, performance proof, assets queue, squad tenure."""
@@ -6781,6 +6964,10 @@ def page_marketing(pr_records, grandslam_results, data_records, athletes,
         if nm and d:
             if nm not in first_log_by_nm or d < first_log_by_nm[nm]:
                 first_log_by_nm[nm] = d
+
+    # Story extraction leads the tab: it's the time-critical bit (48-hour window)
+    # and the rest of the page is slower-moving proof and avatar data.
+    _render_story_system(pr_records, competition_rows, first_log_by_nm, data_by_nm)
 
     def _tenure_label(days):
         y, r = divmod(days, 365)
