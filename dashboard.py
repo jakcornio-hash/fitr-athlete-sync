@@ -7057,24 +7057,29 @@ def _render_story_system(pr_records, competition_rows, first_log_by_nm, data_by_
 
     # Diagnostic: the personalised asks need the Anthropic key on config. If it
     # isn't there, every ask silently drops to the generic fallback, which is
-    # exactly what "the copy won't update" looks like. Say so plainly instead.
+    # exactly what "the copy won't update" looks like. Say so plainly, and show
+    # what the app CAN see so a nested or misnamed key is obvious. Names only,
+    # never values.
     if not str(getattr(config, "ANTHROPIC_API_KEY", "")).strip():
-        _in_secrets = False
+        _scalars, _sections = [], []
         try:
-            _in_secrets = bool(str(st.secrets.get("ANTHROPIC_API_KEY", "") or "").strip())
+            for _k in st.secrets.keys():
+                _v = st.secrets[_k]
+                (_sections if hasattr(_v, "keys") else _scalars).append(_k)
         except Exception:
             pass
         st.warning(
             "⚠️ These asks are the generic fallback because the Anthropic key "
-            "isn't reaching the dashboard. "
-            + (
-                "The key is in your secrets but nested under a section, the code "
-                "only reads top-level keys. Move it to its own line: "
-                "`ANTHROPIC_API_KEY = \"sk-ant-...\"` (not inside a `[block]`), then reboot."
-                if _in_secrets else
-                "Add `ANTHROPIC_API_KEY = \"sk-ant-...\"` as a top-level line in the "
-                "Streamlit app secrets (Manage app, Settings, Secrets), then reboot."
-            )
+            "isn't reaching the dashboard. It has to be a **top-level** line named "
+            "exactly `ANTHROPIC_API_KEY` (not inside a `[section]`)."
+        )
+        st.caption(
+            "Top-level keys the app can currently see (names only): "
+            + (", ".join(f"`{k}`" for k in _scalars) or "(none)")
+            + ". Sections: "
+            + (", ".join(f"`[{k}]`" for k in _sections) or "(none)")
+            + ". If your Anthropic key sits under one of those sections, or is "
+            "spelled differently above, move it to its own top-level line and reboot."
         )
 
     triggers = _story_triggers(pr_records, competition_rows, first_log_by_nm, data_by_nm)
