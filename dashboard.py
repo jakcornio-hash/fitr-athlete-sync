@@ -6843,10 +6843,14 @@ def _dedup_client_key(name):
 
 
 def _not_current_clients(data_by_nm):
-    """Normalised names of anyone who isn't a current client, from BOTH sources:
-    the CRM Exit Autopsy (session cache) and a non-active Fitr Status in _DATA.
-    Neither source alone is complete, and they disagree, so we union them.
-    'Missed Payment' is left in, they're behind, not gone."""
+    """Normalised names of anyone who is genuinely GONE, from two sources: the
+    CRM Exit Autopsy (people Jak has recorded as left) and an "Auto Cancelled"
+    Fitr Status in _DATA (payment failed, access cut).
+
+    Deliberately does NOT exclude "Cancelled by client": that means notice given
+    but still active this period, and Jak keeps messaging those to try to save
+    them. "Missed Payment" stays in too, behind is not gone. Only a real exit
+    drops someone off."""
     out = set()
     try:
         import streamlit as _st
@@ -6855,12 +6859,27 @@ def _not_current_clients(data_by_nm):
     except Exception:
         pass
     for nm, rec in data_by_nm.items():
-        # Any cancel-variant: Fitr uses both "Cancelled by client" and "Auto
-        # Cancelled" (a missed-payment system cancel), and both mean gone.
-        # "Missed Payment" is deliberately left in, they're behind, not gone.
-        if "cancel" in str(rec.get("Fitr Status", "")).strip().lower():
+        # "Auto Cancelled" only, not "Cancelled by client" (still active/savable).
+        if "auto cancel" in str(rec.get("Fitr Status", "")).strip().lower():
             out.add(_norm_client_name(nm))
-    return out
+    # The Active Roster (Jak's pasted Fitr active list) is the source of truth
+    # and OVERRIDES the exclusions: someone on it is a current client even if
+    # the CRM still has them, which is how a "Cancelled by client" who's still
+    # active/savable (Jimmy, Gavin) stays in while a fully-gone one (Pat, Dave)
+    # drops off. Refresh the roster each reconciliation.
+    keep = _active_roster_norm()
+    return {n for n in out if n not in keep}
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _active_roster_norm():
+    """Normalised names from the Active Roster tab (Jak's current Fitr clients)."""
+    try:
+        rows = get_sheets().read_records("Active Roster")
+    except Exception:
+        return set()
+    return {_norm_client_name(r.get("Full Name", ""))
+            for r in rows if str(r.get("Full Name", "")).strip()}
 
 
 def _story_triggers(pr_records, competition_rows, first_log_by_nm, data_by_nm, horizon_days=7):
