@@ -291,6 +291,32 @@ STORY_FORM_URL = _get("STORY_FORM_URL", "https://jstcompete.typeform.com/to/HRAY
 # "New form" tab.
 STORY_FORM_SHEET_ID = _get("STORY_FORM_SHEET_ID", "1sRVXI4HlqwJVtNJgVfzN2hV9wGjYpk6ZGQ1dgTTN9nA")
 STORY_FORM_TAB = _get("STORY_FORM_TAB", "New form")
+# Exact response column headers from the Typeform → Sheets integration. Matched
+# by these strings, so if the form wording changes, change them here.
+STORY_COL_BEFORE = "What were you doing for your training before JST, and what made you start looking elsewhere?"
+STORY_COL_OBJECTION = "What nearly stopped you signing up?"
+STORY_COL_TIPPED = "What made you actually do it?"
+STORY_COL_CHANGED = "What's different now?"
+STORY_COL_NUMBERS_CONSENT = "Happy for your coach to pull your training numbers to go alongside this?"
+STORY_COL_ADVICE = "What would you say to someone sat where you were six months ago?"
+STORY_COL_USAGE_CONSENT = "How can we use this?"
+STORY_COL_NAME = "Your name"
+STORY_COL_EMAIL = "Your email"
+STORY_COL_TOKEN = "Token"
+STORY_COL_SUBMITTED = "Submitted At"
+
+# The coverage-grid taxonomy. ONE definition, shared by the tagger, the intake
+# queue, and the grid, so they can never drift apart. Segments and objections
+# are Jak's from the proof kit.
+STORY_SEGMENTS = [
+    "Busy parent", "Everyday class-goer", "Masters athlete", "Competitor",
+    "Dense / 45-min user", "Returner from injury", "Newbie (first 90 days)",
+]
+STORY_OBJECTIONS = ["Price", "Time", "Not good enough", "Tried before", "Which track"]
+# Tab in the MAIN sheet where import state lives (attribution, tags, review
+# status) keyed by the form's Token. The form's own sheet is Typeform-managed,
+# so we never write back to it.
+TAB_STORY_REVIEWS = "Story Reviews"
 # Column headers — must match the Typeform question text exactly as it appears in the Sheet.
 TSHIRT_FORM_NAME_COL = "Full name"
 TSHIRT_FORM_SIZE_COL = "T-shirt size"

@@ -666,6 +666,88 @@ class SheetsClient:
             rows.append(row)
         return rows
 
+    # ------------------------------------------------------ story extraction
+    def load_story_form_responses(self):
+        """Read story submissions from the JST Stories Typeform sheet.
+
+        Returns [{header: value}, ...]. Skips fully-blank rows and any row
+        without a Token (the dedup key), so a stray edit in the sheet can't
+        masquerade as a submission.
+        """
+        if not config.STORY_FORM_SHEET_ID:
+            return []
+        try:
+            sh = self.gc.open_by_key(config.STORY_FORM_SHEET_ID)
+            vals = sh.worksheet(config.STORY_FORM_TAB).get_all_values()
+        except Exception as e:
+            print(f"  ! story form read failed: {e}")
+            return []
+        if len(vals) < 2:
+            return []
+        header = [h.strip() for h in vals[0]]
+        rows = []
+        for r in vals[1:]:
+            if not any(c.strip() for c in r):
+                continue
+            row = {
+                h: (r[i].strip() if i < len(r) else "")
+                for i, h in enumerate(header) if h
+            }
+            if str(row.get(config.STORY_COL_TOKEN, "")).strip():
+                rows.append(row)
+        return rows
+
+    STORY_REVIEW_HEADER = [
+        "Token", "Athlete Name", "Submitter Name", "Submitter Email",
+        "Segment", "Objection", "Quality", "Consent", "Numbers OK",
+        "Reviewed", "Reviewed By", "Reviewed At", "Imported At",
+    ]
+
+    def load_story_reviews(self):
+        """Import state (attribution, tags, review status) keyed by form Token.
+
+        Lives in the MAIN sheet, never the Typeform-managed response sheet.
+        """
+        try:
+            return self.read_records(config.TAB_STORY_REVIEWS)
+        except gspread.WorksheetNotFound:
+            return []
+
+    def append_story_reviews(self, rows):
+        if not rows:
+            return 0
+        ws = self.get_or_create(config.TAB_STORY_REVIEWS, self.STORY_REVIEW_HEADER)
+        ws.append_rows(
+            [[r.get(h, "") for h in self.STORY_REVIEW_HEADER] for r in rows],
+            value_input_option="USER_ENTERED",
+        )
+        return len(rows)
+
+    def mark_story_reviewed(self, token, coach, when):
+        """Mark the story with this Token reviewed. One row, three cell writes."""
+        vals = self.read_values(config.TAB_STORY_REVIEWS)
+        if not vals:
+            return False
+        header = vals[0]
+        try:
+            tok_i = header.index("Token")
+        except ValueError:
+            return False
+        rows = [i for i, r in enumerate(vals[1:], start=2)
+                if tok_i < len(r) and r[tok_i].strip() == str(token).strip()]
+        if not rows:
+            return False
+        for col, val in (("Reviewed", "Yes"), ("Reviewed By", coach), ("Reviewed At", when)):
+            try:
+                ci = header.index(col)
+            except ValueError:
+                continue
+            self.update_cells_by_rowmap(
+                config.TAB_STORY_REVIEWS, self._idx_to_col(ci + 1),
+                {i: val for i in rows},
+            )
+        return True
+
     def load_video_reviews(self):
         try:
             return self.read_records(config.TAB_VIDEO_REVIEWS)

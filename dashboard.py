@@ -286,6 +286,30 @@ def _load_video_reviews_cached():
         return []
 
 
+@st.cache_data(ttl=120, show_spinner=False)
+def _load_story_reviews_cached():
+    """Story import state (attribution, tags, review status), keyed by Token."""
+    try:
+        return get_sheets().load_story_reviews()
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _load_story_answers_cached():
+    """The story answers themselves, from the Typeform sheet, keyed by Token.
+
+    Held separately from the review state: answers live in the Typeform-managed
+    sheet, state lives in the main sheet, and they're merged by Token in the UI.
+    """
+    try:
+        rows = get_sheets().load_story_form_responses()
+    except Exception:
+        return {}
+    return {str(r.get(config.STORY_COL_TOKEN, "")).strip(): r
+            for r in rows if str(r.get(config.STORY_COL_TOKEN, "")).strip()}
+
+
 @st.cache_data(ttl=600, show_spinner=False)
 def _active_coaches():
     """Active coach names from the Coaches tab.
@@ -6855,6 +6879,108 @@ def _story_triggers(pr_records, competition_rows, first_log_by_nm, data_by_nm, h
     return out
 
 
+def _story_bank_rows():
+    """Collected stories: review state (main sheet) merged with the answers
+    (Typeform sheet) by Token. Returns dicts newest-first."""
+    reviews = _load_story_reviews_cached()
+    answers = _load_story_answers_cached()
+    out = []
+    for r in reviews:
+        tok = str(r.get("Token", "")).strip()
+        if not tok:
+            continue
+        out.append({**r, "_answers": answers.get(tok, {})})
+    out.sort(key=lambda x: str(x.get("Imported At", "")), reverse=True)
+    return out
+
+
+def _render_story_bank():
+    """The bank: every collected story, tagged, with the answers and a check-off.
+    This is the durable reserve so the content slots never run dry."""
+    bank = _story_bank_rows()
+    st.markdown(f"**The bank** ({len(bank)} collected)")
+    if not bank:
+        st.caption(
+            "Stories land here once athletes start submitting the form. Each one is "
+            "attributed, tagged by segment and objection, and marked lead or fragment "
+            "on the daily sync."
+        )
+        return
+
+    leads = [b for b in bank if str(b.get("Quality", "")).lower() == "lead"]
+    unreviewed = [b for b in bank if str(b.get("Reviewed", "")).lower() != "yes"]
+    st.caption(f"{len(leads)} lead-quality · {len(unreviewed)} not yet reviewed. "
+               "Leads are feature-ready; fragments are testimonial offcuts for the bank.")
+
+    _ans_labels = [
+        (config.STORY_COL_BEFORE, "Before / why looking"),
+        (config.STORY_COL_OBJECTION, "What nearly stopped them"),
+        (config.STORY_COL_TIPPED, "What tipped them"),
+        (config.STORY_COL_CHANGED, "What's different now"),
+        (config.STORY_COL_ADVICE, "Advice to their past self"),
+    ]
+    # Unreviewed first, then leads, then freshest.
+    bank.sort(key=lambda b: (
+        str(b.get("Reviewed", "")).lower() == "yes",
+        str(b.get("Quality", "")).lower() != "lead",
+    ))
+    for b in bank:
+        who = str(b.get("Athlete Name", "")).strip() or (
+            f"⚠️ {b.get('Submitter Name', '').strip() or 'unmatched'}")
+        seg = str(b.get("Segment", "")).strip() or "untagged segment"
+        obj = str(b.get("Objection", "")).strip() or "no objection tagged"
+        qual = str(b.get("Quality", "")).strip()
+        badge = {"lead": "⭐ lead", "fragment": "◦ fragment"}.get(qual, "· untagged")
+        done = str(b.get("Reviewed", "")).lower() == "yes"
+        title = f"{'✅ ' if done else ''}{who} — {badge} · {seg} / {obj}"
+        with st.expander(title, expanded=False):
+            if not str(b.get("Athlete Name", "")).strip():
+                st.warning(
+                    f"Couldn't match \"{b.get('Submitter Name', '')}\" "
+                    f"({b.get('Submitter Email', '')}) to an athlete. Fix the name in "
+                    "the Story Reviews tab to attribute it."
+                )
+            ans = b.get("_answers", {})
+            for col, label in _ans_labels:
+                v = str(ans.get(col, "")).strip()
+                if v:
+                    st.markdown(f"**{label}:** {v}")
+            _consent = str(b.get("Consent", "")).strip()
+            _numbers = str(b.get("Numbers OK", "")).strip()
+            st.caption(
+                f"Consent: {_consent or '—'}  ·  Pull their numbers: {_numbers or '—'}"
+            )
+            if done:
+                st.caption(f"✅ Reviewed by {b.get('Reviewed By', '') or 'a coach'} "
+                           f"on {b.get('Reviewed At', '')}.")
+            else:
+                _tok = str(b.get("Token", "")).strip()
+                if st.button("✅ Mark reviewed", key=f"story_rev_{_tok}", type="primary"):
+                    get_sheets().mark_story_reviewed(_tok, "Coach", TODAY.isoformat())
+                    _load_story_reviews_cached.clear()
+                    st.rerun()
+
+
+def _render_coverage_grid():
+    """Live coverage grid: lead-quality stories plotted by segment × objection,
+    so the emptiest cell is Ed's next strategic ask."""
+    bank = _story_bank_rows()
+    leads = [b for b in bank
+             if str(b.get("Quality", "")).lower() == "lead"
+             and str(b.get("Segment", "")).strip() in config.STORY_SEGMENTS
+             and str(b.get("Objection", "")).strip() in config.STORY_OBJECTIONS]
+    grid = pd.DataFrame(0, index=config.STORY_SEGMENTS, columns=config.STORY_OBJECTIONS)
+    for b in leads:
+        grid.at[b["Segment"].strip(), b["Objection"].strip()] += 1
+    st.dataframe(grid, use_container_width=True)
+    filled = int((grid.values > 0).sum())
+    total = grid.size
+    st.caption(
+        f"{len(leads)} lead-quality stories cover {filled} of {total} cells. "
+        f"{'Every cell has a proof — pick the thinnest to deepen.' if filled == total else 'Empty cells are the gaps: the next strategic ask fills one.'}"
+    )
+
+
 def _render_story_system(pr_records, competition_rows, first_log_by_nm, data_by_nm):
     """The story-extraction system: who to ask right now, the ask, and the
     reference material (questions, case-study template, coach guide)."""
@@ -6897,6 +7023,9 @@ def _render_story_system(pr_records, competition_rows, first_log_by_nm, data_by_
                     st.markdown(f"Then fire the form: [{_form}]({_form})")
                 else:
                     st.caption("Then send the 5-question form link (not set up yet — see below).")
+
+    # ── The bank: stories collected, tagged, waiting to be used ──────────────
+    _render_story_bank()
 
     with st.expander("📋 The five questions (what the form asks)"):
         st.caption(
@@ -6948,29 +7077,18 @@ def _render_story_system(pr_records, competition_rows, first_log_by_nm, data_by_
         st.caption(
             "One deliberate ask a week, chosen to fill a gap rather than chase a moment. "
             "You're not collecting the ten best athletes, you're collecting one proof for "
-            "every kind of person who might read it. Pick the emptiest cell and ask "
-            "someone who fills it."
+            "every kind of person who might read it. Each number is how many lead-quality "
+            "stories you've banked for that reader and worry. Pick the emptiest cell and "
+            "ask someone who fills it."
         )
-        _segments = [
-            "Busy parent", "Everyday class-goer", "Masters athlete", "Competitor",
-            "Dense / 45-min user", "Returner from injury", "Newbie (first 90 days)",
-        ]
-        _objections = ["Price", "Time", "Not good enough", "Tried before", "Which track"]
-        _blank = pd.DataFrame("", index=_segments, columns=_objections)
-        st.dataframe(_blank, use_container_width=True)
+        _render_coverage_grid()
         st.caption(
-            "Each cell = a story proving JST works for that person despite that worry. "
             "Left to instinct you collect five 'committed competitor PBs everything' "
             "stories, inspiring to competitors and alienating to the ~60% who think "
             "'that's not me'. The grid forces the Nick-the-rigger and 'I nearly didn't "
             "join because I thought I wasn't fit enough' stories, which are the ones "
-            "that convert."
-        )
-        st.info(
-            "This grid fills itself once the story form is collecting: each reply gets "
-            "tagged by segment and objection (from the athlete's own answers, not from "
-            "our data), and the empty cells become Ed's five-minute Monday pick. It "
-            "needs the bank to exist first, so it lands with the intake queue."
+            "that convert. Only lead-quality stories count toward a cell — a fragment "
+            "isn't proof yet."
         )
 
     with st.expander("🚦 Quality gate — when a reply comes back thin"):

@@ -747,6 +747,109 @@ def sync_video_analysis(sheets, email_by_name):
     return len(new_rows), unresolved
 
 
+def sync_story_forms(sheets, email_by_name):
+    """Import new story submissions into the Story Reviews tab.
+
+    For each submission not already imported (deduped on the form Token):
+    resolve the athlete from the name/email they gave, tag it for the coverage
+    grid with Claude (segment, objection, lead-vs-fragment), and record the two
+    consent answers. Attribution and tagging are best-effort: a story we can't
+    match or can't tag still gets imported, flagged, so it surfaces for a human
+    rather than vanishing.
+
+    Returns (imported, unresolved_names).
+    """
+    rows = sheets.load_story_form_responses()
+    if not rows:
+        return 0, []
+
+    seen = {
+        str(r.get("Token", "")).strip()
+        for r in sheets.load_story_reviews()
+        if str(r.get("Token", "")).strip()
+    }
+
+    # Roster for attribution: email -> name, plus a name list (some athletes
+    # have no email on file, so don't gate the name list on having one).
+    merged = dict(email_by_name)
+    all_known = [n for n in merged if n]
+    try:
+        for rec in sheets.read_records(config.TAB_DATA):
+            nm2 = str(rec.get("Full Name", "")).strip()
+            em2 = str(rec.get("Email", "")).strip().lower()
+            if not nm2:
+                continue
+            if em2:
+                merged.setdefault(nm2, em2)
+            if nm2 not in all_known:
+                all_known.append(nm2)
+    except Exception:
+        pass
+    email_to_name = {v.lower(): k for k, v in merged.items() if v}
+
+    def _resolve(name, email):
+        e = str(email or "").strip().lower()
+        if e and e in email_to_name:
+            return email_to_name[e]
+        n = str(name or "").strip()
+        for known in all_known:  # exact, case-insensitive
+            if known.lower() == n.lower() and n:
+                return known
+        import difflib
+        m = difflib.get_close_matches(n.lower(), [k.lower() for k in all_known], n=1, cutoff=0.85)
+        if m:
+            return next(k for k in all_known if k.lower() == m[0])
+        return ""
+
+    new_rows, unresolved = [], []
+    for row in rows:
+        token = str(row.get(config.STORY_COL_TOKEN, "")).strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)  # guard against the Typeform double-write we saw
+
+        sub_name = str(row.get(config.STORY_COL_NAME, "")).strip()
+        sub_email = str(row.get(config.STORY_COL_EMAIL, "")).strip()
+        athlete = _resolve(sub_name, sub_email)
+        if not athlete:
+            unresolved.append(sub_name or sub_email or "<anonymous>")
+
+        answers = {
+            "Before / why looking": row.get(config.STORY_COL_BEFORE, ""),
+            "What nearly stopped them": row.get(config.STORY_COL_OBJECTION, ""),
+            "What tipped them": row.get(config.STORY_COL_TIPPED, ""),
+            "What's different now": row.get(config.STORY_COL_CHANGED, ""),
+            "Advice to their past self": row.get(config.STORY_COL_ADVICE, ""),
+        }
+        tags = summariser.tag_story(answers)
+
+        new_rows.append({
+            "Token": token,
+            "Athlete Name": athlete,
+            "Submitter Name": sub_name,
+            "Submitter Email": sub_email,
+            "Segment": tags.get("segment", ""),
+            "Objection": tags.get("objection", ""),
+            "Quality": tags.get("quality", ""),
+            "Consent": row.get(config.STORY_COL_USAGE_CONSENT, ""),
+            "Numbers OK": row.get(config.STORY_COL_NUMBERS_CONSENT, ""),
+            "Reviewed": "No", "Reviewed By": "", "Reviewed At": "",
+            "Imported At": TODAY.isoformat(),
+        })
+
+    if config.DRY_RUN:
+        for r in new_rows:
+            print(f"[DRY_RUN] story: {r['Athlete Name'] or r['Submitter Name']} "
+                  f"[{r['Segment']}/{r['Objection']}/{r['Quality']}]")
+        return len(new_rows), unresolved
+
+    if new_rows:
+        sheets.append_story_reviews(new_rows)
+    if unresolved:
+        print(f"  ! [story form] couldn't match to an athlete: {', '.join(unresolved[:10])}")
+    return len(new_rows), unresolved
+
+
 def sync_intake_from_typeform(sheets, email_by_name):
     """Populate _DATA from athlete intake Typeform responses.
 
@@ -1364,6 +1467,10 @@ def main():
     videos_imported, videos_unresolved = sync_video_analysis(sheets, email_by_name)
     if videos_imported:
         print(f"Movement analysis videos imported: {videos_imported}")
+
+    stories_imported, stories_unresolved = sync_story_forms(sheets, email_by_name)
+    if stories_imported:
+        print(f"Story submissions imported and tagged: {stories_imported}")
 
     # A scenario with no Playbook rows injects nothing and says nothing, so the
     # message still sends, just unguided. Name them so they get written.

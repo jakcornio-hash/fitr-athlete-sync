@@ -5,6 +5,8 @@ coaching-relevant summary using the Claude API.
 If no ANTHROPIC_API_KEY is configured, falls back to a trimmed raw excerpt
 so the pipeline still runs.
 """
+import json
+
 import config
 import coaching_voice
 
@@ -33,6 +35,70 @@ def _client():
     if Anthropic is None or not config.ANTHROPIC_API_KEY:
         return None
     return Anthropic(api_key=config.ANTHROPIC_API_KEY)
+
+
+def tag_story(answers):
+    """Classify a submitted story for the coverage grid.
+
+    answers: dict of {question_label: answer_text} straight from the form.
+    Returns {segment, objection, quality} where segment/objection are drawn
+    from config's fixed lists (or "" if none fits) and quality is "lead" or
+    "fragment". The taxonomy is passed in from config so the grid, the queue
+    and this tagger can never disagree about the labels.
+
+    Falls back to empty tags (never raises) so a tagging hiccup can't block the
+    import of the story itself.
+    """
+    blank = {"segment": "", "objection": "", "quality": ""}
+    client = _client()
+    if client is None:
+        return blank
+
+    body = "\n".join(
+        f"- {q}: {a}" for q, a in answers.items() if str(a).strip()
+    )
+    if not body.strip():
+        return blank
+
+    segs = ", ".join(config.STORY_SEGMENTS)
+    objs = ", ".join(config.STORY_OBJECTIONS)
+    system = (
+        "You tag athlete success stories for a coaching business's proof library. "
+        "Read the athlete's own words and return STRICT JSON with three keys.\n\n"
+        f"segment: which ONE reader this story best speaks to, from exactly: [{segs}]. "
+        "Judge from what they reveal about themselves (a busy parent, a returner "
+        "from injury, a masters athlete, a competitor, etc.), not from guesses. If "
+        "genuinely none fit, use \"\".\n\n"
+        f"objection: which ONE joining worry this story answers, from exactly: [{objs}]. "
+        "Usually visible in what nearly stopped them signing up. If none, use \"\".\n\n"
+        "quality: \"lead\" if it carries a specific, quotable detail or a real number "
+        "(a PB, a life-change, \"night shifts on the 45-minute track\"); \"fragment\" if "
+        "it's generic praise with nothing concrete. Be strict: most are fragments.\n\n"
+        "Output ONLY the JSON object, no prose."
+    )
+    try:
+        resp = client.messages.create(
+            model=config.ANTHROPIC_MODEL,
+            max_tokens=120,
+            system=system,
+            messages=[{"role": "user", "content": body}],
+        )
+        text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
+        text = text[text.find("{"): text.rfind("}") + 1]
+        data = json.loads(text)
+        seg = str(data.get("segment", "")).strip()
+        obj = str(data.get("objection", "")).strip()
+        qual = str(data.get("quality", "")).strip().lower()
+        return {
+            # Only accept values from the canonical lists, so a hallucinated
+            # label can't create a phantom grid row.
+            "segment": seg if seg in config.STORY_SEGMENTS else "",
+            "objection": obj if obj in config.STORY_OBJECTIONS else "",
+            "quality": qual if qual in ("lead", "fragment") else "",
+        }
+    except Exception as e:
+        print(f"  ! tag_story error: {e}")
+        return blank
 
 
 def summarise_conversation(athlete_name, messages_text, activity_date=None):
