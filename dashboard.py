@@ -6868,7 +6868,12 @@ def _render_story_system(pr_records, competition_rows, first_log_by_nm, data_by_
     _form = getattr(config, "STORY_FORM_URL", "")
 
     hot = [t for t in triggers if t["hot"]]
-    st.markdown(f"**Chase now** ({len(triggers)} in the last 7 days, {len(hot)} inside 48h)")
+    st.markdown(f"**Ask 1 — hot triggers** ({len(triggers)} in the last 7 days, {len(hot)} inside 48h)")
+    st.caption(
+        "Reactive: the athlete created the moment, so these don't count against any "
+        "quota. Ask them all if you can, inside 48 hours. The deliberate 'strategic "
+        "pick' (Ask 2) is the coverage grid further down."
+    )
     if not triggers:
         st.info("No fresh triggers this week. The moment someone PBs, finishes a comp, "
                 "or hits a milestone, they show up here.")
@@ -6936,6 +6941,47 @@ def _render_story_system(pr_records, competition_rows, first_log_by_nm, data_by_
             "**Bar:** no case study ships without at least two verifiable numbers and written "
             "consent. If it can't clear that, it's a testimonial, not a case study. Still useful, "
             "different shelf."
+        )
+
+    with st.expander("🎯 Ask 2 — the strategic pick (coverage grid)"):
+        st.caption(
+            "One deliberate ask a week, chosen to fill a gap rather than chase a moment. "
+            "You're not collecting the ten best athletes, you're collecting one proof for "
+            "every kind of person who might read it. Pick the emptiest cell and ask "
+            "someone who fills it."
+        )
+        _segments = [
+            "Busy parent", "Everyday class-goer", "Masters athlete", "Competitor",
+            "Dense / 45-min user", "Returner from injury", "Newbie (first 90 days)",
+        ]
+        _objections = ["Price", "Time", "Not good enough", "Tried before", "Which track"]
+        _blank = pd.DataFrame("", index=_segments, columns=_objections)
+        st.dataframe(_blank, use_container_width=True)
+        st.caption(
+            "Each cell = a story proving JST works for that person despite that worry. "
+            "Left to instinct you collect five 'committed competitor PBs everything' "
+            "stories, inspiring to competitors and alienating to the ~60% who think "
+            "'that's not me'. The grid forces the Nick-the-rigger and 'I nearly didn't "
+            "join because I thought I wasn't fit enough' stories, which are the ones "
+            "that convert."
+        )
+        st.info(
+            "This grid fills itself once the story form is collecting: each reply gets "
+            "tagged by segment and objection (from the athlete's own answers, not from "
+            "our data), and the empty cells become Ed's five-minute Monday pick. It "
+            "needs the bank to exist first, so it lands with the intake queue."
+        )
+
+    with st.expander("🚦 Quality gate — when a reply comes back thin"):
+        st.markdown(
+            "Volume at the ask, quality at the publish. A weak reply (generic praise, "
+            "no specifics, no numbers) goes in the **bank as a testimonial fragment**, "
+            "not a lead story. Never pad a weak story into a feature. One specific "
+            "detail (\"I trained through night shifts on the 45-minute track\") outsells "
+            "three paragraphs of \"great programming, great community\".\n\n"
+            "The bank is the point: a reserve means the Week 4 slot, the HQ proof "
+            "section and the case-study pipeline never run dry, and you're never asking "
+            "someone the week you need it, which is when asks feel transactional."
         )
 
     st.divider()
