@@ -6855,7 +6855,10 @@ def _not_current_clients(data_by_nm):
     except Exception:
         pass
     for nm, rec in data_by_nm.items():
-        if str(rec.get("Fitr Status", "")).strip().lower() == "cancelled by client":
+        # Any cancel-variant: Fitr uses both "Cancelled by client" and "Auto
+        # Cancelled" (a missed-payment system cancel), and both mean gone.
+        # "Missed Payment" is deliberately left in, they're behind, not gone.
+        if "cancel" in str(rec.get("Fitr Status", "")).strip().lower():
             out.add(_norm_client_name(nm))
     return out
 
