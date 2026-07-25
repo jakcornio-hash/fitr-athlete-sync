@@ -184,6 +184,70 @@ def _kill_em_dashes(text):
     return _re.sub(r"\s*[—–]\s*", ", ", text)
 
 
+_STORY_ASK_SUFFIX = """
+
+--- YOUR TASK ---
+Write a short message from Jak asking this athlete if he can capture their
+story. This is a real, warm 1-to-1 message, not a form letter.
+
+Shape:
+1. Open on the SPECIFIC thing they just did (the trigger below), by name.
+2. Tie it to their bigger picture where the context gives you something real
+   (their goal, how long they've been at it, a run of form). One genuine line,
+   not a life story.
+3. Ask, lightly, if they'd share how it's gone, we love shouting about this
+   stuff. Make saying no completely fine.
+
+Hard rules:
+- 2 to 4 short sentences. Readable on a phone.
+- No sign-off (a coach adds their own name when they send it).
+- NEVER an em dash. No emojis. No hype stacking.
+- Don't invent numbers or facts. Use only what's given.
+- Don't mention "five questions" or "a form", the coach adds the link.
+- Output ONLY the message text. No preamble, no quotes.
+
+Example (trigger: Kanisha PB'd Clean and Jerk 75kg; goal: first competition;
+8 months in):
+-> Hey Kanisha, that 75kg clean and jerk is a real marker, especially with the
+first comp on the horizon after the graft you've put in these last months.
+Stuff like this is what we love shouting about. Any chance you'd tell me a bit
+about how it's all felt?
+"""
+
+
+def story_ask_message(situation, context_lines, fallback, playbook=""):
+    """Generate a personalised story-capture ask in Jak's voice.
+
+    situation: one line on the trigger, e.g.
+      'Kanisha just PB'd "1RM Clean and Jerk" at 75kg (+1 more win this week).'
+    context_lines: list of plain strings about the athlete (goal, tenure,
+      notable form) so the ask can connect to their bigger picture. Only real
+      facts, since the model is told not to invent any.
+    fallback: safe generic ask used if the API is unavailable or the output
+      looks wrong. Never returns None.
+    """
+    client = _client()
+    if client is None:
+        return fallback
+    ctx = "\n".join(f"- {c}" for c in context_lines if str(c).strip())
+    user = situation + (f"\n\nWhat we know about them:\n{ctx}" if ctx.strip() else "")
+    try:
+        resp = client.messages.create(
+            model=config.ANTHROPIC_MODEL,
+            max_tokens=160,
+            system=coaching_voice.voice_prompt() + _STORY_ASK_SUFFIX + (playbook or ""),
+            messages=[{"role": "user", "content": user}],
+        )
+        text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
+        text = _kill_em_dashes(text.strip().strip('"').strip())
+        if not text or len(text) > 600:
+            return fallback
+        return text
+    except Exception as e:
+        print(f"  ! story_ask_message error: {e}")
+        return fallback
+
+
 def athlete_message(situation, fallback, playbook=""):
     """Generate one on-voice automated athlete message.
 

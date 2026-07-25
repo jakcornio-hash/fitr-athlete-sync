@@ -6879,6 +6879,48 @@ def _story_triggers(pr_records, competition_rows, first_log_by_nm, data_by_nm, h
     return out
 
 
+def _story_situation(name, trigger, detail):
+    """Phrase a trigger as a one-liner for the ask generator."""
+    if trigger == "New PB":
+        return f"{name} just PB'd {detail}."
+    if trigger == "Competition done":
+        return f"{name} just competed: {detail}."
+    if trigger == "Milestone":
+        return f"{name} just hit a {detail} milestone with us."
+    return f"{name}: {trigger}, {detail}."
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _story_ask_cached(name, situation, context_tuple):
+    """Personalised story-capture ask, cached 30min per athlete+situation so
+    the same trigger isn't regenerated on every page load. Key includes the
+    situation, so a new PB regenerates."""
+    import summariser as _sm
+    import coaching_voice as _cv
+    first = name.split()[0] if name else "there"
+    fallback = (f"Hey {first}, that's class. We love shouting about this stuff, "
+                f"any chance you'd tell me a bit about how it's gone?")
+    try:
+        pb = _cv.playbook_prompt(get_sheets())
+        return _sm.story_ask_message(situation, list(context_tuple), fallback, playbook=pb)
+    except Exception:
+        return fallback
+
+
+def _story_context_lines(name, data_by_nm, first_log_by_nm):
+    """Real facts about an athlete for the ask to draw on. Only what we hold."""
+    lines = []
+    rec = data_by_nm.get(name, {})
+    goal = str(rec.get("North Star Goal", "")).strip()
+    if goal:
+        lines.append(f"Goal: {goal}")
+    fl = first_log_by_nm.get(name)
+    if fl:
+        months = max(1, (TODAY - fl).days // 30)
+        lines.append(f"{months} month{'s' if months != 1 else ''} on programme")
+    return lines
+
+
 def _story_bank_rows():
     """Collected stories: review state (main sheet) merged with the answers
     (Typeform sheet) by Token. Returns dicts newest-first."""
@@ -6994,35 +7036,47 @@ def _render_story_system(pr_records, competition_rows, first_log_by_nm, data_by_
     _form = getattr(config, "STORY_FORM_URL", "")
 
     hot = [t for t in triggers if t["hot"]]
-    st.markdown(f"**Ask 1 — hot triggers** ({len(triggers)} in the last 7 days, {len(hot)} inside 48h)")
+    cooling = [t for t in triggers if not t["hot"]]
+
+    st.markdown(f"**Your story list** ({len(hot)} inside 48h to ask now)")
     st.caption(
-        "Reactive: the athlete created the moment, so these don't count against any "
-        "quota. Ask them all if you can, inside 48 hours. The deliberate 'strategic "
-        "pick' (Ask 2) is the coverage grid further down."
+        "Yours to work, not Ed's. Each has a message written from what we actually "
+        "know about them, their result, their goal, their time with us. Read it, "
+        "tweak if you want, send it, then drop them the form link. The window's "
+        "short: a PB is a story on Tuesday and a stat by Sunday."
     )
-    if not triggers:
+    if not hot and not cooling:
         st.info("No fresh triggers this week. The moment someone PBs, finishes a comp, "
                 "or hits a milestone, they show up here.")
-    else:
-        def _ago(n):
-            return "today" if n == 0 else ("yesterday" if n == 1 else f"{n} days ago")
-        for t in triggers:
-            flame = "🔥 " if t["hot"] else ""
-            first = t["Athlete"].split()[0]
-            with st.expander(
-                f"{flame}{t['Athlete']} — {t['Trigger']}: {t['Detail']} ({_ago(t['days_ago'])})",
-                expanded=t["hot"],
-            ):
-                if t["hot"]:
-                    st.caption("🔥 Inside the 48-hour window — ask today if you can.")
-                elif t["days_ago"] > 4:
-                    st.caption("⏳ Cooling off — still worth asking, lead with the specific moment.")
-                st.markdown("**Send this:**")
-                st.code(f"Hey {first}, {_STORY_ASK}", language=None)
-                if _form:
-                    st.markdown(f"Then fire the form: [{_form}]({_form})")
-                else:
-                    st.caption("Then send the 5-question form link (not set up yet — see below).")
+
+    for t in hot:
+        first = t["Athlete"].split()[0]
+        with st.expander(
+            f"🔥 {t['Athlete']} — {t['Trigger']}: {t['Detail']} "
+            f"({'today' if t['days_ago'] == 0 else 'yesterday'})",
+            expanded=True,
+        ):
+            situation = _story_situation(t["Athlete"], t["Trigger"], t["Detail"])
+            ctx = _story_context_lines(t["Athlete"], data_by_nm, first_log_by_nm)
+            draft = _story_ask_cached(t["Athlete"], situation, tuple(ctx))
+            st.markdown("**Send this:**")
+            st.code(draft, language=None)
+            if _form:
+                st.markdown(f"Then drop them the form: [{_form}]({_form})")
+            else:
+                st.caption("Then send the 5-question form link (not set up yet — see below).")
+
+    if cooling:
+        with st.expander(f"⏳ Cooling off ({len(cooling)} past 48h, still worth a nudge)"):
+            st.caption(
+                "Older than 2 days, so past the sweet spot. If you ask, lead with the "
+                "specific moment. No auto-written message for these, the freshness has gone."
+            )
+            for t in cooling:
+                st.markdown(
+                    f"- **{t['Athlete']}** — {t['Trigger']}: {t['Detail']} "
+                    f"({t['days_ago']} days ago)"
+                )
 
     # ── The bank: stories collected, tagged, waiting to be used ──────────────
     _render_story_bank()
