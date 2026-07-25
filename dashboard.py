@@ -6825,6 +6825,41 @@ _STORY_QUESTIONS = [
 ]
 
 
+def _norm_client_name(name):
+    """Lowercase, alphanumerics only. Makes 'Pat Campbell-Jenner' and
+    'Pat Campbell Jenner' the same key, which the exact-match cancellation
+    check misses."""
+    import re as _re
+    return _re.sub(r"[^a-z0-9]", "", str(name or "").lower())
+
+
+def _dedup_client_key(name):
+    """Normalised key that also collapses doubled letters, so 'Lachlann Plews'
+    and 'Lachlan Plews' merge, without collapsing genuinely different names
+    like Chris/Christopher."""
+    import re as _re
+    n = _norm_client_name(name)
+    return _re.sub(r"(.)\1+", r"\1", n)
+
+
+def _not_current_clients(data_by_nm):
+    """Normalised names of anyone who isn't a current client, from BOTH sources:
+    the CRM Exit Autopsy (session cache) and a non-active Fitr Status in _DATA.
+    Neither source alone is complete, and they disagree, so we union them.
+    'Missed Payment' is left in, they're behind, not gone."""
+    out = set()
+    try:
+        import streamlit as _st
+        for n in (_st.session_state.get("_cancelled_names_lower") or set()):
+            out.add(_norm_client_name(n))
+    except Exception:
+        pass
+    for nm, rec in data_by_nm.items():
+        if str(rec.get("Fitr Status", "")).strip().lower() == "cancelled by client":
+            out.add(_norm_client_name(nm))
+    return out
+
+
 def _story_triggers(pr_records, competition_rows, first_log_by_nm, data_by_nm, horizon_days=7):
     """Athletes who hit a story-worthy trigger in the last `horizon_days`.
 
@@ -6840,6 +6875,14 @@ def _story_triggers(pr_records, competition_rows, first_log_by_nm, data_by_nm, h
     from collections import defaultdict as _dd
     per_athlete = _dd(list)  # name -> list of (rank, days_ago, trigger, detail)
 
+    # Anyone not a current client is skipped: you don't ask someone who's left
+    # for a story. Uses both truth sources, and normalised names so a hyphen
+    # difference doesn't let a cancelled athlete through.
+    not_current = _not_current_clients(data_by_nm)
+
+    def _skip(nm):
+        return _norm_client_name(nm) in not_current
+
     def _prog(nm):
         return str(data_by_nm.get(nm, {}).get("Programme", "")).strip() or "—"
 
@@ -6853,6 +6896,8 @@ def _story_triggers(pr_records, competition_rows, first_log_by_nm, data_by_nm, h
         if nm and bn and val and d:
             hist[(nm, bn)].append((d, val))
     for (nm, bn), recs in hist.items():
+        if _skip(nm):
+            continue
         recs.sort()
         for i, (d, val) in enumerate(recs):
             days_ago = (TODAY - d).days
@@ -6865,7 +6910,7 @@ def _story_triggers(pr_records, competition_rows, first_log_by_nm, data_by_nm, h
         comp = str(r.get("Competition Name", "")).strip()
         result = str(r.get("Result", "")).strip()
         d = _parse_date(str(r.get("Date", "")).strip())
-        if nm and d and result:
+        if nm and d and result and not _skip(nm):
             days_ago = (TODAY - d).days
             if 0 <= days_ago <= horizon_days:
                 per_athlete[nm].append((1, days_ago, "Competition done", f"{comp}: {result}"))
@@ -6873,24 +6918,35 @@ def _story_triggers(pr_records, competition_rows, first_log_by_nm, data_by_nm, h
     # 3. Anniversary crossed in the window
     _milestones = {90: "3 months", 180: "6 months", 365: "1 year", 730: "2 years"}
     for nm, fl in first_log_by_nm.items():
+        if _skip(nm):
+            continue
         days_on = (TODAY - fl).days
         for threshold, label in _milestones.items():
             crossed_ago = days_on - threshold
             if 0 <= crossed_ago <= horizon_days:
                 per_athlete[nm].append((2, crossed_ago, "Milestone", f"{label} on programme"))
 
-    out = []
+    # Merge spelling variants of the same person (Lachlan / Lachlann Plews) so
+    # they're one card, not two. Canonical name = the spelling they log under
+    # most, and all their wins combine.
+    merged = _dd(list)  # dedup_key -> [(name, hits), ...]
     for nm, hits in per_athlete.items():
-        # Headline = highest narrative value (lowest rank), then freshest.
-        hits.sort(key=lambda h: (h[0], h[1]))
-        _, _, trigger, detail = hits[0]
-        extra = len(hits) - 1
+        merged[_dedup_client_key(nm)].append((nm, hits))
+
+    out = []
+    for group in merged.values():
+        group.sort(key=lambda g: -len(g[1]))
+        canonical = group[0][0]
+        all_hits = [h for _, hits in group for h in hits]
+        all_hits.sort(key=lambda h: (h[0], h[1]))  # headline: best, then freshest
+        _, _, trigger, detail = all_hits[0]
+        extra = len(all_hits) - 1
         if extra:
             detail += f"  (+{extra} more win{'s' if extra > 1 else ''} this week)"
         out.append({
-            "Athlete": nm, "Programme": _prog(nm),
+            "Athlete": canonical, "Programme": _prog(canonical),
             "Trigger": trigger, "Detail": detail,
-            "days_ago": min(h[1] for h in hits),  # freshest wins the ordering
+            "days_ago": min(h[1] for h in all_hits),
         })
     for o in out:
         o["hot"] = o["days_ago"] <= 2
