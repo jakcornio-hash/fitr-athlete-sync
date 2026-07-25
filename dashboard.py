@@ -373,6 +373,25 @@ def get_fitr():
     return client
 
 
+def _bridge_anthropic_config():
+    """Copy the Anthropic key/model from Streamlit secrets onto config.
+
+    The dashboard now generates copy live (the story asks), so it needs the
+    Anthropic key the way the sync does. Streamlit Cloud doesn't reliably
+    expose secrets as env vars, and config reads env vars, so without this the
+    generation silently falls back to a generic line on the deployed app while
+    working fine locally. Idempotent, safe to call on every render.
+    """
+    try:
+        import streamlit as _st
+        for key in ("ANTHROPIC_API_KEY", "ANTHROPIC_MODEL"):
+            val = str(_st.secrets.get(key, "") or "").strip()
+            if val:
+                setattr(config, key, val)
+    except Exception:
+        pass
+
+
 # ── Pages ─────────────────────────────────────────────────────────────────────
 
 def page_self_assess():
@@ -7031,6 +7050,10 @@ def _render_story_system(pr_records, competition_rows, first_log_by_nm, data_by_
         "Catch a story while it's warm. A PB is a story on Tuesday and a stat by "
         "Sunday, so the ask wants to land inside 48 hours of the trigger."
     )
+
+    # Must run before the first _story_ask_cached call: a cache miss with no key
+    # would cache the generic fallback for 30 minutes.
+    _bridge_anthropic_config()
 
     triggers = _story_triggers(pr_records, competition_rows, first_log_by_nm, data_by_nm)
     _form = getattr(config, "STORY_FORM_URL", "")
