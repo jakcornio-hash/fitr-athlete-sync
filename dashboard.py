@@ -6852,8 +6852,15 @@ def _not_current_clients(data_by_nm):
         cancelled = _st.session_state.get("_cancelled_names_lower") or set()
     except Exception:
         cancelled = set()
-    return _an.not_current_client_names(
-        cancelled, list(data_by_nm.values()), _active_roster_names())
+    try:
+        return _an.not_current_client_names(
+            cancelled, list(data_by_nm.values()), _active_roster_names())
+    except AttributeError:
+        # Transient: after a git push Streamlit re-ran this script but is still
+        # holding the previous analytics module in sys.modules, without the new
+        # helper. A reboot reimports it. Degrade to no exclusions rather than
+        # crash the whole page while that window lasts.
+        return set()
 
 
 @st.cache_data(ttl=600, show_spinner=False)
