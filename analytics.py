@@ -1676,6 +1676,34 @@ def gym_credit_summary(gym_referrals, gym_directory, today=None):
 _REJOIN_GRACE_DAYS = 14  # logs within this window after cancelling are just final sessions
 
 
+def normalise_client_name(s):
+    """Lowercase, alphanumerics only. Makes 'Pat Campbell-Jenner' and
+    'Pat Campbell Jenner' the same key, which exact-match comparison misses."""
+    return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
+
+
+def not_current_client_names(cancelled_names, data_records, active_roster_names):
+    """Normalised names of clients who are genuinely GONE.
+
+    The shared source of truth for "don't message / don't feature this person",
+    used by both the sync and the dashboard so they can't drift.
+
+    Gone = in the CRM Exit Autopsy (cancelled_names, already rejoin-safeguarded)
+    OR an "Auto Cancelled" Fitr Status in _DATA (payment failed, access cut).
+    Then MINUS the Active Roster: that's Jak's current Fitr client list, the
+    real source of truth, so anyone on it stays even if the CRM still lists
+    them. That's how a still-active "Cancelled by client" (notice given, being
+    saved) stays in while a fully-gone athlete drops off. "Cancelled by client"
+    and "Missed Payment" are never excluded on their own, they're savable.
+    """
+    gone = {normalise_client_name(n) for n in (cancelled_names or ())}
+    for r in (data_records or ()):
+        if "auto cancel" in str(r.get("Fitr Status", "")).strip().lower():
+            gone.add(normalise_client_name(r.get("Full Name", "")))
+    keep = {normalise_client_name(n) for n in (active_roster_names or ())}
+    return gone - keep
+
+
 def cancelled_athletes(exit_rows, pr_records):
     """Determine which athletes have genuinely left, from the CRM Exit Autopsy tab.
 

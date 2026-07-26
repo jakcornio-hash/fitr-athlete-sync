@@ -1575,9 +1575,29 @@ def main():
     # date has evidently come back and is NOT excluded.
     exit_rows = sheets.load_exit_autopsy()
     cancelled_names_lower, rejoined_names = analytics.cancelled_athletes(exit_rows, pr_records)
-    active_athletes = [a for a in athletes if a["name"].lower() not in cancelled_names_lower]
-    if cancelled_names_lower:
-        print(f"Cancelled athletes excluded from flags/messages (Exit Autopsy): "
+
+    # "Genuinely gone" for message exclusions. Broader and safer than the raw
+    # Exit Autopsy: adds Auto-Cancelled Fitr statuses the CRM never got (Dave),
+    # matches names hyphen-proof (Pat Campbell-Jenner), and is overridden by the
+    # Active Roster so a still-active "Cancelled by client" being saved (Jimmy,
+    # Gavin) keeps getting messaged. Same helper the dashboard uses, so they
+    # can't drift.
+    try:
+        _active_roster = [str(r.get("Full Name", "")).strip()
+                          for r in sheets.read_records("Active Roster")
+                          if str(r.get("Full Name", "")).strip()]
+    except Exception:
+        _active_roster = []
+    _gone_norm = analytics.not_current_client_names(
+        cancelled_names_lower, data_recs, _active_roster)
+
+    def _is_gone(nm):
+        return analytics.normalise_client_name(nm) in _gone_norm
+
+    active_athletes = [a for a in athletes if not _is_gone(a["name"])]
+    if _gone_norm:
+        print(f"Gone athletes excluded from flags/messages "
+              f"(Exit Autopsy + Auto-Cancelled, minus Active Roster): "
               f"{len(athletes) - len(active_athletes)} of {len(athletes)} on roster")
     if rejoined_names:
         print(f"  ! In Exit Autopsy but training again — NOT excluded, update the CRM: "
@@ -1628,7 +1648,7 @@ def main():
             _p  = str(_rec.get("Previous Value", "")).strip()
             if not _nm or not _b or not _v or _nm in bespoke_names:
                 continue
-            if _nm.lower() in cancelled_names_lower:
+            if _is_gone(_nm):
                 continue
             if not config.is_achievement_benchmark(_b):
                 continue  # heart rate, bodyweight, food/macros, steps — data, not a PB
@@ -1777,7 +1797,7 @@ def main():
     if archetype_new_reads and not config.DRY_RUN:
         _arch_sent = 0
         for _nm, _primary in archetype_new_reads:
-            if not _primary or _nm.lower() in cancelled_names_lower:
+            if not _primary or _is_gone(_nm):
                 continue
             _room = room_id_by_name.get(_nm)
             if not _room:
@@ -2225,7 +2245,7 @@ def main():
     comp_msgs_sent = 0
     for row in competition_rows:
         nm = str(row.get("Athlete Name", "")).strip()
-        if not nm or nm in bespoke_names or nm.lower() in cancelled_names_lower:
+        if not nm or nm in bespoke_names or _is_gone(nm):
             continue
         comp_nm = str(row.get("Competition Name", "")).strip() or "your competition"
         comp_type = str(row.get("Type", "A")).strip().upper()
@@ -2285,7 +2305,7 @@ def main():
     post_comp_msgs_sent = 0
     for row in competition_rows:
         nm = str(row.get("Athlete Name", "")).strip()
-        if not nm or nm in bespoke_names or nm.lower() in cancelled_names_lower:
+        if not nm or nm in bespoke_names or _is_gone(nm):
             continue
         comp_nm = str(row.get("Competition Name", "")).strip() or "your competition"
         comp_type = str(row.get("Type", "A")).strip().upper()
@@ -2338,7 +2358,7 @@ def main():
     comp_result_msgs_sent = 0
     for row in competition_rows:
         nm = str(row.get("Athlete Name", "")).strip()
-        if not nm or nm in bespoke_names or nm.lower() in cancelled_names_lower:
+        if not nm or nm in bespoke_names or _is_gone(nm):
             continue
         result = str(row.get("Result", "")).strip()
         comp_nm = str(row.get("Competition Name", "")).strip()
@@ -2419,7 +2439,7 @@ def main():
                 _email_map[_nm] = _em
         non_bespoke_email_by_name = {
             k: v for k, v in _email_map.items()
-            if k not in bespoke_names and k.lower() not in cancelled_names_lower
+            if k not in bespoke_names and not _is_gone(k)
         }
         # On the first Monday of the month, the email carries the month in
         # review instead of the week. Athlete emails now only ever leave on a
@@ -2488,7 +2508,7 @@ def main():
         _mfitr_notes: dict = {}
         _mfitr_sent = 0
         for _nm, _sess_dates in _month_sessions.items():
-            if _nm in bespoke_names or _nm.lower() in cancelled_names_lower:
+            if _nm in bespoke_names or _is_gone(_nm):
                 continue
             _room = room_id_by_name.get(_nm)
             if not _room:
