@@ -1145,41 +1145,10 @@ def auto_onboard_new_athletes(sheets, rooms, fitr=None, room_id_by_name=None,
     for name, fid, prog in to_onboard:
         print(f"  [auto-onboard] Added {name!r} (Fitr ID {fid}) → {prog!r}")
 
-    # Send onboarding checklist to newly added athletes
-    if fitr and room_id_by_name and not config.DRY_RUN:
-        import time as _time
-        for name, fid, prog in to_onboard:
-            if bespoke_names and name in bespoke_names:
-                print(f"  [auto-onboard] Skipping Fitr message for bespoke athlete: {name!r}")
-                continue
-            if name.lower() in data_names_lower:
-                print(f"  [auto-onboard] Skipping onboarding message for {name!r} — "
-                      f"already has a _DATA record (re-detected Fitr ID, not a new athlete)")
-                continue
-            room_id = room_id_by_name.get(name)
-            if not room_id:
-                continue
-            first = name.split()[0]
-            intake_msg = (
-                f"Hey {first}, you've been added to the JST Compete coaching system. Good to have you in.\n\n"
-                f"Two things to get started:\n\n"
-                f"1. Athlete intake form (3 minutes, tells me everything I need to set your programming up properly):\n"
-                f"https://jstcompete.typeform.com/to/Q1tL7MmR\n\n"
-                f"2. Weekly recovery check-in, same link. Once you're training, do this each week. "
-                f"It takes 2 minutes and is how I manage your load week to week.\n\n"
-                f"Message me here anytime."
-            )
-            try:
-                fitr.send_chat_message(room_id, intake_msg)
-                if messages_sent_log is not None:
-                    messages_sent_log.append({
-                        "Date": TODAY.isoformat(), "Athlete Name": name,
-                        "Message Type": "onboard_checklist", "Room ID": room_id,
-                    })
-                _time.sleep(0.5)
-                print(f"  [auto-onboard] Sent onboarding checklist to {name!r}")
-            except Exception as exc:
-                print(f"  ! Onboarding checklist failed for {name}: {exc}")
+    # No onboarding message sent here on purpose. Fitr's own native welcome
+    # (WhatsApp group, /athleteonboard intake form, the Athlete Handbook) owns
+    # onboarding and does it better. This used to fire a second, colder message
+    # on top of it, with a different intake link, that got a 0% reply rate.
 
     return len(to_onboard)
 
