@@ -2300,7 +2300,54 @@ def page_athletes(pr_records, athletes, trend_results, engagement_results,
         st.caption("No athlete selected.")
 
 
-def page_trends(pr_records, athletes):
+def _short_test_name(title):
+    """'Clean + Jerk Accuracy Retest' -> 'Clean + Jerk Accuracy' (drop test/retest + emoji)."""
+    t = re.sub(r"\b(re)?test\b", "", str(title), flags=re.I)
+    t = re.sub(r"[^\w+ ]", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _render_retest_chasers(pr_records, data_by_nm):
+    """Coach worklist: athletes who did a test but skipped the retest, with a
+    ready-to-send nudge each. Cancelled clients are excluded."""
+    not_current = _not_current_clients(data_by_nm)
+    res = analytics.retest_analysis(
+        pr_records,
+        measure_of=lambda t: _challenge_measures().get(_norm_bench(t), ""),
+        gone_norm=not_current,
+    )
+    chasers = res.get("chasers", [])
+    if not chasers:
+        return
+    total = sum(len(c["missing"]) for c in chasers)
+    with st.expander(f"🔁 Retest chasers — {total} athletes to nudge across {len(chasers)} retests"):
+        st.caption(
+            "Did the original test but haven't logged the retest (cancelled clients "
+            "excluded). Copy a nudge and drop it in their Fitr chat."
+        )
+        for c in chasers:
+            short = _short_test_name(c["retest"])
+            st.markdown(
+                f"**{c['retest']}**  ·  {len(c['missing'])} to chase  "
+                f"·  _retested {c['did_retest']}/{c['did_test']}_"
+            )
+            for m in c["missing"]:
+                first = m["name"].split()[0] if m["name"] else "there"
+                score = _fmt_pr_val(m["test_value"], c["test"])
+                draft = (
+                    f"Hey {first}, you hit {score} on the {short} test. The retest is "
+                    f"live now and I reckon there's more in you. When can you get it "
+                    f"logged this week?"
+                )
+                st.markdown(f"&nbsp;&nbsp;·&nbsp;**{m['name']}** — test: {score}")
+                st.code(draft, language=None)
+
+
+def page_trends(pr_records, athletes, data_records=None):
+    _render_retest_chasers(pr_records, {
+        str(r.get("Full Name", "")).strip(): r for r in (data_records or [])
+    })
+
     athlete_names = sorted({a["name"] for a in athletes})
 
     col_sel, col_cmp = st.columns([2, 2])
@@ -7147,6 +7194,34 @@ def _render_coverage_grid():
     )
 
 
+def _render_improver_candidates(pr_records, data_by_nm):
+    """Athletes with the strongest measured test→retest gains — hard numbers that
+    back a testimonial. Cancelled clients excluded."""
+    not_current = _not_current_clients(data_by_nm)
+    res = analytics.retest_analysis(
+        pr_records,
+        measure_of=lambda t: _challenge_measures().get(_norm_bench(t), ""),
+        gone_norm=not_current,
+    )
+    improvers = res.get("improvers", [])
+    if not improvers:
+        return
+    with st.expander(f"📈 Strong improvers — {len(improvers)} testimonial candidates ranked by proof"):
+        st.caption(
+            "Measured test → retest gains: the hard numbers that put meat on a "
+            "story. Ranked by how many benchmarks they improved, then by their "
+            "biggest jump. Cancelled clients excluded."
+        )
+        for a in improvers[:25]:
+            lines = []
+            for imp in a["improvements"][:4]:
+                b = _fmt_pr_val(imp["before"], imp["test"])
+                af = _fmt_pr_val(imp["after"], imp["retest"])
+                lines.append(f"{_short_test_name(imp['retest'])}: {b} → {af} (+{imp['pct']:g}%)")
+            st.markdown(f"**{a['name']}** — {a['count']} benchmarks up, best +{a['best_pct']:g}%")
+            st.caption("&nbsp;&nbsp;·&nbsp;" + " &nbsp;·&nbsp; ".join(lines))
+
+
 def _render_story_system(pr_records, competition_rows, first_log_by_nm, data_by_nm):
     """The story-extraction system: who to ask right now, the ask, and the
     reference material (questions, case-study template, coach guide)."""
@@ -7155,6 +7230,9 @@ def _render_story_system(pr_records, competition_rows, first_log_by_nm, data_by_
         "Catch a story while it's warm. A PB is a story on Tuesday and a stat by "
         "Sunday, so the ask wants to land inside 48 hours of the trigger."
     )
+
+    # Who's earned a testimonial ask on the numbers — improvement is the proof.
+    _render_improver_candidates(pr_records, data_by_nm)
 
     # Must run before the first _story_ask_cached call: a cache miss with no key
     # would cache the generic fallback for 30 minutes.
@@ -8701,7 +8779,7 @@ def main():
     with tabs[9]:
         page_load(load_results)
     with tabs[10]:
-        page_trends(pr_records, athletes)
+        page_trends(pr_records, athletes, data_records)
     with tabs[11]:
         page_leaderboard(pr_records, athletes)
     with tabs[12]:

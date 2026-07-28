@@ -1682,6 +1682,125 @@ def normalise_client_name(s):
     return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
 
 
+def _challenge_tokens(title):
+    """Discriminative words in a challenge title (drops emoji, punctuation, and
+    the words 'test'/'retest' themselves) so a Test can be matched to its Retest."""
+    words = re.sub(r"[^a-z0-9 ]", " ", str(title or "").lower()).split()
+    return {w for w in words if w not in ("test", "retest")}
+
+
+def retest_analysis(pr_records, measure_of=None, gone_norm=None,
+                    within_days=75, today=None, min_improve_pct=3.0):
+    """Pair each recent Retest challenge to its original Test and compute both:
+
+      - chasers: athletes who did the Test but skipped the Retest (to nudge)
+      - improvers: athletes whose Retest beat their Test (testimonial fuel)
+
+    Pairing is by token overlap, so 'Max Unbroken Deficit Kipping Handstand Push
+    Ups Test' still matches '...Handstand Push Ups Retest' despite the wording.
+    measure_of(title) -> 'time'|'weight'|'reps'|... decides improvement direction
+    (for time, lower is better). gone_norm is normalised names to exclude
+    (cancelled). Returns {'chasers': [...], 'improvers': [...]}.
+    """
+    today = today or dt.date.today()
+    gone_norm = gone_norm or set()
+    measure_of = measure_of or (lambda t: "")
+
+    part = {}          # title -> {athlete: (raw_value, date)}
+    last = {}          # title -> latest date
+    for r in pr_records:
+        if str(r.get("Type", "")).strip().lower() != "challenge":
+            continue
+        t = str(r.get("Benchmark Name", "")).strip()
+        nm = str(r.get("Athlete Name", "")).strip()
+        if not t or not nm:
+            continue
+        try:
+            d = dt.date.fromisoformat(str(r.get("Date", ""))[:10])
+        except ValueError:
+            d = None
+        cur = part.setdefault(t, {})
+        # keep the athlete's best/most-recent single entry per title
+        if nm not in cur or (d and (cur[nm][1] is None or d >= cur[nm][1])):
+            cur[nm] = (str(r.get("Value", "")).strip(), d)
+        if d and (t not in last or d > last[t]):
+            last[t] = d
+
+    tests = {t: _challenge_tokens(t) for t in part
+             if "test" in t.lower() and "retest" not in t.lower()}
+
+    def _num(s):
+        try:
+            return float(s)
+        except (TypeError, ValueError):
+            return None
+
+    chasers, improver_map = [], {}
+    for rt in part:
+        if "retest" not in rt.lower() or rt not in last:
+            continue
+        if (today - last[rt]).days > within_days:
+            continue
+        rtok = _challenge_tokens(rt)
+        rt_measure = str(measure_of(rt) or "").lower()
+        best, best_score = None, 0.0
+        for te, tetok in tests.items():
+            if last.get(te) and last[te] > last[rt]:
+                continue  # the test must precede its retest
+            # A retest measures the same thing as its test: a weight retest can
+            # only pair to a weight test. Blocks "Clean + Jerk Accuracy Retest"
+            # (weight) from matching "Clean Accuracy Test" (time).
+            te_measure = str(measure_of(te) or "").lower()
+            if rt_measure and te_measure and rt_measure != te_measure:
+                continue
+            union = len(rtok | tetok) or 1
+            score = len(rtok & tetok) / union  # Jaccard: a subset can't score 1.0
+            if score > best_score:
+                best_score, best = score, te
+        if not best or best_score < 0.6:
+            continue
+
+        measure = rt_measure or str(measure_of(best) or "").lower()
+        did_test, did_retest = part[best], part[rt]
+
+        # chasers: did the test, not the retest, not cancelled
+        missing = [{"name": nm, "test_value": did_test[nm][0]}
+                   for nm in did_test
+                   if nm not in did_retest and normalise_client_name(nm) not in gone_norm]
+        if missing:
+            chasers.append({
+                "retest": rt, "test": best, "date": last[rt].isoformat(),
+                "did_test": len(did_test), "did_retest": len(did_retest),
+                "missing": sorted(missing, key=lambda m: m["name"]),
+            })
+
+        # improvers: did both, retest beat test, not cancelled
+        for nm in did_retest:
+            if nm not in did_test or normalise_client_name(nm) in gone_norm:
+                continue
+            before, after = _num(did_test[nm][0]), _num(did_retest[nm][0])
+            if before is None or after is None or before <= 0:
+                continue
+            pct = (before - after) / before * 100 if measure == "time" \
+                else (after - before) / before * 100
+            if pct < min_improve_pct:
+                continue
+            improver_map.setdefault(nm, []).append({
+                "test": best, "retest": rt, "measure": measure,
+                "before": did_test[nm][0], "after": did_retest[nm][0],
+                "pct": round(pct, 1),
+            })
+
+    improvers = [{"name": nm,
+                  "improvements": sorted(imps, key=lambda i: -i["pct"]),
+                  "best_pct": max(i["pct"] for i in imps),
+                  "count": len(imps)}
+                 for nm, imps in improver_map.items()]
+    improvers.sort(key=lambda a: (-a["count"], -a["best_pct"]))
+    chasers.sort(key=lambda c: c["date"], reverse=True)
+    return {"chasers": chasers, "improvers": improvers}
+
+
 def not_current_client_names(cancelled_names, data_records, active_roster_names):
     """Normalised names of clients who are genuinely GONE.
 
