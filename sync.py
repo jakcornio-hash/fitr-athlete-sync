@@ -1998,6 +1998,31 @@ def main():
         declining_singles=declining_singles,
     )
 
+    # ---- first-Monday reminder: refresh the Active Roster ----
+    # The Active Roster tab is the source of truth for who's a current client,
+    # so it keeps cancelled athletes off the dashboard and out of the automated
+    # messages. It only stays accurate if it's re-pasted from Fitr, and there's
+    # no API to do it automatically. Nudge on the first Monday of the month
+    # (weekday 0, day 1-7), on both Slack and the digest email so it's not missed.
+    if TODAY.weekday() == 0 and TODAY.day <= 7 and not config.DRY_RUN:
+        _roster_reminder = (
+            "First Monday of the month: refresh the Active Roster.\n\n"
+            "Copy your current active client list from Fitr into the 'Active Roster' "
+            "tab of the coaching sheet. That list is what keeps cancelled athletes "
+            "off the dashboard and out of the automated messages. It can't update "
+            "itself (Fitr has no API for it), so it only stays right if you re-paste "
+            "it each month."
+        )
+        try:
+            notifier.send_slack(f"🗓️ *{_roster_reminder}*")
+        except Exception as exc:
+            print(f"  ! roster reminder (Slack) failed: {exc}")
+        try:
+            notifier.send_email("Refresh the JST Active Roster (first Monday)", _roster_reminder)
+        except Exception as exc:
+            print(f"  ! roster reminder (email) failed: {exc}")
+        print("First-Monday Active Roster reminder sent")
+
     # ---- per-coach re-engagement alerts + squad summaries (Mondays only) ----
     # Both are per-coach Slack briefings with no per-athlete dedup — sent daily
     # they'd repeat the same inactive athletes to the same coach every morning
