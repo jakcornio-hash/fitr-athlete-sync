@@ -268,6 +268,22 @@ def _load_exit_autopsy_cached():
         return []
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def _challenge_measures():
+    """{normalised challenge/benchmark title: measure} from the Challenge Measures
+    tab the sync maintains. Drives correct score formatting. TTL=30min."""
+    out = {}
+    try:
+        for r in get_sheets().read_records("Challenge Measures"):
+            t = _norm_bench(r.get("Title", ""))
+            m = str(r.get("Measure", "")).strip().lower()
+            if t and m:
+                out[t] = m
+    except Exception:
+        pass
+    return out
+
+
 @st.cache_data(ttl=120, show_spinner=False)
 def _load_comp_outreach_cached():
     """Set of (athlete, competition, action) already messaged. TTL=2min."""
@@ -678,18 +694,37 @@ def page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_w
         st.success("Nothing to flag this week — all athletes on track.")
 
 
-def _fmt_pr_val(val_str):
-    """Format a PR log value — Fitr stores time results as milliseconds (e.g. 1056000).
-    Anything >= 60000 and integer-shaped is treated as ms and formatted as m:ss."""
+def _norm_bench(name):
+    """Normalise a benchmark/challenge title for matching against the measures map."""
+    return re.sub(r"\s+", " ", str(name or "").strip().lower())
+
+
+def _fmt_pr_val(val_str, name=""):
+    """Format a PR log value for display.
+
+    Fitr stores raw values whose unit depends on the challenge's MEASURE, not on
+    the number's size: weight in grams (1,260,000 = 1260 kg), time in
+    milliseconds (370,000 = 6:10.0), reps/calories as the count itself. We look
+    the measure up by challenge/benchmark name (the Challenge Measures tab the
+    sync maintains) and format accordingly. Values that are already display
+    strings (e.g. "12m 00s") are left untouched.
+    """
     s = str(val_str).strip()
-    try:
-        v = int(s)
-        if v >= 60000:
-            secs = v // 1000
-            m, sec = divmod(secs, 60)
-            return f"{m}:{sec:02d}"
-    except ValueError:
-        pass
+    if not re.fullmatch(r"-?\d+", s):
+        return s  # already a formatted string, leave it
+    v = int(s)
+    measure = _challenge_measures().get(_norm_bench(name), "")
+    if measure == "weight":
+        return f"{v / 1000:g} kg"
+    if measure == "time" or (not measure and v >= 60000):
+        # ms → m:ss.d, or s.d for sub-minute. Unknown-measure big ints fall back
+        # to the old time heuristic (most challenges are time), so nothing regresses.
+        secs = v / 1000.0
+        if secs >= 60:
+            m = int(secs // 60)
+            return f"{m}:{secs - m * 60:04.1f}"
+        return f"{secs:.1f}s"
+    # reps, round_reps, calories, or a small unknown integer — show as-is
     return s
 
 
@@ -1681,7 +1716,7 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
                 _pr_lines = [
                     f"{str(_r.get('Date', '')).strip()}: "
                     f"{str(_r.get('Benchmark Name', '')).strip()} — "
-                    f"{_fmt_pr_val(str(_r.get('Value', '')).strip())}"
+                    f"{_fmt_pr_val(str(_r.get('Value', '')).strip(), str(_r.get('Benchmark Name', '')).strip())}"
                     for _r in sorted(_year_prs, key=lambda x: str(x.get("Date", "")))
                 ]
                 _pr_summary = "\n".join(_pr_lines[:25]) or "(no benchmarks this year)"
@@ -1950,7 +1985,7 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
                 continue
             d = _parse_date(str(r.get("Date", "")))
             bench = str(r.get("Benchmark Name", "")).strip()
-            val = _fmt_pr_val(str(r.get("Value", "")).strip())
+            val = _fmt_pr_val(str(r.get("Value", "")).strip(), str(r.get("Benchmark Name", "")).strip())
             note = str(r.get("Note", "")).strip()
             if d and bench:
                 label = f"{bench}: {val}"
@@ -2846,7 +2881,7 @@ def page_competitions(comp_results, athletes, data_records, competition_rows=Non
                                 _comp_pr_lines = [
                                     f"{str(r.get('Date','')).strip()}: "
                                     f"{str(r.get('Benchmark Name','')).strip()} — "
-                                    f"{_fmt_pr_val(str(r.get('Value','')).strip())}"
+                                    f"{_fmt_pr_val(str(r.get('Value','')).strip(), str(r.get('Benchmark Name','')).strip())}"
                                     for r in pr_records
                                     if str(r.get("Athlete Name", "")).strip() == _nm
                                     and (_parse_date(str(r.get("Date", ""))) or _eight_weeks_ago) >= _eight_weeks_ago
@@ -4971,7 +5006,7 @@ def page_progress():
             recent_rows.append({
                 "Date": str(r.get("Date", "")).strip(),
                 "Benchmark": str(r.get("Benchmark Name", "")).strip(),
-                "Result": _fmt_pr_val(str(r.get("Value", "")).strip()),
+                "Result": _fmt_pr_val(str(r.get("Value", "")).strip(), str(r.get("Benchmark Name", "")).strip()),
                 "Note": str(r.get("Note", "")).strip(),
             })
         st.dataframe(pd.DataFrame(recent_rows), width='stretch', hide_index=True)
@@ -6905,7 +6940,7 @@ def _story_triggers(pr_records, competition_rows, first_log_by_nm, data_by_nm, h
     for r in pr_records:
         nm = str(r.get("Athlete Name", "")).strip()
         bn = str(r.get("Benchmark Name", "")).strip()
-        val = _fmt_pr_val(str(r.get("Value", "")).strip())
+        val = _fmt_pr_val(str(r.get("Value", "")).strip(), str(r.get("Benchmark Name", "")).strip())
         d = _parse_date(str(r.get("Date", "")).strip())
         if nm and bn and val and d:
             hist[(nm, bn)].append((d, val))
@@ -7557,7 +7592,7 @@ def page_marketing(pr_records, grandslam_results, data_records, athletes,
         for _r in pr_records:
             _nm  = str(_r.get("Athlete Name", "")).strip()
             _bn  = str(_r.get("Benchmark Name", "")).strip()
-            _val = _fmt_pr_val(str(_r.get("Value", "")).strip())
+            _val = _fmt_pr_val(str(_r.get("Value", "")).strip(), str(_r.get("Benchmark Name", "")).strip())
             _d   = _parse_date(str(_r.get("Date", "")).strip())
             if _nm and _bn and _val and _d:
                 _hist_tc[(_nm, _bn)].append((_d, _val))
@@ -7626,7 +7661,7 @@ def page_marketing(pr_records, grandslam_results, data_records, athletes,
         for _r in pr_records:
             _nm  = str(_r.get("Athlete Name", "")).strip()
             _bn  = str(_r.get("Benchmark Name", "")).strip()
-            _val = _fmt_pr_val(str(_r.get("Value", "")).strip())
+            _val = _fmt_pr_val(str(_r.get("Value", "")).strip(), str(_r.get("Benchmark Name", "")).strip())
             _d   = _parse_date(str(_r.get("Date", "")).strip())
             if _nm and _bn and _val and _d:
                 _hist[(_nm, _bn)].append((_d, _val))
@@ -7673,7 +7708,7 @@ def page_marketing(pr_records, grandslam_results, data_records, athletes,
             {
                 "Athlete": str(r.get("Athlete Name", "")).strip(),
                 "Benchmark": str(r.get("Benchmark Name", "")).strip(),
-                "Result": _fmt_pr_val(str(r.get("Value", "")).strip()),
+                "Result": _fmt_pr_val(str(r.get("Value", "")).strip(), str(r.get("Benchmark Name", "")).strip()),
                 "Date": str(r.get("Date", "")).strip(),
             }
             for r in pr_records
@@ -7760,7 +7795,7 @@ def page_marketing(pr_records, grandslam_results, data_records, athletes,
         for _r in pr_records:
             _nm  = str(_r.get("Athlete Name", "")).strip()
             _bn  = str(_r.get("Benchmark Name", "")).strip()
-            _val = _fmt_pr_val(str(_r.get("Value", "")).strip())
+            _val = _fmt_pr_val(str(_r.get("Value", "")).strip(), str(_r.get("Benchmark Name", "")).strip())
             _d   = _parse_date(str(_r.get("Date", "")).strip())
             if not (_nm and _bn and _val and _d):
                 continue
@@ -8494,7 +8529,7 @@ def page_daily():
         if not nm or not bn or (nm, bn) in seen:
             continue
         seen.add((nm, bn))
-        wins.append(f"**{nm}** — {bn}: {_fmt_pr_val(str(r.get('Value', '')).strip())}")
+        wins.append(f"**{nm}** — {bn}: {_fmt_pr_val(str(r.get('Value', '')).strip(), str(r.get('Benchmark Name', '')).strip())}")
     if wins:
         for w in wins[:12]:
             st.markdown(f"🏅 {w}")
@@ -8622,7 +8657,7 @@ def main():
                 continue
             _nm = str(_r.get("Athlete Name", "")).strip()
             _bn = str(_r.get("Benchmark Name", "")).strip()
-            _val = _fmt_pr_val(str(_r.get("Value", "")).strip())
+            _val = _fmt_pr_val(str(_r.get("Value", "")).strip(), str(_r.get("Benchmark Name", "")).strip())
             if not _nm or not _bn or (_nm, _bn) in _seen_milestones:
                 continue
             _seen_milestones.add((_nm, _bn))

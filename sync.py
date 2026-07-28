@@ -228,6 +228,41 @@ def collect_challenges(fitr, existing_keys):
     return new_rows
 
 
+def refresh_challenge_measures(fitr, sheets):
+    """Maintain the 'Challenge Measures' tab: {Title: Measure}. Fitr stores each
+    score as a raw value whose unit depends on the challenge's measure (weight in
+    grams, time in ms, reps as a count), but the per-score payload doesn't carry
+    the measure. The dashboard needs it to display scores correctly, so we mirror
+    each challenge's measure here. Merge with what's already stored so the map only
+    grows as older challenges scroll out of the recent pull."""
+    try:
+        challenges = fitr.challenges(pages=10)
+    except FitrError as e:
+        print(f"  ! challenge measures pull failed: {e}")
+        return
+    measures = {}
+    try:
+        for r in sheets.read_records("Challenge Measures"):
+            t = str(r.get("Title", "")).strip()
+            if t:
+                measures[t] = str(r.get("Measure", "")).strip()
+    except Exception:
+        pass
+    added = 0
+    for c in challenges:
+        t = str(c.get("title", "")).strip()
+        m = str(c.get("measure", "")).strip()
+        if t and m and measures.get(t) != m:
+            measures[t] = m
+            added += 1
+    header = ["Title", "Measure"]
+    rows = [header] + [[t, measures[t]] for t in sorted(measures)]
+    ws = sheets.get_or_create("Challenge Measures", header)
+    ws.clear()
+    ws.update(values=rows, range_name="A1", value_input_option="RAW")
+    print(f"Challenge Measures refreshed: {len(measures)} titles ({added} new/changed)")
+
+
 def collect_chat_summaries(rooms, valid_names, fitr):
     """Return ({athlete_name: summary_line}, {athlete_name: (room_id, thread_text, msg_date)}).
 
@@ -1387,6 +1422,7 @@ def main():
 
     chal_rows = collect_challenges(fitr, existing_keys)
     print(f"New challenge scores: {len(chal_rows)}")
+    refresh_challenge_measures(fitr, sheets)
 
     valid_names = {a["name"] for a in athletes}
     rooms = fitr.chat_rooms()
