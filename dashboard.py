@@ -285,6 +285,29 @@ def _challenge_measures():
 
 
 @st.cache_data(ttl=120, show_spinner=False)
+def _story_asked_norm():
+    """Normalised names already asked for a story (the 'Story Asked' tab), so they
+    drop off the flag/draft lists once a coach has messaged them. TTL=2min."""
+    out = set()
+    try:
+        for r in get_sheets().read_records("Story Asked"):
+            nm = str(r.get("Name", "")).strip()
+            if nm:
+                out.add(_norm_client_name(nm))
+    except Exception:
+        pass
+    return out
+
+
+def _mark_story_asked(name):
+    """Record that a coach has asked this athlete for a story."""
+    sh = get_sheets()
+    sh.get_or_create("Story Asked", ["Name", "Date", "By"])
+    sh.append_rows("Story Asked", [[name, TODAY.isoformat(), "Coach"]])
+    _story_asked_norm.clear()
+
+
+@st.cache_data(ttl=120, show_spinner=False)
 def _load_comp_outreach_cached():
     """Set of (athlete, competition, action) already messaged. TTL=2min."""
     try:
@@ -7194,32 +7217,60 @@ def _render_coverage_grid():
     )
 
 
-def _render_improver_candidates(pr_records, data_by_nm):
+def _improvement_lines(athlete, top=4):
+    """Human-readable 'before → after (+pct%)' lines for an improver's top gains."""
+    out = []
+    for imp in athlete["improvements"][:top]:
+        b = _fmt_pr_val(imp["before"], imp["test"])
+        af = _fmt_pr_val(imp["after"], imp["retest"])
+        out.append(f"{_short_test_name(imp['retest'])}: {b} → {af} (+{imp['pct']:g}%)")
+    return out
+
+
+def _render_improver_candidates(pr_records, data_by_nm, first_log_by_nm):
     """Athletes with the strongest measured test→retest gains — hard numbers that
-    back a testimonial. Cancelled clients excluded."""
+    back a testimonial. The ask draft cites their actual improvement. Cancelled
+    clients and already-asked athletes are excluded."""
     not_current = _not_current_clients(data_by_nm)
+    asked = _story_asked_norm()
     res = analytics.retest_analysis(
         pr_records,
         measure_of=lambda t: _challenge_measures().get(_norm_bench(t), ""),
         gone_norm=not_current,
     )
-    improvers = res.get("improvers", [])
+    improvers = [a for a in res.get("improvers", [])
+                 if _norm_client_name(a["name"]) not in asked]
     if not improvers:
         return
-    with st.expander(f"📈 Strong improvers — {len(improvers)} testimonial candidates ranked by proof"):
+    with st.expander(f"📈 Strong improvers — {len(improvers)} to ask, ranked by proof",
+                     expanded=True):
         st.caption(
             "Measured test → retest gains: the hard numbers that put meat on a "
-            "story. Ranked by how many benchmarks they improved, then by their "
-            "biggest jump. Cancelled clients excluded."
+            "story. The draft cites their actual improvement. Ranked by benchmarks "
+            "improved, then biggest jump. Cancelled and already-asked excluded."
         )
         for a in improvers[:25]:
-            lines = []
-            for imp in a["improvements"][:4]:
-                b = _fmt_pr_val(imp["before"], imp["test"])
-                af = _fmt_pr_val(imp["after"], imp["retest"])
-                lines.append(f"{_short_test_name(imp['retest'])}: {b} → {af} (+{imp['pct']:g}%)")
-            st.markdown(f"**{a['name']}** — {a['count']} benchmarks up, best +{a['best_pct']:g}%")
+            nm = a["name"]
+            lines = _improvement_lines(a)
+            st.markdown(f"**{nm}** — {a['count']} benchmarks up, best +{a['best_pct']:g}%")
             st.caption("&nbsp;&nbsp;·&nbsp;" + " &nbsp;·&nbsp; ".join(lines))
+            c1, c2 = st.columns([1, 1])
+            if c1.button("✍️ Draft the ask", key=f"imp_draft_{nm}"):
+                situation = (f"{nm} has posted measured gains from test to retest: "
+                             f"{lines[0]}" + (f" and {len(lines) - 1} more" if len(lines) > 1 else "") + ".")
+                ctx = _story_context_lines(nm, data_by_nm, first_log_by_nm) + [
+                    "Measured improvements: " + "; ".join(lines)
+                ]
+                st.session_state[f"imp_msg_{nm}"] = _story_ask_cached(nm, situation, tuple(ctx))
+            if c2.button("✅ Mark asked", key=f"imp_asked_{nm}"):
+                _mark_story_asked(nm)
+                st.rerun()
+            if st.session_state.get(f"imp_msg_{nm}"):
+                st.markdown("**Send this:**")
+                st.code(st.session_state[f"imp_msg_{nm}"], language=None)
+                _form = getattr(config, "STORY_FORM_URL", "")
+                if _form:
+                    st.caption(f"Then drop them the form: {_form}")
 
 
 def _render_story_system(pr_records, competition_rows, first_log_by_nm, data_by_nm):
@@ -7232,7 +7283,7 @@ def _render_story_system(pr_records, competition_rows, first_log_by_nm, data_by_
     )
 
     # Who's earned a testimonial ask on the numbers — improvement is the proof.
-    _render_improver_candidates(pr_records, data_by_nm)
+    _render_improver_candidates(pr_records, data_by_nm, first_log_by_nm)
 
     # Must run before the first _story_ask_cached call: a cache miss with no key
     # would cache the generic fallback for 30 minutes.
@@ -7266,6 +7317,8 @@ def _render_story_system(pr_records, competition_rows, first_log_by_nm, data_by_
         )
 
     triggers = _story_triggers(pr_records, competition_rows, first_log_by_nm, data_by_nm)
+    _asked = _story_asked_norm()
+    triggers = [t for t in triggers if _norm_client_name(t["Athlete"]) not in _asked]
     _form = getattr(config, "STORY_FORM_URL", "")
 
     hot = [t for t in triggers if t["hot"]]
