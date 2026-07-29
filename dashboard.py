@@ -307,6 +307,52 @@ def _mark_story_asked(name):
     _story_asked_norm.clear()
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_archetype_assessments_cached():
+    """Archetype Assessments rows (self + coach reads). TTL=5min."""
+    try:
+        return get_sheets().load_archetype_assessments()
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _archetype_delivered():
+    """(delivered_tokens, delivered_names) — a self-assessment counts as delivered
+    once a coach marks it sent (Archetype Delivered tab, by token) OR the sync
+    already auto-sent it historically (Message Log 'archetype_result', by name).
+    So only genuinely new, undelivered reads surface. TTL=2min."""
+    tokens, names = set(), set()
+    sh = get_sheets()
+    try:
+        for r in sh.read_records("Archetype Delivered"):
+            t = str(r.get("Token", "")).strip()
+            if t:
+                tokens.add(t)
+            n = _norm_client_name(r.get("Name", ""))
+            if n:
+                names.add(n)
+    except Exception:
+        pass
+    try:
+        for r in sh.read_records("Message Log"):
+            if str(r.get("Message Type", "")).strip() == "archetype_result":
+                n = _norm_client_name(r.get("Athlete Name", ""))
+                if n:
+                    names.add(n)
+    except Exception:
+        pass
+    return tokens, names
+
+
+def _mark_archetype_delivered(name, token):
+    """Record that a coach has sent this athlete their archetype result."""
+    sh = get_sheets()
+    sh.get_or_create("Archetype Delivered", ["Name", "Token", "Date", "By"])
+    sh.append_rows("Archetype Delivered", [[name, token, TODAY.isoformat(), "Coach"]])
+    _archetype_delivered.clear()
+
+
 @st.cache_data(ttl=120, show_spinner=False)
 def _load_comp_outreach_cached():
     """Set of (athlete, competition, action) already messaged. TTL=2min."""
@@ -3405,10 +3451,65 @@ def _merge_concern_rows(rows):
     return combined
 
 
+def _render_archetype_deliveries(data_by_nm):
+    """Coach worklist: athletes who just self-assessed, with their confirmed
+    (engine-scored) archetype result ready to send. Cancelled clients and
+    already-delivered reads excluded. The message softens on a close read."""
+    import archetypes as _arch
+    import json as _json
+    not_current = _not_current_clients(data_by_nm)
+    dtok, dnames = _archetype_delivered()
+    pending = []
+    for r in _load_archetype_assessments_cached():
+        if "self" not in str(r.get("Assessor", "")).lower():
+            continue
+        nm = str(r.get("Athlete Name", "")).strip()
+        primary = str(r.get("Primary Archetype", "")).strip()
+        if not nm or not primary:
+            continue
+        note = str(r.get("Notes", "")).strip()
+        tok = note.split(":", 1)[1].strip() if ":" in note else note
+        if (tok and tok in dtok) or _norm_client_name(nm) in dnames:
+            continue
+        if _norm_client_name(nm) in not_current:
+            continue
+        try:
+            profile = (_json.loads(r.get("Profile JSON", "") or "{}") or {}).get("profile")
+        except Exception:
+            profile = None
+        pending.append((nm, primary, tok, str(r.get("Taken At", "")), profile))
+    if not pending:
+        return
+    pending.sort(key=lambda x: x[3], reverse=True)
+    st.subheader(f"🧭 Archetype results to send ({len(pending)})")
+    st.caption(
+        "Athletes who just self-assessed. Typeform gave them a provisional read; "
+        "this is the confirmed, engine-scored one. Send it in Fitr, then mark it "
+        "sent. Close reads are worded softer. Cancelled clients excluded."
+    )
+    for nm, primary, tok, taken, profile in pending:
+        close = _arch.result_is_close(profile) if profile else False
+        label = (f"{nm} — {primary.replace('_', ' ').title()}"
+                 f"{' · close read' if close else ''} · self-assessed {taken}")
+        with st.expander(label, expanded=True):
+            msg = _arch.athlete_result_message(nm, primary, profile)
+            if msg:
+                st.code(msg, language=None)
+            else:
+                st.caption("No copy for this archetype.")
+            if st.button("✅ Mark sent", key=f"arch_sent_{tok or nm}"):
+                _mark_archetype_delivered(nm, tok)
+                st.rerun()
+
+
 def page_action_list(engagement_results, trend_results, rec_alert_rows, milestones,
                      consistency_wins, comp_results=None, archetype_by_name=None, data_records=None):
     """Ed's daily task list — checkable action cards with messages ready to copy or send."""
     import hashlib
+
+    _render_archetype_deliveries({
+        str(r.get("Full Name", "")).strip(): r for r in (data_records or [])
+    })
 
     # Waiting videos are surfaced as a banner rather than folded into the rows
     # below: this list is a message queue and every card carries a draft to

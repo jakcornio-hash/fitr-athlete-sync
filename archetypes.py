@@ -11,6 +11,7 @@ Loads the JSON instruments from data/ and exposes:
 """
 import json
 import os
+import re
 
 _HERE = os.path.dirname(__file__)
 _DATA = os.path.join(_HERE, "data")
@@ -29,6 +30,55 @@ RATING = _load("instrument-rating.json")
 
 def get_archetype(archetype_id):
     return ARCHETYPES.get(archetype_id, {})
+
+
+def result_is_close(profile, margin=8):
+    """A read is 'close' when the top two archetypes sit within `margin` pct
+    points. Used to soften the delivery message rather than overclaim."""
+    if not profile or len(profile) < 2:
+        return False
+    return (profile[0].get("pct", 0) - profile[1].get("pct", 0)) < margin
+
+
+def athlete_result_message(name, primary, profile=None):
+    """Athlete-facing 'here's your archetype' message, in the coaching voice.
+
+    Confidence-aware: when the read is clear it states the archetype plainly;
+    when the top two are close it presents both and invites the athlete to say
+    which feels more them. Strips em dashes per the tone guidelines and ends on
+    an open question. Returns None if the archetype is unknown.
+    """
+    arch = get_archetype(primary)
+    if not arch:
+        return None
+    first = name.split()[0] if name else "there"
+    athlete = arch.get("athlete", {}) or {}
+    arch_name = arch.get("name", primary.replace("_", " ").title())
+    tagline = str(athlete.get("tagline", "")).strip()
+    works = athlete.get("works", []) or []
+
+    def _clean(s):
+        return re.sub(r"\s*[—–]\s*", ", ", str(s)).strip()
+
+    if profile and result_is_close(profile):
+        sec = get_archetype(profile[1]["archetype"]) or {}
+        second = sec.get("name", str(profile[1]["archetype"]).replace("_", " ").title())
+        msg = (f"{first}, had a proper look at your athlete profile. You lean "
+               f"{arch_name}, with a fair bit of {second} in there too.")
+        if tagline:
+            msg += f" {_clean(tagline)}"
+        msg += (" Does that feel right, or does one side feel more you? Either way "
+                "it helps me coach you the way you actually respond to.")
+        return msg
+
+    _article = "an" if arch_name[:1].lower() in "aeiou" else "a"
+    msg = f"{first}, your athlete profile's confirmed. You've come out as {_article} {arch_name}."
+    if tagline:
+        msg += f" {_clean(tagline)}"
+    if works:
+        msg += f" One thing that tends to work for you: {_clean(works[0]).rstrip('.').lower()}."
+    msg += " Have a think, does that ring true? Knowing this helps me coach you the way you actually respond to."
+    return msg
 
 
 def _build_output(scores, top_n):

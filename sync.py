@@ -461,36 +461,6 @@ def sync_competition_from_typeform(sheets, email_by_name):
 
 
 # ------------------------------------------- athlete intake Typeform sync
-def _compose_archetype_dm(name, primary):
-    """Athlete-facing 'here's your confirmed archetype' Fitr message.
-
-    Delivers the accurate, dashboard-scored result (the Typeform only shows a
-    provisional one). Pulls athlete-voice copy from archetypes.json, strips em
-    dashes per the tone guidelines, ends with an open question.
-    """
-    import re as _re
-    arch = archetypes.get_archetype(primary)
-    if not arch:
-        return None
-    first = name.split()[0]
-    athlete = arch.get("athlete", {})
-    arch_name = arch.get("name", primary.replace("_", " ").title())
-    tagline = str(athlete.get("tagline", "")).strip()
-    works = athlete.get("works", []) or []
-
-    def _clean(s):
-        return _re.sub(r"\s*[—–]\s*", ", ", str(s)).strip()
-
-    _article = "an" if arch_name[:1].lower() in "aeiou" else "a"
-    msg = f"{first}, your athlete profile's confirmed. You've come out as {_article} {arch_name}."
-    if tagline:
-        msg += f" {_clean(tagline)}"
-    if works:
-        msg += f" One thing that tends to work for you: {_clean(works[0]).rstrip('.').lower()}."
-    msg += " Have a think, does that ring true? Knowing this helps me coach you the way you actually respond to."
-    return msg
-
-
 def sync_archetype_from_typeform(sheets, email_by_name):
     """Import athlete archetype self-assessments from the Typeform response tab.
 
@@ -1796,32 +1766,11 @@ def main():
     if _streak_sent:
         print(f"Streak milestone messages sent: {_streak_sent}")
 
-    # ---- deliver confirmed archetype to athletes who just self-assessed ----
-    # The Typeform shows a provisional result; this DMs the accurate, dashboard
-    # scored one. Fires once per submission (the import is deduped on Token).
-    if archetype_new_reads and not config.DRY_RUN:
-        _arch_sent = 0
-        for _nm, _primary in archetype_new_reads:
-            if not _primary or _is_gone(_nm):
-                continue
-            _room = room_id_by_name.get(_nm)
-            if not _room:
-                continue
-            _amsg = _compose_archetype_dm(_nm, _primary)
-            if not _amsg:
-                continue
-            try:
-                fitr.send_chat_message(_room, _amsg)
-                _arch_sent += 1
-                messages_sent_log.append({
-                    "Date": TODAY.isoformat(), "Athlete Name": _nm,
-                    "Message Type": "archetype_result", "Room ID": _room,
-                })
-                import time as _time; _time.sleep(0.5)
-            except FitrError as exc:
-                print(f"  ! Archetype result message failed for {_nm}: {exc}")
-        if _arch_sent:
-            print(f"Archetype result messages sent: {_arch_sent}")
+    # ---- archetype delivery is now coach-sent from the dashboard ----
+    # The Typeform shows the athlete a provisional result instantly; the coach
+    # then sends the confirmed, engine-scored read from the dashboard's
+    # "Archetype results to send" list, so a person signs it off. The sync no
+    # longer auto-DMs it. Scoring still happens here (sync_archetype_from_typeform).
 
     # ---- weekly AI coaching digest per athlete ----
     digests_written = generate_weekly_athlete_digests(
