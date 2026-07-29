@@ -51,7 +51,7 @@ def _build_output(scores, top_n):
 
 def score_forced_choice(answers):
     """
-    answers: list of chosen option indices, one per question (len == 10).
+    answers: list of chosen option indices, one per question.
     Returns {primary, profile} per spec.
     """
     scores = {}
@@ -126,7 +126,7 @@ def _norm_text(s):
 
 
 def forced_choice_question_texts():
-    """The 10 athlete-voice question strings, in order (match the form headers)."""
+    """The athlete-voice question strings, in order (match the form headers)."""
     return [q.get("q_athlete", "") for q in FORCED_CHOICE.get("questions", [])]
 
 
