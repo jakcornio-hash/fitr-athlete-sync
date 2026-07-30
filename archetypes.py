@@ -60,6 +60,21 @@ def athlete_result_message(name, primary, profile=None):
     def _clean(s):
         return re.sub(r"\s*[—–]\s*", ", ", str(s)).strip()
 
+    # Three or more archetypes bunched at the top is a genuine spread, not a
+    # winner. Saying "you're a Leader" there is picking one of four arbitrarily,
+    # which is exactly what makes a result feel wrong. Name them and ask.
+    if profile and len(profile) >= 3 and result_is_close(profile, margin=4) \
+            and (profile[0].get("pct", 0) - profile[2].get("pct", 0)) < 4:
+        tied = [p["archetype"] for p in profile
+                if profile[0].get("pct", 0) - p.get("pct", 0) < 4][:4]
+        names = [get_archetype(t).get("name", t.replace("_", " ").title()) for t in tied]
+        listed = ", ".join(names[:-1]) + " and " + names[-1]
+        return (f"{first}, had a proper look at your athlete profile and you're a "
+                f"genuine mix. {listed} all came through about level, which usually "
+                f"means you adapt depending on the situation rather than sitting in "
+                f"one box. Which of those feels most like you on a hard day? That "
+                f"tells me more than the test does.")
+
     if profile and result_is_close(profile):
         sec = get_archetype(profile[1]["archetype"]) or {}
         second = sec.get("name", str(profile[1]["archetype"]).replace("_", " ").title())
@@ -110,7 +125,10 @@ def score_forced_choice(answers):
         if q_idx >= len(questions):
             break
         options = questions[q_idx].get("options", [])
-        if option_idx >= len(options):
+        # None means the answer couldn't be mapped (e.g. a question the athlete
+        # didn't answer, or form text that has drifted). Skip it rather than
+        # crash, so a partial response still scores on what it does have.
+        if option_idx is None or option_idx >= len(options):
             continue
         archs = options[option_idx].get("archetypes", [])
         weight = 1.0 / len(archs) if archs else 0
