@@ -321,6 +321,38 @@ def _format_last_message(lm):
     return "\n\n".join(parts)
 
 
+def message_date(msg):
+    """Date a chat message was sent, or None.
+
+    Fitr returns created_at as a Unix timestamp, not an ISO string. Code that
+    sliced it as text and compared it to a "YYYY-MM-DD" date was comparing
+    "1785527048" against "2026-07-28" — a string comparison that is false for
+    every message ever sent, which is why no athlete reply was ever detected.
+    """
+    ts = msg.get("created_at")
+    if ts in (None, ""):
+        return None
+    try:
+        return dt.datetime.fromtimestamp(int(ts)).date()
+    except (ValueError, TypeError, OSError):
+        pass
+    try:
+        return dt.date.fromisoformat(str(ts)[:10])
+    except ValueError:
+        return None
+
+
+def message_is_from(msg, person_name):
+    """True if this message was written by the named person.
+
+    Fitr messages carry no "is_mine" flag — code that tested `msg.get("is_mine")`
+    read None every time, so a coach's own outgoing message counted as an
+    athlete's reply. Authorship comes from author.full_name.
+    """
+    author = ((msg.get("author") or {}).get("full_name") or "").strip().lower()
+    return bool(author) and author == str(person_name or "").strip().lower()
+
+
 def format_thread(messages):
     """
     Format a list of message dicts (from chat_messages()) into a plain-text

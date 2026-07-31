@@ -23,7 +23,8 @@ import re
 import sys
 
 import config
-from fitr_client import FitrClient, FitrError, format_thread, profiles_from_rooms
+from fitr_client import (FitrClient, FitrError, format_thread, message_date,
+                         message_is_from, profiles_from_rooms)
 from sheets_client import SheetsClient
 import analytics
 import archetypes
@@ -1253,11 +1254,15 @@ def capture_postcomp_responses(fitr, sheets, TODAY):
         except Exception:
             continue
 
+        # Written by the athlete, on or after the day we asked. Authorship comes
+        # from author.full_name and the date from a Unix timestamp; the old
+        # is_mine / string-slice pair never matched a single message.
+        _send_on = _parse_date(send_date)
         replies = [
             str(m.get("text", "")).strip()
             for m in messages
-            if not m.get("is_mine")
-            and str(m.get("created_at", ""))[:10] >= send_date
+            if message_is_from(m, nm)
+            and (message_date(m) or dt.date.min) >= (_send_on or dt.date.min)
             and str(m.get("text", "")).strip()
         ]
         if not replies:
@@ -2619,15 +2624,20 @@ def main():
                 continue
             sent_date = str(pending.get("Date", "")).strip()
             msg_type = str(pending.get("Message Type", "")).strip()
+            sent_on = _parse_date(sent_date)
             try:
                 recent = fitr.chat_messages(room_id, max_messages=10)
                 for cmsg in recent:
-                    if not cmsg.get("is_mine") and str(cmsg.get("text", "")).strip():
-                        msg_ts = str(cmsg.get("created_at", ""))[:10]
-                        if msg_ts >= sent_date:
-                            sheets.mark_message_replied(pnm, msg_type, sent_date, msg_ts)
-                            replies_found += 1
-                            break
+                    if not message_is_from(cmsg, pnm):
+                        continue
+                    if not str(cmsg.get("text", "")).strip():
+                        continue
+                    msg_on = message_date(cmsg)
+                    if msg_on and sent_on and msg_on >= sent_on:
+                        sheets.mark_message_replied(
+                            pnm, msg_type, sent_date, msg_on.isoformat())
+                        replies_found += 1
+                        break
             except FitrError:
                 pass
         if replies_found:
