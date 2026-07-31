@@ -528,12 +528,25 @@ def _set_programme(name, programme):
 
 @st.cache_data(ttl=60, show_spinner=False)
 def _pending_messages_cached():
-    """Drafts the sync queued instead of sending. TTL=1min."""
+    """Drafts the sync queued instead of sending. TTL=1min.
+
+    Each record carries its real sheet row in "_row". The filtered list index
+    is NOT the sheet row: as soon as one draft is marked sent the two diverge,
+    and writing back by list position marks the wrong athlete's message as
+    sent while leaving the real one queued forever.
+    """
     try:
-        return [r for r in get_sheets().read_records(config.TAB_PENDING_MESSAGES)
-                if str(r.get("Status", "")).strip().lower() == "pending"]
+        rows = get_sheets().read_records(config.TAB_PENDING_MESSAGES)
     except Exception:
         return []
+    out = []
+    for i, r in enumerate(rows):
+        if str(r.get("Status", "")).strip().lower() != "pending":
+            continue
+        r = dict(r)
+        r["_row"] = i + 2   # +2: header row plus 1-indexing
+        out.append(r)
+    return out
 
 
 def _mark_pending_sent(row_idx, status="sent"):
@@ -576,11 +589,11 @@ def _render_pending_messages():
             b1, b2, b3 = st.columns([1, 1, 3])
             with b1:
                 if st.button("✅ Mark sent", key=f"pend_sent_{i}"):
-                    _mark_pending_sent(i + 2)   # +2: header row plus 1-indexing
+                    _mark_pending_sent(r["_row"])
                     st.rerun()
             with b2:
                 if st.button("🗑️ Skip", key=f"pend_skip_{i}"):
-                    _mark_pending_sent(i + 2, "skipped")
+                    _mark_pending_sent(r["_row"], "skipped")
                     st.rerun()
             with b3:
                 _outreach_send_buttons(st.session_state.get(f"pend_msg_{i}", msg))
@@ -9314,6 +9327,31 @@ def page_daily():
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+TAB_RENDER_FAILURES_KEY = "_tab_render_failures"
+
+
+def _render_tab(label, fn, *args, **kwargs):
+    """Render one tab, containing any exception to that tab.
+
+    Previously an exception in any page function aborted the whole script, so
+    one bad column took out every tab after it as well — the Sync tab's
+    KeyError also blanked Help. Now the broken tab says so and names the
+    failure, the rest of the dashboard still works, and the failure is
+    recorded so the daily health check can report which pages are down.
+    """
+    try:
+        fn(*args, **kwargs)
+    except Exception as e:
+        failures = st.session_state.setdefault(TAB_RENDER_FAILURES_KEY, {})
+        failures[label] = f"{type(e).__name__}: {e}"
+        st.error(
+            f"This tab failed to load: **{type(e).__name__}: {e}**\n\n"
+            "The rest of the dashboard is unaffected. This is reported in the "
+            "daily sync health check."
+        )
+        st.exception(e)
+
+
 def main():
     if st.query_params.get("mode") == "self_assess":
         page_self_assess()
@@ -9414,52 +9452,54 @@ def main():
         "💷 Finance", "⚙️ Sync", "❓ Help",
     ])
 
+    st.session_state[TAB_RENDER_FAILURES_KEY] = {}
+
     with tabs[0]:
-        page_action_list(engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins, comp_results, archetype_by_name=archetype_by_name, data_records=data_records)
+        _render_tab("Actions", page_action_list, engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins, comp_results, archetype_by_name=archetype_by_name, data_records=data_records)
     with tabs[1]:
-        page_outreach(engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins, comp_results, archetype_by_name=archetype_by_name, data_records=data_records)
+        _render_tab("Outreach List", page_outreach, engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins, comp_results, archetype_by_name=archetype_by_name, data_records=data_records)
     with tabs[2]:
-        page_alerts(engagement_results, trend_results, rec_alert_rows, consistency_wins,
+        _render_tab("Alerts", page_alerts, engagement_results, trend_results, rec_alert_rows, consistency_wins,
                     data_records=data_records, pr_records=pr_records, athletes=athletes,
                     archetype_by_name=archetype_by_name)
     with tabs[3]:
-        page_squad(athletes, engagement_results, rec_by_name, data_records=data_records, archetype_by_name=archetype_by_name, pr_records=pr_records, coach_progs=coach_progs)
+        _render_tab("Squad", page_squad, athletes, engagement_results, rec_by_name, data_records=data_records, archetype_by_name=archetype_by_name, pr_records=pr_records, coach_progs=coach_progs)
     with tabs[4]:
-        page_athletes(pr_records, athletes, trend_results, engagement_results, rec_by_name, data_records, archetype_by_name=archetype_by_name, competition_rows=competition_rows, coach_progs=coach_progs, archetype_history_by_name=archetype_history_by_name)
+        _render_tab("Athletes", page_athletes, pr_records, athletes, trend_results, engagement_results, rec_by_name, data_records, archetype_by_name=archetype_by_name, competition_rows=competition_rows, coach_progs=coach_progs, archetype_history_by_name=archetype_history_by_name)
     with tabs[5]:
-        page_week_planner(engagement_results, rec_alert_rows, comp_results, consistency_wins, milestones, data_records=data_records)
+        _render_tab("Week Plan", page_week_planner, engagement_results, rec_alert_rows, comp_results, consistency_wins, milestones, data_records=data_records)
     with tabs[6]:
-        page_competitions(comp_results, athletes, data_records, competition_rows=competition_rows, pr_records=pr_records)
+        _render_tab("Competitions", page_competitions, comp_results, athletes, data_records, competition_rows=competition_rows, pr_records=pr_records)
     with tabs[7]:
-        page_video_reviews(data_records=data_records)
+        _render_tab("Videos", page_video_reviews, data_records=data_records)
     with tabs[8]:
-        page_programmes(athletes, pr_records, trend_results, data_records, load_results=load_results, engagement_results=engagement_results)
+        _render_tab("Programmes", page_programmes, athletes, pr_records, trend_results, data_records, load_results=load_results, engagement_results=engagement_results)
     with tabs[9]:
-        page_load(load_results)
+        _render_tab("Load", page_load, load_results)
     with tabs[10]:
-        page_trends(pr_records, athletes, data_records)
+        _render_tab("Trends", page_trends, pr_records, athletes, data_records)
     with tabs[11]:
-        page_leaderboard(pr_records, athletes)
+        _render_tab("Leaderboard", page_leaderboard, pr_records, athletes)
     with tabs[12]:
-        page_recovery(rec_by_name, pr_records=pr_records)
+        _render_tab("Recovery", page_recovery, rec_by_name, pr_records=pr_records)
     with tabs[13]:
-        page_crm(athletes, engagement_results, data_records, pr_records=pr_records)
+        _render_tab("CRM", page_crm, athletes, engagement_results, data_records, pr_records=pr_records)
     with tabs[14]:
-        page_coaching_playbook()
+        _render_tab("Playbook", page_coaching_playbook)
     with tabs[15]:
-        page_grandslam(grandslam_results, data_records, pr_records=pr_records, athletes=athletes, competition_rows=competition_rows)
+        _render_tab("Grandslam", page_grandslam, grandslam_results, data_records, pr_records=pr_records, athletes=athletes, competition_rows=competition_rows)
     with tabs[16]:
-        page_marketing(pr_records, grandslam_results, data_records, athletes,
-                       competition_rows=competition_rows, consistency_wins=consistency_wins,
-                       milestones=milestones)
+        _render_tab("Marketing", page_marketing, pr_records, grandslam_results, data_records, athletes,
+                    competition_rows=competition_rows, consistency_wins=consistency_wins,
+                    milestones=milestones)
     with tabs[17]:
-        page_gym_referrals(athletes=athletes)
+        _render_tab("Gym Referrals", page_gym_referrals, athletes=athletes)
     with tabs[18]:
-        page_finance(data_records, pr_records, athletes, cancelled_names=cancelled_names)
+        _render_tab("Finance", page_finance, data_records, pr_records, athletes, cancelled_names=cancelled_names)
     with tabs[19]:
-        page_sync_health()
+        _render_tab("Sync", page_sync_health)
     with tabs[20]:
-        page_help()
+        _render_tab("Help", page_help)
 
 
 if __name__ == "__main__":

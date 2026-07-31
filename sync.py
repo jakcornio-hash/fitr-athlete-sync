@@ -988,7 +988,7 @@ def flush_pending_messages(sheets):
     if not _PENDING_MESSAGES or config.DRY_RUN:
         return 0
     header = ["Date", "Athlete Name", "Message Type", "Message", "Room ID", "Status"]
-    sheets.get_or_create(config.TAB_PENDING_MESSAGES, header)
+    sheets.ensure_headers(config.TAB_PENDING_MESSAGES, header)
     sheets.append_rows(config.TAB_PENDING_MESSAGES, _PENDING_MESSAGES)
     n = len(_PENDING_MESSAGES)
     _PENDING_MESSAGES.clear()
