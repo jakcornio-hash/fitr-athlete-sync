@@ -421,6 +421,66 @@ def _set_athlete_status(name, status, note=""):
     _status_overrides.clear()
 
 
+# Why someone left, using the buckets the CRM already uses so the new entries
+# group with the historic ones.
+EXIT_BUCKETS = ["Money", "Time", "Injury", "Competitor", "Another Reason", "No Reply"]
+
+
+def _append_coaching_note(name, line):
+    """Append one dated line to an athlete's Coaching Notes, safely.
+
+    Reads the athlete's current notes straight from the sheet first rather than
+    trusting the page's cached copy. The cache can be up to 15 minutes old, and
+    building the new value on top of a stale read silently destroys anything
+    written in the meantime, whether that was the overnight sync, Jak, or Ed in
+    another tab. That is why notes were going missing.
+    """
+    try:
+        sh = get_sheets()
+        current = ""
+        for r in sh.read_records(config.TAB_DATA):
+            if str(r.get("Full Name", "")).strip() == name:
+                current = str(r.get("Coaching Notes", "")).strip()
+                break
+        new_notes = (current + "\n" + line).strip() if current else line
+        sh.batch_update_by_name(config.TAB_DATA, "Full Name",
+                                {name: {"Coaching Notes": new_notes}})
+        load_all.clear()
+        return True
+    except Exception as exc:
+        st.error(f"Could not save the note: {exc}")
+        return False
+
+
+def _log_exit_autopsy(name, bucket, reason_text, rec=None):
+    """Write a cancellation into the CRM Exit Autopsy.
+
+    The Exit Autopsy is where churn gets analysed, so a cancellation recorded
+    without a reason is a wasted data point. Marking someone cancelled in the
+    dashboard now lands here as well as in the status overrides.
+    """
+    rec = rec or {}
+    try:
+        sh = get_sheets()
+        ws = sh.gc.open_by_key(config.CRM_SHEET_ID).worksheet("Exit Autopsy")
+        header = [h.strip() for h in ws.row_values(1)]
+        vals = {
+            "name": name,
+            "cancel_date": TODAY.strftime("%d-%b-%Y"),
+            "outcome": "Cancel Program",
+            "email": str(rec.get("Email", "")).strip(),
+            "track": str(rec.get("Programme", "")).strip(),
+            "bucket": bucket,
+            "reason_text": reason_text,
+        }
+        ws.append_row([vals.get(h, "") for h in header], value_input_option="RAW")
+        _load_exit_autopsy_cached.clear()
+        return True
+    except Exception as exc:
+        st.warning(f"Status saved, but couldn't write to the Exit Autopsy: {exc}")
+        return False
+
+
 def _set_subscription_plan(name, plan):
     """Set an athlete's plan in _DATA. 'Bespoke' suppresses automated messages,
     so this is how a coach moves someone onto individual coaching."""
@@ -1861,10 +1921,18 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
                 "Use it the moment you know they've gone."
             )
             if not _gone or _override != "cancelled":
-                if st.button("🚫 Mark as cancelled", key=f"stat_cancel_{name}"):
-                    _set_athlete_status(name, "cancelled")
-                    st.success(f"{name.split()[0]} marked as cancelled.")
-                    st.rerun()
+                with st.form(f"cancel_form_{name}"):
+                    _bucket = st.selectbox("Why are they leaving?", EXIT_BUCKETS,
+                                           key=f"stat_bucket_{name}")
+                    _why = st.text_input("Anything worth recording?",
+                                         key=f"stat_why_{name}",
+                                         placeholder="optional, one line")
+                    if st.form_submit_button("🚫 Mark as cancelled"):
+                        _set_athlete_status(name, "cancelled", _why)
+                        _log_exit_autopsy(name, _bucket, _why, _rec)
+                        st.success(f"{name.split()[0]} marked as cancelled and logged "
+                                   f"to the Exit Autopsy.")
+                        st.rerun()
             if _gone or _override == "cancelled":
                 if st.button("↩️ Mark as still active", key=f"stat_active_{name}"):
                     _set_athlete_status(name, "active")
@@ -1900,13 +1968,9 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
             if st.form_submit_button("Save Note"):
                 if note_text.strip():
                     line = f"[{TODAY.isoformat()} — {note_kind}] {note_text.strip()}"
-                    current = str(profile.get("Coaching Notes", "")).strip()
-                    new_notes = (current + "\n" + line).strip() if current else line
-                    get_sheets().batch_update_by_name(
-                        config.TAB_DATA, "Full Name", {name: {"Coaching Notes": new_notes}}
-                    )
-                    st.success("Note saved.")
-                    st.cache_data.clear()
+                    if _append_coaching_note(name, line):
+                        st.success("Note saved.")
+                        st.rerun()
                 else:
                     st.warning("Note is empty.")
 
@@ -6049,7 +6113,7 @@ def page_coaching_playbook():
 
     # ── Load rows ─────────────────────────────────────────────────────────────
     try:
-        rows = sheets.read_records("Coaching Playbook")
+        rows = get_sheets().read_records("Coaching Playbook")
     except Exception as exc:
         st.error(f"Could not load Coaching Playbook tab: {exc}")
         rows = []
@@ -6121,7 +6185,7 @@ def page_coaching_playbook():
                     st.warning("Please enter a subject.")
                 else:
                     try:
-                        ws = sheets.sh.worksheet("Coaching Playbook")
+                        ws = get_sheets().worksheet("Coaching Playbook")
                         ws.append_row(
                             [new_scenario, new_subject.strip(), new_notes.strip(),
                              new_example.strip(), new_source.strip()],
