@@ -1682,6 +1682,80 @@ def normalise_client_name(s):
     return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
 
 
+def revenue_anomalies(data_records, pr_records, gone_norm=None, today=None,
+                      dormant_days=90, monthly_value_fn=None):
+    """Current athletes whose billing and their training don't line up.
+
+    Someone being charged while not training is either a person who has
+    quietly stopped and nobody noticed, or money that isn't really coming in.
+    Both need a human, and neither shows up as a number on a dashboard — a
+    £ figure tells you the size of the problem but not whose name to open.
+
+    Only current athletes: anyone genuinely gone is already off the roster and
+    is not a billing question. Returns one row per athlete, worst first, each
+    with the single most serious reason.
+
+    Reasons, in priority order:
+      Missed Payment  — Fitr says billing failed, but they're still counted
+      Never logged    — on the roster, billed, not one session ever recorded
+      Dormant         — last logged over `dormant_days` ago
+    """
+    today = today or dt.date.today()
+    gone_norm = gone_norm or set()
+
+    last_log = {}
+    for r in (pr_records or ()):
+        nm = str(r.get("Athlete Name", "")).strip()
+        d = _parse_iso(str(r.get("Date", "")).strip()[:10])
+        if nm and d and d > last_log.get(nm, dt.date.min):
+            last_log[nm] = d
+
+    out = []
+    for rec in (data_records or ()):
+        nm = str(rec.get("Full Name", "")).strip()
+        if not nm or normalise_client_name(nm) in gone_norm:
+            continue
+
+        value = monthly_value_fn(rec) if monthly_value_fn else 0.0
+        status = str(rec.get("Fitr Status", "")).strip()
+        seen = last_log.get(nm)
+        days = (today - seen).days if seen else None
+
+        if status.lower() == "missed payment":
+            reason = "Missed payment"
+        elif seen is None:
+            reason = "Never logged a session"
+        elif days >= dormant_days:
+            reason = f"No session in {days} days"
+        else:
+            continue
+
+        out.append({
+            "name": nm,
+            "reason": reason,
+            "last_logged": seen.isoformat() if seen else "never",
+            "days_since": days,
+            "monthly_value": round(float(value), 2),
+            "fitr_status": status or "—",
+            "tier": str(rec.get("Programming Tier", "")).strip() or "—",
+            "join_date": str(rec.get("Join Date", "")).strip(),
+        })
+
+    # Missed payments first, then longest silent, then never-logged by value.
+    def _rank(r):
+        first = 0 if r["reason"] == "Missed payment" else 1
+        return (first, -(r["days_since"] or 10 ** 6), -r["monthly_value"])
+
+    return sorted(out, key=_rank)
+
+
+def _parse_iso(s):
+    try:
+        return dt.date.fromisoformat(str(s)[:10])
+    except (ValueError, TypeError):
+        return None
+
+
 _CADENCE_MONTHS = {"month": 1, "quarter": 3, "year": 12, "annual": 12}
 
 

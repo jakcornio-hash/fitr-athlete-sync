@@ -360,3 +360,9 @@ TAB_PENDING_MESSAGES = "Pending Messages"
 # that raise. Costs ~80s and a second pass over the Sheets read quota, so it is
 # on in the scheduled GitHub Actions run and off for ad-hoc local runs.
 HEALTH_CHECK_PAGES = _get("HEALTH_CHECK_PAGES", "").strip().lower() in ("1", "true", "yes")
+
+# Days without a logged session before a billed athlete is flagged on the
+# Finance tab and the daily digest. Well past the 60-day churn mark: this is
+# not "at risk", it is "we are charging someone who has not trained in a
+# quarter". Shared by the dashboard and health_check.
+REVENUE_DORMANT_DAYS = int(_get("REVENUE_DORMANT_DAYS", "90"))

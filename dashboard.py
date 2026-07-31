@@ -48,7 +48,13 @@ _ensure_fresh(arch_mod, "result_is_close", "athlete_result_message")
 # until someone reboots the app. Add to this list when you add a function.
 _ensure_fresh(analytics, "not_current_client_names", "retest_analysis",
               "normalise_client_name", "monthly_value", "match_athlete_name",
-              "canonical_date_key")
+              "canonical_date_key", "revenue_anomalies")
+# config too, and for the same reason. A stale config does not raise — the
+# getattr defaults just quietly take over, so new prices read as missing and
+# money figures come out low. That is worse than a crash, because it looks
+# like an answer.
+_ensure_fresh(config, "SUBSCRIPTION_FALLBACK_PRICES", "BESPOKE_MONTHLY_TO_JST",
+              "REVENUE_DORMANT_DAYS")
 
 _CHAT_DATE_RE = re.compile(r'\[(\d{4}-\d{2}-\d{2}) — chat\]')
 
@@ -8645,6 +8651,81 @@ def page_marketing(pr_records, grandslam_results, data_records, athletes,
 
 # ── Finance ───────────────────────────────────────────────────────────────────
 
+def _render_billed_not_training(data_records, pr_records, gone_norm):
+    """Current athletes whose billing and training don't line up.
+
+    The MRR headline hides these: a failed payment still counts at full price,
+    and someone who has never logged a session looks identical to an active
+    athlete in a total. Each row is a person to contact, with the reason and
+    what they are worth, so the list can be worked rather than admired.
+    """
+    st.markdown("### Billed, not training")
+    st.caption(
+        "Current athletes being charged who are not training, or whose payment "
+        "has failed. Anyone genuinely gone is already excluded — these are "
+        "people still on the roster."
+    )
+
+    rows = analytics.revenue_anomalies(
+        data_records, pr_records, gone_norm=gone_norm,
+        dormant_days=int(getattr(config, "REVENUE_DORMANT_DAYS", 90)),
+        monthly_value_fn=_athlete_mrr,
+    )
+    if not rows:
+        st.success("Everyone being billed has trained recently. 🎉")
+        return
+
+    total = sum(r["monthly_value"] for r in rows)
+    c1, c2 = st.columns(2)
+    c1.metric("Athletes to look at", len(rows))
+    c2.metric("Billing behind them", f"£{total:,.0f}/month")
+
+    groups = [
+        ("💸 Payment failed — billing job",
+         lambda r: r["reason"] == "Missed payment",
+         "Fitr says the payment did not go through, but they are still counted "
+         "at full price. Either the payment gets fixed or they come off the roster."),
+        ("👻 Never logged a session — onboarding never landed",
+         lambda r: r["reason"].startswith("Never"),
+         "On the roster, being billed, and no session has ever been recorded. "
+         "Some of these joined years ago."),
+        ("🌙 Gone quiet — coaching job",
+         lambda r: r["reason"].startswith("No session"),
+         "Still paying, but has not logged in a long time. Worth a personal "
+         "message before it becomes a cancellation."),
+    ]
+
+    for title, match, blurb in groups:
+        items = [r for r in rows if match(r)]
+        if not items:
+            continue
+        value = sum(r["monthly_value"] for r in items)
+        st.markdown(f"**{title} — {len(items)} athlete(s), £{value:,.0f}/month**")
+        st.caption(blurb)
+        st.dataframe(
+            pd.DataFrame([{
+                "Athlete": r["name"],
+                "Last logged": r["last_logged"],
+                "Days since": r["days_since"] if r["days_since"] is not None else "—",
+                "£/month": r["monthly_value"],
+                "Fitr status": r["fitr_status"],
+                "Joined": r["join_date"],
+            } for r in items]),
+            width='stretch', hide_index=True,
+        )
+
+    st.download_button(
+        "⬇️ Download as CSV",
+        pd.DataFrame(rows).to_csv(index=False).encode(),
+        file_name=f"billed-not-training-{TODAY.isoformat()}.csv",
+        mime="text/csv",
+    )
+    st.caption(
+        "This list also goes out on the daily digest, so it gets seen without "
+        "anyone having to open this tab."
+    )
+
+
 def page_finance(data_records, pr_records, athletes, gone_norm=None):
     """Money view — MRR, revenue at risk, gym credits payable, net position."""
     st.header("💷 Finance")
@@ -8738,7 +8819,8 @@ def page_finance(data_records, pr_records, athletes, gone_norm=None):
 
     st.divider()
 
-    fin_tabs = st.tabs(["📊 MRR Breakdown", "⚠️ Revenue at Risk", "🏋️ Gym Credits"])
+    fin_tabs = st.tabs(["📊 MRR Breakdown", "⚠️ Revenue at Risk",
+                        "🚩 Billed, not training", "🏋️ Gym Credits"])
 
     with fin_tabs[0]:
         _crm_revenue(data_records)
@@ -8765,6 +8847,9 @@ def page_finance(data_records, pr_records, athletes, gone_norm=None):
             st.success("No paying athletes are drifting or inactive. 🎉")
 
     with fin_tabs[2]:
+        _render_billed_not_training(data_records, pr_records, gone_norm)
+
+    with fin_tabs[3]:
         st.markdown("### Gym Referral Credits")
         st.caption("Full detail lives in the 🏋️ Gym Referrals tab — this is the money summary.")
         if gym_active_refs:

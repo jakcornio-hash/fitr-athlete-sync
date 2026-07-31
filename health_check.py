@@ -103,6 +103,10 @@ EXPECTED_COLUMNS = {
 MACHINE_OWNED_TABS = (config.TAB_SYNC_LOG, config.TAB_MESSAGE_LOG,
                       config.TAB_PENDING_MESSAGES)
 
+# Days without a logged session before a billed athlete needs a human look.
+# One definition in config, shared with the dashboard's Finance tab.
+REVENUE_DORMANT_DAYS = int(getattr(config, "REVENUE_DORMANT_DAYS", 90))
+
 # A pending draft older than this has plainly not been worked.
 PENDING_STALE_DAYS = 3
 # More than this queued at once means the list is being generated, not worked.
@@ -343,6 +347,49 @@ def check_message_log_replies(sheets):
     return out
 
 
+def check_revenue_anomalies(sheets, analytics_mod, data_records, gone_norm,
+                            monthly_value_fn=None):
+    """Athletes being billed while not training.
+
+    Split by reason rather than lumped into one count, because the three mean
+    different things: a failed payment is a billing job, a never-logged
+    athlete is an onboarding failure, and a long silence is a coaching one.
+    """
+    out = []
+    if not data_records:
+        return out
+    try:
+        pr_records = sheets.read_records(config.TAB_PR_LOG)
+    except Exception as exc:
+        return [Finding(WARN, "revenue", "Could not check billing against training",
+                        str(exc)[:140])]
+
+    rows = analytics_mod.revenue_anomalies(
+        data_records, pr_records, gone_norm=gone_norm,
+        dormant_days=REVENUE_DORMANT_DAYS, monthly_value_fn=monthly_value_fn)
+    if not rows:
+        return out
+
+    groups = {}
+    for r in rows:
+        key = "Missed payment" if r["reason"] == "Missed payment" else (
+            "Never logged a session" if r["reason"].startswith("Never")
+            else f"No session in {REVENUE_DORMANT_DAYS}+ days")
+        groups.setdefault(key, []).append(r)
+
+    for label, items in groups.items():
+        value = sum(i["monthly_value"] for i in items)
+        names = ", ".join(i["name"] for i in items[:6])
+        if len(items) > 6:
+            names += f" and {len(items) - 6} more"
+        severity = FAIL if label == "Missed payment" else WARN
+        out.append(Finding(
+            severity, "revenue",
+            f"{len(items)} current athlete(s) — {label.lower()}",
+            f"£{value:,.0f}/month of billing with no training behind it: {names}"))
+    return out
+
+
 def check_dashboard_pages(timeout=600):
     """Render every dashboard tab headlessly and report any that raise.
 
@@ -381,8 +428,19 @@ def check_dashboard_pages(timeout=600):
 def run_health_check(sheets, analytics_mod, *, data_records=None, bespoke_names=None,
                      gone_norm=None, engagement_results=None, check_pages=False):
     """Run every check. Never raises — a broken check must not break the sync."""
+
+    def monthly_value(rec):
+        return analytics_mod.monthly_value(
+            rec.get("Subscription Plan", ""),
+            rec.get("Programming Tier", ""),
+            fallbacks=getattr(config, "SUBSCRIPTION_FALLBACK_PRICES", {}),
+            bespoke_value=getattr(config, "BESPOKE_MONTHLY_TO_JST", 40),
+        )
+
     findings = []
     checks = [
+        ("revenue anomalies", lambda: check_revenue_anomalies(
+            sheets, analytics_mod, data_records, gone_norm, monthly_value)),
         ("sheet schemas", lambda: check_sheet_schemas(sheets)),
         ("machine tab headers", lambda: check_machine_tab_headers(sheets)),
         ("suppression rules", lambda: check_suppression_rules_match_someone(
