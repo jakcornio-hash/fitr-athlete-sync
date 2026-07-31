@@ -2614,14 +2614,18 @@ def main():
     # ensure_headers, not get_or_create: get_or_create only writes the header when
     # it creates the tab, so when this row grew from 6 values to 10 the header kept
     # the old names and every reader mislabelled the columns.
-    _repaired = sheets.ensure_headers(
-        config.TAB_SYNC_LOG,
-        ["Run Date", "Total Athletes", "New PR Log rows", "Challenge scores added",
-         "Conversations summarised", "Recovery merged", "Notes updated",
-         "Athletes auto-onboarded", "Athlete Emails Sent", "Notes"],
-    )
-    if _repaired:
-        print(f"Repaired stale '{config.TAB_SYNC_LOG}' header (was: {_repaired})")
+    try:
+        _repaired = sheets.ensure_headers(
+            config.TAB_SYNC_LOG,
+            ["Run Date", "Total Athletes", "New PR Log rows", "Challenge scores added",
+             "Conversations summarised", "Recovery merged", "Notes updated",
+             "Athletes auto-onboarded", "Athlete Emails Sent", "Notes"],
+        )
+        if _repaired:
+            print(f"Repaired stale '{config.TAB_SYNC_LOG}' header (was: {_repaired})")
+    except Exception as exc:
+        # Tidying the header must never cost us the run's log row.
+        print(f"  ! Could not check the Sync Log header: {exc}")
     sheets.append_rows(config.TAB_SYNC_LOG, [[
         TODAY.isoformat(), len(athletes), len(bench_rows), len(chal_rows), len(chat_notes),
         len(rec_notes), notes_written, onboarded, emails_sent,

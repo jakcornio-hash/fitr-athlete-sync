@@ -4,9 +4,54 @@ Google Sheets reader/writer using a service account (gspread).
 Writes go through the official Sheets API — no browser, no UI typing.
 Share the target sheet with the service account's email (Editor) first.
 """
+import random
+import time
+
 import gspread
 
 import config
+
+# Sheets allows 60 read requests per minute per user. A full sync and a
+# dashboard load both sit close to that ceiling, so bursts get a 429. gspread
+# does not retry, and every caller here wraps its reads in a bare `except`, so
+# a 429 did not look like an error — it looked like an empty tab. That is how
+# the CRM tabs vanished mid-run, how the gym data disappeared from the
+# dashboard, and (worst) how a failed Exit Autopsy read could empty the
+# cancelled list and put gone athletes back on the coaching lists.
+#
+# The quota refills continuously, so a short wait genuinely fixes it.
+_RETRY_STATUSES = (429, 500, 502, 503, 504)
+# The read quota is per minute, so the backoff has to be able to outlast a full
+# minute or a burst still fails: 2 + 4 + 8 + 16 + 32 = 62s of waiting.
+_MAX_RETRIES = 6
+_BASE_BACKOFF = 2.0
+
+
+def _install_retries(client):
+    """Wrap a gspread HTTP client so throttled requests wait and retry."""
+    inner = client.request
+    if getattr(inner, "_jst_retrying", False):
+        return
+
+    def request_with_retry(*args, **kwargs):
+        last = None
+        for attempt in range(_MAX_RETRIES):
+            try:
+                return inner(*args, **kwargs)
+            except gspread.exceptions.APIError as exc:
+                status = getattr(getattr(exc, "response", None), "status_code", None)
+                if status not in _RETRY_STATUSES:
+                    raise
+                last = exc
+                if attempt == _MAX_RETRIES - 1:
+                    break
+                # Jittered backoff: 2s, 4s, 8s, 16s. Several workers hitting the
+                # same quota should not all wake up together.
+                time.sleep(_BASE_BACKOFF * (2 ** attempt) + random.uniform(0, 1))
+        raise last
+
+    request_with_retry._jst_retrying = True
+    client.request = request_with_retry
 
 
 class SheetsClient:
@@ -19,6 +64,7 @@ class SheetsClient:
             self.gc = gspread.service_account_from_dict(info)
         else:
             self.gc = gspread.service_account(filename=config.GOOGLE_SERVICE_ACCOUNT_FILE)
+        _install_retries(self.gc.http_client)
         sid = sheet_id or config.SHEET_ID
         try:
             self.sh = self.gc.open_by_key(sid)
