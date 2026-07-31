@@ -2616,12 +2616,17 @@ def main():
 
     # ---- sync log ----
     unknown = sorted({n for n in chat_notes} - valid_names)
-    log_tab = sheets.get_or_create(
+    # ensure_headers, not get_or_create: get_or_create only writes the header when
+    # it creates the tab, so when this row grew from 6 values to 10 the header kept
+    # the old names and every reader mislabelled the columns.
+    _repaired = sheets.ensure_headers(
         config.TAB_SYNC_LOG,
         ["Run Date", "Total Athletes", "New PR Log rows", "Challenge scores added",
          "Conversations summarised", "Recovery merged", "Notes updated",
          "Athletes auto-onboarded", "Athlete Emails Sent", "Notes"],
     )
+    if _repaired:
+        print(f"Repaired stale '{config.TAB_SYNC_LOG}' header (was: {_repaired})")
     sheets.append_rows(config.TAB_SYNC_LOG, [[
         TODAY.isoformat(), len(athletes), len(bench_rows), len(chal_rows), len(chat_notes),
         len(rec_notes), notes_written, onboarded, emails_sent,

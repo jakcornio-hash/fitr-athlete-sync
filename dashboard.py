@@ -5898,35 +5898,51 @@ def page_sync_health():
     st.divider()
 
     log_df = pd.DataFrame(sync_log)
-    if "Run Date" in log_df.columns and "New PR Log rows" in log_df.columns:
+    # Each chart is drawn only if its own columns are present. The Sync Log header
+    # has drifted from what sync.py writes before now, and indexing a column that
+    # had gone missing took this whole tab down rather than dropping one chart.
+    if "Run Date" in log_df.columns:
         log_df["Run Date"] = pd.to_datetime(log_df["Run Date"], errors="coerce")
-        log_df["New PR Log rows"] = pd.to_numeric(log_df["New PR Log rows"], errors="coerce").fillna(0)
-        log_df["Total Athletes"] = pd.to_numeric(log_df["Total Athletes"], errors="coerce").fillna(0)
         chart_df = log_df.dropna(subset=["Run Date"])
 
-        st.markdown("**New results per sync run**")
-        bars = (
-            alt.Chart(chart_df)
-            .mark_bar()
-            .encode(
-                x=alt.X("Run Date:T", title="Date"),
-                y=alt.Y("New PR Log rows:Q", title="New Results"),
-                tooltip=["Run Date:T", "New PR Log rows:Q"],
+        if "New PR Log rows" in chart_df.columns:
+            chart_df["New PR Log rows"] = pd.to_numeric(
+                chart_df["New PR Log rows"], errors="coerce").fillna(0)
+            st.markdown("**New results per sync run**")
+            bars = (
+                alt.Chart(chart_df)
+                .mark_bar()
+                .encode(
+                    x=alt.X("Run Date:T", title="Date"),
+                    y=alt.Y("New PR Log rows:Q", title="New Results"),
+                    tooltip=["Run Date:T", "New PR Log rows:Q"],
+                )
             )
-        )
-        st.altair_chart(bars, width="stretch")
+            st.altair_chart(bars, width="stretch")
 
-        st.markdown("**Squad size over time**")
-        line = (
-            alt.Chart(chart_df)
-            .mark_line(point=True)
-            .encode(
-                x=alt.X("Run Date:T", title="Date"),
-                y=alt.Y("Total Athletes:Q", title="Athletes", scale=alt.Scale(zero=False)),
-                tooltip=["Run Date:T", "Total Athletes:Q"],
+        if "Total Athletes" in chart_df.columns:
+            chart_df["Total Athletes"] = pd.to_numeric(
+                chart_df["Total Athletes"], errors="coerce").fillna(0)
+            st.markdown("**Squad size over time**")
+            line = (
+                alt.Chart(chart_df)
+                .mark_line(point=True)
+                .encode(
+                    x=alt.X("Run Date:T", title="Date"),
+                    y=alt.Y("Total Athletes:Q", title="Athletes", scale=alt.Scale(zero=False)),
+                    tooltip=["Run Date:T", "Total Athletes:Q"],
+                )
             )
-        )
-        st.altair_chart(line, width="stretch")
+            st.altair_chart(line, width="stretch")
+
+        missing = [c for c in ("New PR Log rows", "Total Athletes")
+                   if c not in chart_df.columns]
+        if missing:
+            st.warning(
+                f"Sync Log is missing the {', '.join(missing)} column(s), so those "
+                "charts are hidden. The header row on the Sync Log tab has drifted "
+                "from what sync.py writes — the daily health check reports this."
+            )
 
     errors = [r for r in sync_log if str(r.get("Notes", "")).strip().lower() not in ("ok", "")]
     if errors:

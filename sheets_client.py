@@ -51,6 +51,35 @@ class SheetsClient:
             self._ws_cache[title] = ws
             return ws
 
+    def ensure_headers(self, title, headers):
+        """Create the tab, or repair its header row if it has drifted.
+
+        Only for tabs this system owns end to end (Sync Log, Message Log,
+        Pending Messages) — never for tabs a coach edits by hand, because it
+        overwrites the header row outright.
+
+        This exists because get_or_create only writes headers when it creates
+        the tab. When a writer later grew from 6 columns to 10, the header row
+        kept the old six names and four blanks, so every reader mislabelled the
+        data and the one column the dashboard indexed by name vanished. Returns
+        the old header when it repaired one, else None.
+        """
+        try:
+            ws = self.worksheet(title)
+        except gspread.WorksheetNotFound:
+            return self.get_or_create(title, headers) and None
+        current = (ws.get_all_values() or [[]])[0]
+        trimmed = [str(h).strip() for h in current]
+        while trimmed and not trimmed[-1]:
+            trimmed.pop()
+        if trimmed == [str(h).strip() for h in headers]:
+            return None
+        if config.DRY_RUN:
+            print(f"[DRY_RUN] would repair '{title}' header: {trimmed} -> {headers}")
+            return trimmed
+        ws.update("A1", [headers], value_input_option="USER_ENTERED")
+        return trimmed
+
     def read_records(self, title):
         """Return list of dict rows (row 1 = headers).
 
