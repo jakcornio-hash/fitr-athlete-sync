@@ -1682,6 +1682,25 @@ def normalise_client_name(s):
     return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
 
 
+def canonical_date_key(s):
+    """A date string reduced to YYYY-MM-DD for comparison, else the raw text.
+
+    A competition typed as "2/08/27" is stored by Sheets as "02/08/27", so a
+    dedupe key built from the raw strings never matched and the same
+    competition was re-added on every single sync run. Comparing dates as
+    dates rather than as text is the only thing that fixes that.
+    """
+    raw = str(s or "").strip()
+    if not raw:
+        return ""
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d/%m/%y", "%d-%m-%Y", "%d.%m.%Y"):
+        try:
+            return dt.datetime.strptime(raw, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return raw.lower()
+
+
 def _name_tokens(s):
     """Lowercase word tokens of a name, splitting hyphens and dropping emoji."""
     return [t for t in re.sub(r"[^a-z0-9 ]", " ", str(s or "").lower()).split() if t]

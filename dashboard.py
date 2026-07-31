@@ -9404,11 +9404,17 @@ def main():
         st.markdown("### 📱 Phone view")
         st.caption("Bookmark this for a fast morning check-in on your phone:")
         st.code("?mode=daily", language=None)
-        if st.session_state.get("_cancelled_count"):
+        # Count what is actually hidden, which is the genuinely-gone set — not
+        # everyone who has ever appeared in the Exit Autopsy. The two differ by
+        # the athletes working a notice period, and those are still on the
+        # roster and still in the numbers.
+        _hidden = len(st.session_state.get("_gone_norm") or ())
+        if _hidden:
             st.divider()
             st.caption(
-                f"🚪 {st.session_state['_cancelled_count']} cancelled athlete(s) "
-                f"(CRM Exit Autopsy) are hidden from all views and stats."
+                f"🚪 {_hidden} former athlete(s) are hidden from all views and "
+                f"stats. Athletes who have given notice but are still on the "
+                f"Active Roster stay visible."
             )
 
     st.title("🏋️ JST Compete — Coaching Dashboard")

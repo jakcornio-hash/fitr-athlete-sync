@@ -390,12 +390,11 @@ def sync_competition_from_typeform(sheets, email_by_name):
     existing = sheets.load_competitions()
     seen_keys = set()
     for r in existing:
-        key = (
+        seen_keys.add((
             str(r.get("Athlete Name", "")).strip().lower(),
             str(r.get("Competition Name", "")).strip().lower(),
-            str(r.get("Date", "")).strip(),
-        )
-        seen_keys.add(key)
+            analytics.canonical_date_key(r.get("Date", "")),
+        ))
 
     added = 0
     skipped_unresolved = []
@@ -435,7 +434,7 @@ def sync_competition_from_typeform(sheets, email_by_name):
         notes = str(row.get(config.COMP_FORM_NOTES_COL, "")).strip()
         synced_at = str(row.get("Submitted At", TODAY.isoformat())).strip()
 
-        key = (nm.lower(), comp_name.lower(), comp_date)
+        key = (nm.lower(), comp_name.lower(), analytics.canonical_date_key(comp_date))
         if key in seen_keys:
             continue
 

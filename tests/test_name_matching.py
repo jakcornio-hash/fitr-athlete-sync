@@ -65,3 +65,26 @@ def test_blank_and_empty_roster():
 
 def test_emoji_suffix_still_matches():
     assert analytics.match_athlete_name("Jak Cornthwaite ⚒", ROSTER) == "Jak Cornthwaite"
+
+
+# ── competition dedupe keys ───────────────────────────────────────────────────
+
+def test_date_key_ignores_leading_zero_differences():
+    """The live bug: the form said "2/08/27", Sheets stored "02/08/27", so the
+    dedupe key never matched and the same competition was re-added every run."""
+    assert analytics.canonical_date_key("2/08/27") == analytics.canonical_date_key("02/08/27")
+
+
+def test_date_key_spans_formats():
+    assert analytics.canonical_date_key("02/08/2027") == "2027-08-02"
+    assert analytics.canonical_date_key("2027-08-02") == "2027-08-02"
+    assert analytics.canonical_date_key("02/08/27") == "2027-08-02"
+
+
+def test_different_dates_stay_different():
+    assert analytics.canonical_date_key("02/08/27") != analytics.canonical_date_key("03/08/27")
+
+
+def test_unparseable_date_falls_back_to_text():
+    assert analytics.canonical_date_key("summer 2027") == "summer 2027"
+    assert analytics.canonical_date_key("") == ""
