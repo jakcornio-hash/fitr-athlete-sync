@@ -22,6 +22,30 @@ import notifier
 import recovery as rec_mod
 import summariser
 
+
+def _ensure_fresh(mod, *required_attrs):
+    """Reload a first-party module if an expected function is missing.
+
+    On Streamlit Cloud a git push re-runs this script but can leave the previous
+    version of an imported module in sys.modules. The new dashboard code then
+    calls a function the cached module doesn't have yet and the page dies with
+    AttributeError until someone reboots the app. Checking for the attributes we
+    rely on and reloading when one is absent makes that self-healing, and costs
+    nothing on a normal run where everything is already present.
+    """
+    if any(not hasattr(mod, a) for a in required_attrs):
+        import importlib
+        try:
+            importlib.reload(mod)
+        except Exception:
+            pass
+    return mod
+
+
+_ensure_fresh(arch_mod, "result_is_close", "athlete_result_message")
+_ensure_fresh(analytics, "not_current_client_names", "retest_analysis",
+              "normalise_client_name")
+
 _CHAT_DATE_RE = re.compile(r'\[(\d{4}-\d{2}-\d{2}) — chat\]')
 
 
