@@ -45,7 +45,8 @@ The system:
 | `coaching_voice.py` | JST tone-of-voice rules + Coaching Playbook helpers |
 | `message_templates.py` | Outreach message templates keyed by reason type and archetype |
 | `setup_coaching_playbook.py` | One-time script to create/populate the Coaching Playbook tab in Sheets |
-| `tests/test_analytics.py` | Unit tests for analytics functions |
+| `health_check.py` | Daily health check — runs with the sync, reports on the digest |
+| `tests/` | Unit tests. `pytest tests/ -q` |
 | `docs/Ed_Dashboard_Guide.md` | Plain-English guide for Ed Cook — what the system does, his daily workflow |
 
 ---
@@ -62,13 +63,15 @@ The system:
 
 ## Bespoke athlete handling — critical
 
-Athletes with `Subscription Plan == "Bespoke"` in the `_DATA` tab receive **zero** automated messages. This is non-negotiable — they pay for personal coaching, not system messages.
+Athletes with `Programming Tier == "Bespoke"` in the `_DATA` tab receive **zero** automated messages. This is non-negotiable — they pay for personal coaching, not system messages.
+
+**It is `Programming Tier`, NOT `Subscription Plan`.** `Subscription Plan` holds the billing plan (`Monthly (£54.99)`, `Yearly (£549)`) and contains the value "Bespoke" for nobody. Keying the suppression off it matched **0 athletes** while looking perfectly healthy in the logs, and every individually-coached athlete kept receiving the automated messages they are exempt from. Against live data today the correct column matches 4 athletes and the old one matches 0. The daily health check now fails loudly if this ever matches nobody again.
 
 **How it works in sync.py:**
 ```python
 bespoke_names = {
     nm for nm, r in data_by_name_all.items()
-    if str(r.get("Subscription Plan", "")).strip().lower() == "bespoke"
+    if str(r.get("Programming Tier", "")).strip().lower() == "bespoke"
 }
 ```
 
@@ -86,6 +89,10 @@ non_bespoke_email_by_name = {k: v for k, v in email_by_name.items() if k not in 
 ---
 
 ## Automated messages — all types
+
+**Automatic sending to athletes is OFF** (`config.AUTO_SEND_ATHLETE_MESSAGES`, default false). Every trigger below still fires and still drafts its message, but `_deliver()` queues it on the **Pending Messages** tab instead of sending. A coach reads, edits and sends it from the ✅ Actions tab. Nothing reaches an athlete without a person. This means an unworked queue = athletes hearing nothing, so the health check fails when drafts sit unsent for 3+ days.
+
+The table below describes when each message is *drafted*.
 
 All messages are sent via `fitr.send_chat_message(room_id, msg)` and logged to the Message Log tab. None include a personal sign-off ("Jak" / "Ed") — they are system-generated, not personally authored.
 
@@ -270,7 +277,7 @@ load_intake_responses()
 
 ---
 
-## dashboard.py — tab structure (17 tabs)
+## dashboard.py — tab structure (21 tabs)
 
 ```
 Tab  0:  ✅ Actions        — Ed's daily checkable task queue (page_action_list)
@@ -280,17 +287,27 @@ Tab  3:  🃏 Squad          — Card grid by status (page_squad)
 Tab  4:  👥 Athletes       — Full roster + per-athlete profile panel (page_athletes)
 Tab  5:  🗓️ Week Plan       — Prioritised coaching week (page_week_planner)
 Tab  6:  🏁 Competitions   — Squad comp schedule + calendar (page_competitions)
-Tab  7:  📊 Programmes     — Track breakdown + coach capacity (page_programmes)
-Tab  8:  🏋️ Load           — ACWR proxy training load (page_load)
-Tab  9:  📈 Trends         — Per-athlete benchmark charts (page_trends)
-Tab 10:  🏆 Leaderboard    — Composite percentile rankings (page_leaderboard)
-Tab 11:  💤 Recovery       — Latest recovery survey table (page_recovery)
-Tab 12:  🌐 CRM            — Coach-athlete mapping (page_crm)
-Tab 13:  📚 Playbook       — Coaching reference hub (page_coaching_playbook)
-Tab 14:  💎 Grandslam      — Retention pipeline + whale board (page_grandslam)
-Tab 15:  ⚙️ Sync           — Sync health + message log (page_sync_health)
-Tab 16:  ❓ Help           — Guide for coaches (page_help)
+Tab  7:  🎥 Videos         — Movement analysis submissions (page_video_reviews)
+Tab  8:  📊 Programmes     — Track breakdown + coach capacity (page_programmes)
+Tab  9:  🏋️ Load           — ACWR proxy training load (page_load)
+Tab 10:  📈 Trends         — Per-athlete benchmark charts (page_trends)
+Tab 11:  🏆 Leaderboard    — Composite percentile rankings (page_leaderboard)
+Tab 12:  💤 Recovery       — Latest recovery survey table (page_recovery)
+Tab 13:  🌐 CRM            — Coach-athlete mapping (page_crm)
+Tab 14:  📚 Playbook       — Coaching reference hub (page_coaching_playbook)
+Tab 15:  💎 Grandslam      — Retention pipeline + whale board (page_grandslam)
+Tab 16:  📣 Marketing      — Story intake + coverage grid (page_marketing)
+Tab 17:  🏋️ Gym Referrals  — Gym owner referral programme (page_gym_referrals)
+Tab 18:  💷 Finance        — MRR, revenue at risk, gym credits (page_finance)
+Tab 19:  ⚙️ Sync           — Sync health + message log (page_sync_health)
+Tab 20:  ❓ Help           — Guide for coaches (page_help)
 ```
+
+Every tab is dispatched through `_render_tab(label, fn, ...)`, which contains an
+exception to that one tab instead of aborting the whole script, and records the
+failure in `st.session_state["_tab_render_failures"]` for the health check to
+report. Before this, a `KeyError` in the Sync tab also blanked the Help tab
+behind it.
 
 ### page_action_list — Ed's daily task list
 
@@ -426,14 +443,26 @@ send_monthly_athlete_reports(data_recs, email_by_name, pr_records)  # fires if T
 ## Fitr API client (fitr_client.py)
 
 ```python
-fitr = FitrClient(email, password, client_id, client_secret, access_token)
-fitr.get_athletes()                          # → [{id, name, email, programme, ...}]
-fitr.get_benchmarks(athlete_id)              # → [{benchmark, last_value, history}]
-fitr.get_chat_rooms()                        # → [{id, athlete_name, ...}]
-fitr.get_chat_messages(room_id, limit=50)    # → [{sender, text, created_at}]
-fitr.send_chat_message(room_id, text)        # → bool (True if sent)
-fitr.get_athlete_profile(athlete_id)         # → {name, email, programme, joined_at, ...}
+fitr = FitrClient()                          # credentials come from config
+fitr.authenticate()
+fitr.chat_rooms()                            # → [{id, opponent: {full_name}, ...}]
+fitr.chat_messages(room_id, max_messages=40) # → newest-first message dicts
+fitr.send_chat_message(room_id, text)
 ```
+
+**Message dicts have no `sender` and no `is_mine`.** Authorship is
+`msg["author"]["full_name"]`, and `created_at` is a **Unix timestamp**, not an
+ISO string. Use the helpers rather than reading the fields raw:
+
+```python
+fitr_client.message_is_from(msg, athlete_name)   # → bool
+fitr_client.message_date(msg)                    # → datetime.date | None
+```
+
+Getting either of these wrong is not loud: testing `msg.get("is_mine")` reads
+None for every message, and slicing the timestamp gives `"1785527048"`, which
+compares false against every `"YYYY-MM-DD"` date forever. Together they meant
+no athlete reply was ever detected.
 
 Auth: bearer token stored in `config.FITR_ACCESS_TOKEN`. If it expires, re-auth via email/password + client credentials.
 
@@ -487,6 +516,46 @@ Weekly submission via Typeform. Captures soreness, stress, and motivation (1–1
 - 180-day Lifer ceremony message — personal milestone message, non-bespoke only
 - 90-day t-shirt reward: Typeform link (`NINETY_DAY_FORM_URL`) embedded in 90-day message
 - Grandslam dashboard additions: Squad Health Score, Net MRR Movement, Upcoming Established Milestones, Second Product Candidates, Message Response Rate
+
+---
+
+## Health check
+
+`health_check.py` runs at the end of every sync and its findings go to the top
+of the Slack + email digest, above the coaching actions. Run it standalone with
+`python health_check.py` (add `--pages` to render every dashboard tab).
+
+It covers: sheet tabs missing expected columns or carrying duplicate/blank
+headers; a column the code reads that is entirely empty; a suppression rule
+that matches nobody; cancelled athletes reappearing on a coaching list; the
+dashboard and sync disagreeing on who has gone; drafted messages unsent for 3+
+days; and every dashboard tab rendered headlessly via Streamlit's `AppTest`.
+
+`EXPECTED_COLUMNS` in that file is the schema contract. **When you add a column
+read by name, add it there**, and to `always_populated` if an empty column
+would mean a dead feature.
+
+---
+
+## Things that are subtle — do not "simplify" these
+
+- **"Cancelled by client" means notice given but still training.** Those
+  athletes stay on every list and in MRR. Only *genuinely gone* athletes drop
+  off. The one shared rule is `analytics.not_current_client_names()`: CRM Exit
+  Autopsy + Auto-Cancelled Fitr status, **minus** the Active Roster, then coach
+  overrides last. Both the sync and `dashboard.load_all` must call it — when
+  the dashboard filtered on the raw Exit Autopsy set instead, it hid 20 current
+  athletes from every tab.
+- **The Active Roster is a manual monthly paste** from Fitr and is the source of
+  truth for who is a current client. A coach's explicit status override
+  (`Athlete Status Overrides` tab) outranks both it and the CRM.
+- **Bespoke lives in `Programming Tier`**, not `Subscription Plan`.
+- **Form names are self-typed.** Resolve them with
+  `analytics.match_athlete_name()`, which requires the family name to agree. A
+  bare similarity score cannot tell "Scott Maynard" from "Scott Sumner".
+- **Sheets reads are retried on 429** in `sheets_client`. Callers wrap reads in
+  bare `except`, so without the retry a throttled read looks like an empty tab
+  rather than an error.
 
 ---
 
