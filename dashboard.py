@@ -5524,13 +5524,42 @@ def page_help():
     )
     st.divider()
 
+    with st.expander("🆕 What's changed recently", expanded=True):
+        st.markdown("""
+**Four new things to work, and one job that is not automatic.**
+
+**1. Archetype results to send** (✅ Actions, top) — when an athlete fills in the
+archetype form, their confirmed result appears here as a drafted message. Read it,
+send it in Fitr, hit **Mark sent**. It is no longer auto-sent, so if nobody sends
+it, the athlete never gets it. Where their answers were genuinely split the message
+says so and asks them which fits, rather than forcing one label.
+
+**2. Retest chasers** (📈 Trends) — athletes who did a test but never logged the
+retest, each with a nudge quoting their own test score. This is where most missing
+data comes from.
+
+**3. Strong improvers** (📣 Marketing) — athletes ranked by measured test to retest
+gains. Hit **Draft the ask** and the message cites their actual numbers, e.g. a
+snatch time dropping from 6:28 to 4:35. **Mark asked** takes them off the list so
+nobody gets asked twice.
+
+**4. Scores now display properly.** Weights used to render as times on athlete
+timelines (a 1260 kg lift showed as 21:00). Fixed. If you spot a score that still
+looks wrong, say so, it means that test's measure is missing.
+
+**Not automatic:** the **Active Roster** tab in the coaching sheet is what keeps
+cancelled athletes out of the dashboard and out of the automated messages. It cannot
+update itself, Fitr has no API for it. Jak re-pastes the active client list on the
+first Monday of each month and gets a reminder to do it.
+""")
+
     # ── What the system does automatically ───────────────────────────────────
     st.markdown("### What the system handles automatically")
     st.caption("These run on the daily sync. You don't need to do anything for them.")
     st.markdown("""
 | Message type | When it sends | Notes |
 |---|---|---|
-| New athlete welcome | Added to Fitr | Sends intake form link + recovery check-in instructions |
+| New athlete welcome | Added to Fitr | Sent by **Fitr itself**, not this system (WhatsApp group, athlete profile form, handbook) |
 | First log message | Athlete's first training log | "First log is in. Good start." |
 | New PB | Benchmark result logged — better than previous best | Specific congrats naming the improvement |
 | First result on a benchmark | First time logging a benchmark | "Good first result — we'll build from here." |
@@ -5624,7 +5653,7 @@ Profile includes: stats, programme, tenure ("With JST"), injuries, competitions,
 
 **Risk column** — Composite churn risk score based on days since last log, declining trends, recovery flags, and time since last contact. Use the Risk filter to instantly surface who needs attention.
 
-**Archetype Assessment** — 10-question instrument inside a profile. Share the **Self-Assessment Link** with the athlete to fill it in themselves.
+**Archetype Assessment** — 30-question instrument inside a profile. Share the **Self-Assessment Link** with the athlete to fill it in themselves. When they do, their result appears on the **✅ Actions** tab under "Archetype results to send" for you to send. It is not auto-sent.
 **Add Note** — Log a call, check-in, or recovery entry directly to their profile.
 """),
         ("🗓️ Week Plan", """
