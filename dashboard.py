@@ -43,8 +43,12 @@ def _ensure_fresh(mod, *required_attrs):
 
 
 _ensure_fresh(arch_mod, "result_is_close", "athlete_result_message")
+# Every analytics function the dashboard calls that was added after an earlier
+# deploy belongs here, or the first page to call it dies with AttributeError
+# until someone reboots the app. Add to this list when you add a function.
 _ensure_fresh(analytics, "not_current_client_names", "retest_analysis",
-              "normalise_client_name")
+              "normalise_client_name", "monthly_value", "match_athlete_name",
+              "canonical_date_key")
 
 _CHAT_DATE_RE = re.compile(r'\[(\d{4}-\d{2}-\d{2}) — chat\]')
 
