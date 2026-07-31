@@ -176,20 +176,32 @@ def load_all():
     except Exception:
         pass
 
-    # Cancelled athletes (CRM Exit Autopsy) come off the working roster so
-    # they don't appear in at-risk lists, engagement flags, or athlete tables.
-    # Anyone who has logged training well after their cancel date is treated
-    # as rejoined and kept. data_records stay intact (history/profiles remain).
+    # Cancelled athletes come off the working roster so they don't appear in
+    # at-risk lists, engagement flags, or athlete tables. data_records stay
+    # intact (history/profiles remain).
+    #
+    # Filtered on not_current_client_names — the same helper the sync uses —
+    # NOT on the raw Exit Autopsy set. The raw set counts anyone who has ever
+    # given notice, so filtering on it hid 20 athletes who are on the current
+    # Active Roster with a Fitr status of All Good: people who gave notice and
+    # are still training, still paying, and still savable. They were invisible
+    # on every tab while the sync went on treating them as current.
     cancelled_names = set()
+    gone_norm = set()
     try:
         exit_rows = sheets.load_exit_autopsy()
         cancelled_names, _rejoined = analytics.cancelled_athletes(exit_rows, pr_records)
-        if cancelled_names:
-            athletes = [a for a in athletes if a["name"].lower() not in cancelled_names]
+        gone_norm = analytics.not_current_client_names(
+            cancelled_names, data_records, _active_roster_names(),
+            overrides=_status_overrides())
+        if gone_norm:
+            athletes = [a for a in athletes
+                        if analytics.normalise_client_name(a["name"]) not in gone_norm]
     except Exception:
         pass
 
-    return pr_records, athletes, rec_latest, data_records, archetype_rows, competition_rows, cancelled_names
+    return (pr_records, athletes, rec_latest, data_records, archetype_rows,
+            competition_rows, cancelled_names, gone_norm)
 
 
 def run_analytics(pr_records, athletes, rec_latest, data_records=None, competition_rows=None):  # noqa: too-many-locals
@@ -773,10 +785,13 @@ def _live_video_reviews():
     who left six weeks ago isn't a review anyone owes. Returns (rows, n_hidden).
     """
     rows = _load_video_reviews_cached()
-    gone = st.session_state.get("_cancelled_names_lower") or set()
+    # The genuinely-gone set, not the raw Exit Autopsy one: an athlete working
+    # a notice period is still a client and their video still needs reviewing.
+    gone = st.session_state.get("_gone_norm") or set()
     if not gone:
         return rows, 0
-    live = [r for r in rows if str(r.get("Athlete Name", "")).strip().lower() not in gone]
+    live = [r for r in rows
+            if analytics.normalise_client_name(r.get("Athlete Name", "")) not in gone]
     return live, len(rows) - len(live)
 
 
@@ -8615,7 +8630,7 @@ def page_marketing(pr_records, grandslam_results, data_records, athletes,
 
 # ── Finance ───────────────────────────────────────────────────────────────────
 
-def page_finance(data_records, pr_records, athletes, cancelled_names=None):
+def page_finance(data_records, pr_records, athletes, gone_norm=None):
     """Money view — MRR, revenue at risk, gym credits payable, net position."""
     st.header("💷 Finance")
     st.caption(
@@ -8624,17 +8639,19 @@ def page_finance(data_records, pr_records, athletes, cancelled_names=None):
     )
 
     prices = getattr(config, "SUBSCRIPTION_PRICES", {})
-    # Cancelled athletes (CRM Exit Autopsy) are gone revenue, not at-risk
-    # revenue — exclude them from MRR entirely rather than counting their
-    # old subscription as "inactive" money.
-    _cancelled = cancelled_names or set()
+    # Only genuinely-gone athletes come out of MRR. Excluding everyone who has
+    # ever appeared in the Exit Autopsy understated revenue by ~20 athletes who
+    # gave notice but are still on the Active Roster and still being billed:
+    # someone working their notice is current revenue, not lost revenue.
+    _gone = gone_norm or set()
     data_by_nm = {
         str(r.get("Full Name", "")).strip(): r for r in (data_records or [])
         if str(r.get("Full Name", "")).strip()
-        and str(r.get("Full Name", "")).strip().lower() not in _cancelled
+        and analytics.normalise_client_name(r.get("Full Name", "")) not in _gone
     }
-    if _cancelled:
-        st.caption(f"ℹ️ {len(_cancelled)} cancelled athlete(s) from the CRM Exit Autopsy are excluded from these numbers.")
+    if _gone:
+        st.caption(f"ℹ️ {len(_gone)} genuinely-gone athlete(s) are excluded from these numbers. "
+                   "Athletes working a notice period are still counted — they are still paying.")
 
     # Last log date per athlete
     last_log_by_nm = {}
@@ -9398,9 +9415,11 @@ def main():
     st.caption(f"Data refreshes every 15 minutes · Last loaded: {dt.datetime.now().strftime('%H:%M')}")
 
     with st.spinner("Loading..."):
-        pr_records, athletes, rec_latest, data_records, archetype_rows, competition_rows, cancelled_names = load_all()
+        (pr_records, athletes, rec_latest, data_records, archetype_rows,
+         competition_rows, cancelled_names, gone_norm) = load_all()
         st.session_state["_cancelled_count"] = len(cancelled_names)
         st.session_state["_cancelled_names_lower"] = cancelled_names
+        st.session_state["_gone_norm"] = gone_norm
         trend_results, engagement_results, consistency_wins, rec_alert_rows, rec_by_name, comp_results = run_analytics(
             pr_records, athletes, rec_latest, data_records, competition_rows=competition_rows
         )
@@ -9495,7 +9514,7 @@ def main():
     with tabs[17]:
         _render_tab("Gym Referrals", page_gym_referrals, athletes=athletes)
     with tabs[18]:
-        _render_tab("Finance", page_finance, data_records, pr_records, athletes, cancelled_names=cancelled_names)
+        _render_tab("Finance", page_finance, data_records, pr_records, athletes, gone_norm=gone_norm)
     with tabs[19]:
         _render_tab("Sync", page_sync_health)
     with tabs[20]:
