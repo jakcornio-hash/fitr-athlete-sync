@@ -128,8 +128,14 @@ class SheetsClient:
             return
         self.worksheet(title).update(a1, [[value]], value_input_option="USER_ENTERED")
 
-    def overwrite_tab(self, title, rows):
-        """Clear a tab and write rows from the top. Creates the tab if missing."""
+    def overwrite_tab(self, title, rows, raw=False):
+        """Clear a tab and write rows from the top. Creates the tab if missing.
+
+        raw=True writes values literally. Use it for report tabs whose text can
+        begin with "=": USER_ENTERED treats a leading "=" as a formula, which
+        turned every "== RECOVERY ALERTS ==" section heading in Coach Alerts
+        into #ERROR! and left coaches scrolling 600+ rows with no signposts.
+        """
         if config.DRY_RUN:
             print(f"[DRY_RUN] would overwrite '{title}' with {len(rows)} rows")
             return
@@ -140,7 +146,8 @@ class SheetsClient:
             ws = self.sh.add_worksheet(title=title, rows=max(200, len(rows) + 10), cols=20)
             self._ws_cache[title] = ws
         if rows:
-            ws.update("A1", rows, value_input_option="USER_ENTERED")
+            ws.update("A1", rows,
+                      value_input_option="RAW" if raw else "USER_ENTERED")
 
     def batch_update_by_name(self, tab_title, name_col, updates_by_name):
         """Update cells across many rows identified by name_col value.

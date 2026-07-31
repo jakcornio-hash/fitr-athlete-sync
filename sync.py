@@ -1844,7 +1844,8 @@ def main():
     alert_rows = analytics.build_coach_alerts_rows(
         engagement_results, trend_results, rec_by_name, milestones, consistency_wins
     )
-    sheets.overwrite_tab(config.TAB_COACH_ALERTS, alert_rows)
+    # raw=True: the "== SECTION ==" headings are text, not formulas.
+    sheets.overwrite_tab(config.TAB_COACH_ALERTS, alert_rows, raw=True)
 
     # ---- churn risk snapshot (written daily) ----
     churn_snapshot_rows = []
