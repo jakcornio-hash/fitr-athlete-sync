@@ -1801,7 +1801,8 @@ def retest_analysis(pr_records, measure_of=None, gone_norm=None,
     return {"chasers": chasers, "improvers": improvers}
 
 
-def not_current_client_names(cancelled_names, data_records, active_roster_names):
+def not_current_client_names(cancelled_names, data_records, active_roster_names,
+                             overrides=None):
     """Normalised names of clients who are genuinely GONE.
 
     The shared source of truth for "don't message / don't feature this person",
@@ -1820,7 +1821,21 @@ def not_current_client_names(cancelled_names, data_records, active_roster_names)
         if "auto cancel" in str(r.get("Fitr Status", "")).strip().lower():
             gone.add(normalise_client_name(r.get("Full Name", "")))
     keep = {normalise_client_name(n) for n in (active_roster_names or ())}
-    return gone - keep
+    out = gone - keep
+
+    # A coach explicitly setting someone's status outranks everything above,
+    # including the Active Roster. Without this, marking an athlete cancelled in
+    # the dashboard did nothing whenever they were still on the last pasted
+    # roster, which is exactly when a coach is most likely to be correcting it.
+    for nm, status in (overrides or {}).items():
+        n = normalise_client_name(nm)
+        if not n:
+            continue
+        if str(status).strip().lower() == "cancelled":
+            out.add(n)
+        elif str(status).strip().lower() == "active":
+            out.discard(n)
+    return out
 
 
 def cancelled_athletes(exit_rows, pr_records):

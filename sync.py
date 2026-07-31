@@ -1563,8 +1563,18 @@ def main():
                           if str(r.get("Full Name", "")).strip()]
     except Exception:
         _active_roster = []
+    # Coach overrides set in the dashboard beat both the roster and the CRM, so
+    # marking someone cancelled there actually stops their automated messages.
+    try:
+        _status_overrides = {
+            str(r.get("Name", "")).strip(): str(r.get("Status", "")).strip().lower()
+            for r in sheets.read_records("Athlete Status Overrides")
+            if str(r.get("Name", "")).strip() and str(r.get("Status", "")).strip()
+        }
+    except Exception:
+        _status_overrides = {}
     _gone_norm = analytics.not_current_client_names(
-        cancelled_names_lower, data_recs, _active_roster)
+        cancelled_names_lower, data_recs, _active_roster, overrides=_status_overrides)
 
     def _is_gone(nm):
         return analytics.normalise_client_name(nm) in _gone_norm

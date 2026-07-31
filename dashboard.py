@@ -331,6 +331,114 @@ def _mark_story_asked(name):
     _story_asked_norm.clear()
 
 
+# An action item gets a 7 day window for Ed to deal with it, then it drops off.
+# A message about something that happened last month isn't worth sending, and a
+# list that only ever grows stops being a to-do list. Marking one done also
+# suppresses it for 7 days so a still-unresolved issue can resurface later.
+ACTION_ITEM_TTL_DAYS = 7
+ACTION_DONE_SUPPRESS_DAYS = 7
+_ACTION_LOG_TAB = "Action Log"
+_ACTION_LOG_HEADER = ["Key", "Athlete", "Priority", "First Seen", "Done Date", "Done By"]
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _action_log_cached():
+    """{item key: {"first_seen": iso, "done": iso}} from the Action Log tab.
+
+    Persisted rather than held in session_state: Ed was losing a morning's work
+    to a refresh and being handed the same athletes again. TTL=1min.
+    """
+    out = {}
+    try:
+        for r in get_sheets().read_records(_ACTION_LOG_TAB):
+            k = str(r.get("Key", "")).strip()
+            if k:
+                out[k] = {"first_seen": str(r.get("First Seen", "")).strip(),
+                          "done": str(r.get("Done Date", "")).strip()}
+    except Exception:
+        pass
+    return out
+
+
+def _record_new_action_items(triples):
+    """Log first-seen for item keys we haven't seen before. triples = (key, athlete,
+    priority). This is what lets an item age out of the list 7 days later."""
+    log = _action_log_cached()
+    new = [[k, nm, pri, TODAY.isoformat(), "", ""]
+           for k, nm, pri in triples if k not in log]
+    if not new:
+        return
+    try:
+        sh = get_sheets()
+        sh.get_or_create(_ACTION_LOG_TAB, _ACTION_LOG_HEADER)
+        sh.append_rows(_ACTION_LOG_TAB, new)
+        _action_log_cached.clear()
+    except Exception:
+        pass
+
+
+def _mark_action_done(name, key, priority):
+    """Record an action item as dealt with, against today's date."""
+    sh = get_sheets()
+    sh.get_or_create(_ACTION_LOG_TAB, _ACTION_LOG_HEADER)
+    if key in _action_log_cached():
+        sh.batch_update_by_name(_ACTION_LOG_TAB, "Key",
+                                {key: {"Done Date": TODAY.isoformat(), "Done By": "Ed"}})
+    else:
+        sh.append_rows(_ACTION_LOG_TAB,
+                       [[key, name, priority, TODAY.isoformat(), TODAY.isoformat(), "Ed"]])
+    _action_log_cached.clear()
+
+
+_STATUS_TAB = "Athlete Status Overrides"
+_STATUS_HEADER = ["Name", "Status", "Date", "By", "Note"]
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _status_overrides():
+    """{athlete name: 'cancelled'|'active'} set by a coach in the dashboard.
+
+    Outranks the Active Roster and the CRM, because it's a person deliberately
+    correcting the record. Last entry per athlete wins. TTL=2min.
+    """
+    out = {}
+    try:
+        for r in get_sheets().read_records(_STATUS_TAB):
+            nm = str(r.get("Name", "")).strip()
+            stt = str(r.get("Status", "")).strip().lower()
+            if nm and stt:
+                out[nm] = stt
+    except Exception:
+        pass
+    return out
+
+
+def _set_athlete_status(name, status, note=""):
+    """Record a coach's explicit call on whether an athlete is still with us."""
+    sh = get_sheets()
+    sh.get_or_create(_STATUS_TAB, _STATUS_HEADER)
+    sh.append_rows(_STATUS_TAB, [[name, status, TODAY.isoformat(), "Coach", note]])
+    _status_overrides.clear()
+
+
+def _set_subscription_plan(name, plan):
+    """Set an athlete's plan in _DATA. 'Bespoke' suppresses automated messages,
+    so this is how a coach moves someone onto individual coaching."""
+    get_sheets().batch_update_by_name(
+        config.TAB_DATA, "Full Name", {name: {"Subscription Plan": plan}})
+    load_all.clear()
+
+
+def _unmark_action_done(key):
+    """Undo: clear the done date so the item returns to the open list."""
+    try:
+        get_sheets().batch_update_by_name(_ACTION_LOG_TAB, "Key",
+                                          {key: {"Done Date": "", "Done By": ""}})
+        _action_log_cached.clear()
+    except Exception:
+        pass
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def _load_archetype_assessments_cached():
     """Archetype Assessments rows (self + coach reads). TTL=5min."""
@@ -1729,6 +1837,55 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
                 st.write(entry["text"])
     else:
         st.caption("No notes yet.")
+
+    # ── Status: has this athlete left, and are they on individual coaching? ────
+    with st.expander("⚙️ Change status (cancelled / individual)"):
+        _rec = data_by_name.get(name, {})
+        _plan = str(_rec.get("Subscription Plan", "")).strip()
+        _is_bespoke = _plan.lower() == "bespoke"
+        _override = _status_overrides().get(name, "")
+        _gone = _norm_client_name(name) in _not_current_clients(data_by_name)
+
+        st.caption(
+            f"Currently: **{'no longer with us' if _gone else 'active'}**"
+            f" · **{_plan or 'standard'}** plan."
+            + (f" A coach set this to '{_override}'." if _override else "")
+        )
+
+        scol1, scol2 = st.columns(2)
+        with scol1:
+            st.markdown("**Still with us?**")
+            st.caption(
+                "Marking someone cancelled takes them off every list and stops all "
+                "automated messages, even if they're still on the pasted Fitr roster. "
+                "Use it the moment you know they've gone."
+            )
+            if not _gone or _override != "cancelled":
+                if st.button("🚫 Mark as cancelled", key=f"stat_cancel_{name}"):
+                    _set_athlete_status(name, "cancelled")
+                    st.success(f"{name.split()[0]} marked as cancelled.")
+                    st.rerun()
+            if _gone or _override == "cancelled":
+                if st.button("↩️ Mark as still active", key=f"stat_active_{name}"):
+                    _set_athlete_status(name, "active")
+                    st.success(f"{name.split()[0]} marked as still active.")
+                    st.rerun()
+        with scol2:
+            st.markdown("**Coaching type**")
+            st.caption(
+                "Individual (bespoke) athletes get no automated messages except the "
+                "90 day consultation. Everything else to them is personal."
+            )
+            if not _is_bespoke:
+                if st.button("👤 Move to individual", key=f"stat_besp_{name}"):
+                    _set_subscription_plan(name, "Bespoke")
+                    st.success(f"{name.split()[0]} moved to individual coaching.")
+                    st.rerun()
+            else:
+                if st.button("👥 Move to standard programme", key=f"stat_std_{name}"):
+                    _set_subscription_plan(name, "Standard")
+                    st.success(f"{name.split()[0]} moved to the standard programme.")
+                    st.rerun()
 
     with st.expander("✏️ Add Note"):
         with st.form(f"note_form_{name}", clear_on_submit=True):
@@ -3566,18 +3723,52 @@ def page_action_list(engagement_results, trend_results, rec_alert_rows, mileston
     ed_rows = [r for r in rows if not r.get("_auto")]
 
     # ── Done-item tracking ────────────────────────────────────────────────────
-    # Keyed by stable hash of athlete + priority + reason, stored in session_state.
-    # Resets automatically each new browser session (i.e. each work day).
+    # Persisted to the sheet, not session_state, so a refresh or an app reboot
+    # doesn't wipe Ed's progress and hand him the same athletes again.
+    #
+    # The key deliberately strips digits from the reason. Reasons carry live
+    # counters ("28 days inactive"), so a raw hash changed every night and the
+    # item came back as brand new the next morning however many times it had
+    # been actioned. Collapsing the numbers keeps one athlete's issue as one
+    # item until it's genuinely resolved.
     def _item_key(r):
-        raw = f"{r['Athlete']}|{r['Priority']}|{r['Reason']}"
-        return "action_done_" + hashlib.md5(raw.encode()).hexdigest()[:10]
+        reason = re.sub(r"\d+", "#", str(r.get("Reason", "")))
+        raw = f"{r['Athlete']}|{r['Priority']}|{reason}"
+        return hashlib.md5(raw.encode()).hexdigest()[:10]
 
-    done_keys = {_item_key(r) for r in ed_rows if st.session_state.get(_item_key(r))}
-    active = [r for r in ed_rows if not st.session_state.get(_item_key(r))]
-    completed = [r for r in ed_rows if st.session_state.get(_item_key(r))]
+    # Log anything new so it has a first-seen date to age out from.
+    _record_new_action_items([(_item_key(r), r["Athlete"], r["Priority"]) for r in ed_rows])
+    log = _action_log_cached()
 
-    total = len(ed_rows)
+    _done_cutoff = (TODAY - dt.timedelta(days=ACTION_DONE_SUPPRESS_DAYS)).isoformat()
+    _stale_cutoff = (TODAY - dt.timedelta(days=ACTION_ITEM_TTL_DAYS)).isoformat()
+
+    def _entry(r):
+        return log.get(_item_key(r), {})
+
+    def _first_seen(r):
+        return _entry(r).get("first_seen") or TODAY.isoformat()
+
+    def _is_done(r):
+        d = _entry(r).get("done")
+        return bool(d and d >= _done_cutoff)
+
+    def _is_stale(r):
+        return _first_seen(r) < _stale_cutoff
+
+    # Aged-out items leave the list entirely. They aren't "done", they're just
+    # too old to be worth a message now.
+    live = [r for r in ed_rows if not _is_stale(r)]
+    n_aged_out = len(ed_rows) - len(live)
+
+    active = [r for r in live if not _is_done(r)]
+    completed = [r for r in live if _is_done(r)]
+    # Newest first, priority breaking ties within a day.
+    active.sort(key=lambda r: (_first_seen(r), -r.get("_order", 0)), reverse=True)
+
+    total = len(live)
     n_done = len(completed)
+    n_today = sum(1 for r in live if _entry(r).get("done") == TODAY.isoformat())
 
     # ── Header ────────────────────────────────────────────────────────────────
     if total == 0:
@@ -3588,21 +3779,24 @@ def page_action_list(engagement_results, trend_results, rec_alert_rows, mileston
     with col_h1:
         st.markdown(f"## Ed's Action List")
         st.caption(
-            "Everything that needs a personal message from Ed today. "
-            "Read the draft, copy it, send it — then mark it done."
+            "Everything that needs a personal message from Ed. Read the draft, "
+            "copy it, send it, then mark it done. Working through it steadily is "
+            "the point, the whole list is not meant to be cleared in a day."
         )
     with col_h2:
-        if n_done == total:
-            st.success(f"All {total} done")
-        else:
-            st.metric("Done", f"{n_done} / {total}")
+        # Today's count, not progress against the whole backlog. A standing list
+        # of 155 makes "0 / 155" read like failure every morning.
+        st.metric("Done today", n_today)
+        st.caption(f"{len(active)} still open")
 
-    if total > 0:
-        st.progress(n_done / total)
-
-    if n_done == total:
-        st.balloons()
-        st.success("All done for today. Good work.")
+    if n_today:
+        st.success(f"{n_today} messaged today. Nice one.")
+    if n_aged_out:
+        st.caption(
+            f"{n_aged_out} item{'s' if n_aged_out != 1 else ''} dropped off after "
+            f"{ACTION_ITEM_TTL_DAYS} days without being actioned. If an athlete still "
+            f"needs something they'll reappear on the next trigger."
+        )
 
     st.divider()
 
@@ -3641,7 +3835,7 @@ def page_action_list(engagement_results, trend_results, rec_alert_rows, mileston
                 st.caption(reason)
             with hcol2:
                 if st.button("✅ Done", key=f"done_{item_key}", use_container_width=True):
-                    st.session_state[item_key] = True
+                    _mark_action_done(name, item_key, priority)
                     st.rerun()
 
             # Message draft
@@ -3687,7 +3881,7 @@ def page_action_list(engagement_results, trend_results, rec_alert_rows, mileston
                     st.markdown(f"~~{r['Priority']} — **{r['Athlete']}**~~ — {r['Reason']}")
                 with col_b:
                     if st.button("Undo", key=f"undo_{item_key}", use_container_width=True):
-                        st.session_state[item_key] = False
+                        _unmark_action_done(item_key)
                         st.rerun()
 
 
@@ -7113,7 +7307,8 @@ def _not_current_clients(data_by_nm):
         cancelled = set()
     try:
         return _an.not_current_client_names(
-            cancelled, list(data_by_nm.values()), _active_roster_names())
+            cancelled, list(data_by_nm.values()), _active_roster_names(),
+            overrides=_status_overrides())
     except AttributeError:
         # Transient: after a git push Streamlit re-ran this script but is still
         # holding the previous analytics module in sys.modules, without the new
