@@ -409,13 +409,8 @@ def sync_competition_from_typeform(sheets, email_by_name):
                     nm = known
                     break
         if not nm and raw_name:
-            matches = _difflib.get_close_matches(
-                raw_name.lower(),
-                [k.lower() for k in all_known_names],
-                n=1, cutoff=0.6,
-            )
-            if matches:
-                nm = next(k for k in all_known_names if k.lower() == matches[0])
+            nm = analytics.match_athlete_name(raw_name, all_known_names)
+            if nm:
                 print(f"  [comp form] fuzzy matched '{raw_name}' → '{nm}'")
         if not nm:
             skipped_unresolved.append(raw_name or f"<email:{email}>")
@@ -531,12 +526,8 @@ def sync_archetype_from_typeform(sheets, email_by_name):
                     nm = known
                     break
         if not nm and raw_name:
-            import difflib as _difflib
-            matches = _difflib.get_close_matches(
-                raw_name.lower(), [k.lower() for k in all_known], n=1, cutoff=0.6,
-            )
-            if matches:
-                nm = next(k for k in all_known if k.lower() == matches[0])
+            nm = analytics.match_athlete_name(raw_name, all_known)
+            if nm:
                 print(f"  [archetype form] fuzzy matched '{raw_name}' → '{nm}'")
         if not nm:
             unresolved.append(raw_name or f"<{email or 'no id'}>")
@@ -974,6 +965,9 @@ def _deliver(fitr, room_id, msg, name, msg_type):
     and appears on the dashboard action list, where a coach reads it, edits it
     if they want, and sends it. Same drafting, same triggers, a person on the end.
     """
+    if config.AUTO_SEND_ATHLETE_MESSAGES and config.DRY_RUN:
+        print(f"[DRY_RUN] would send {msg_type} to {name} (not sent)")
+        return False
     if config.AUTO_SEND_ATHLETE_MESSAGES:
         fitr.send_chat_message(room_id, msg)
         return True

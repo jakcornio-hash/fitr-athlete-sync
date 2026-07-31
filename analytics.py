@@ -1682,6 +1682,66 @@ def normalise_client_name(s):
     return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
 
 
+def _name_tokens(s):
+    """Lowercase word tokens of a name, splitting hyphens and dropping emoji."""
+    return [t for t in re.sub(r"[^a-z0-9 ]", " ", str(s or "").lower()).split() if t]
+
+
+def match_athlete_name(raw_name, known_names, cutoff=0.6):
+    """Resolve a self-typed form name to a known athlete, or None.
+
+    A whole-string similarity score on its own is not safe enough to write
+    data against. Two different athletes who share a first name score as high
+    as two spellings of the same person: 'Scott Maynard' vs 'Scott Sumner'
+    scores 0.72 while the genuine 'chelsea eddy-waland' vs 'Chelsea Eddy'
+    scores 0.77. Matching on the score alone filed competitions and archetype
+    results against the wrong athlete.
+
+    So a candidate must also agree on the family name: the candidate's last
+    token has to appear among the raw name's tokens (exactly, or at 0.85+ for
+    a typo). That keeps the real variants — dropped middle name, shortened
+    first name, double-barrelled surname — and rejects a shared first name.
+
+    Single-token names carry no family name to check, so they must match a
+    known name outright.
+    """
+    import difflib
+    raw = str(raw_name or "").strip()
+    if not raw or not known_names:
+        return None
+
+    by_lower = {}
+    for k in known_names:
+        by_lower.setdefault(str(k).strip().lower(), k)
+
+    if raw.lower() in by_lower:
+        return by_lower[raw.lower()]
+
+    raw_tokens = _name_tokens(raw)
+    if not raw_tokens:
+        return None
+
+    if len(raw_tokens) == 1:
+        return None
+
+    best, best_score = None, 0.0
+    for lower, original in by_lower.items():
+        score = difflib.SequenceMatcher(None, raw.lower(), lower).ratio()
+        if score < cutoff or score <= best_score:
+            continue
+        cand_tokens = _name_tokens(lower)
+        if len(cand_tokens) < 2:
+            continue
+        surname = cand_tokens[-1]
+        agrees = surname in raw_tokens or any(
+            difflib.SequenceMatcher(None, surname, t).ratio() >= 0.85
+            for t in raw_tokens
+        )
+        if agrees:
+            best, best_score = original, score
+    return best
+
+
 def _challenge_tokens(title):
     """Discriminative words in a challenge title (drops emoji, punctuation, and
     the words 'test'/'retest' themselves) so a Test can be matched to its Retest."""
