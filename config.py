@@ -330,19 +330,25 @@ TSHIRT_FORM_COUNTRY_COL = "Country"
 # Format: YYYY-MM-DD. Override via FOUNDING_MEMBER_CUTOFF env var.
 FOUNDING_MEMBER_CUTOFF = _get("FOUNDING_MEMBER_CUTOFF", "2024-12-31")
 
-# Monthly revenue TO JST per plan — used for MRR in the Finance/Grand Slam tabs.
-# Keys must exactly match the values stored in the "Subscription Plan" column of _DATA.
-# Leave a plan out or set to 0 to exclude it from MRR calculations.
-# NOTE: Bespoke/Semi-Bespoke subscription money goes to the contractor coach;
-# JST charges the coach £40 per client, so JST's MRR per bespoke client is 40.
-SUBSCRIPTION_PRICES = {
-    "Bespoke": 40,
-    "JST Athlete": 54.99,
-    "Strength Bias": 54.99,
-    "Engine Bias": 54.99,
-    "Gymnastics Bias": 54.99,
-    "Competition Ready": 54.99,
+# MRR is worked out by analytics.monthly_value(), which reads the price out of
+# the Subscription Plan string itself ("Monthly (£54.99)", "Yearly (£549)").
+# That string is what billing writes, so it carries the real figure and stays
+# right when prices change.
+#
+# These are only the fallback for a plan recorded with a cadence but no figure
+# (a bare "Monthly"), keyed by the number of months the payment covers.
+# An earlier table keyed by programme name matched none of the 360 athletes,
+# which is why the Finance tab showed £0 MRR from the day it was written.
+SUBSCRIPTION_FALLBACK_PRICES = {
+    1: 54.99,     # monthly
+    3: 144,       # quarterly
+    12: 549,      # yearly
 }
+
+# Bespoke athletes pay the contractor coach directly; JST charges that coach a
+# flat fee per client, so this — not the subscription — is JST's monthly
+# revenue for them. Bespoke is read from Programming Tier, not Subscription Plan.
+BESPOKE_MONTHLY_TO_JST = float(_get("BESPOKE_MONTHLY_TO_JST", "40"))
 
 # Automated athlete messages are OFF. Everything the sync would have sent is
 # queued as a draft on the dashboard action list for a coach to read, edit and

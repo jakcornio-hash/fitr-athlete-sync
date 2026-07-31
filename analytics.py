@@ -1682,6 +1682,46 @@ def normalise_client_name(s):
     return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
 
 
+_CADENCE_MONTHS = {"month": 1, "quarter": 3, "year": 12, "annual": 12}
+
+
+def monthly_value(subscription_plan, programming_tier="", fallbacks=None,
+                  bespoke_value=None):
+    """Monthly revenue to JST for one athlete, from their Subscription Plan.
+
+    The price is read out of the plan string itself ("Monthly (£54.99)" ->
+    54.99/month, "Yearly (£549)" -> 45.75/month), because that string is what
+    the billing system actually writes and it carries the real figure. The old
+    lookup table was keyed by programme name ("JST Athlete", "Strength Bias")
+    while the column holds billing cadence, so it matched 0 of 360 athletes and
+    the Finance tab reported £0 MRR from the day it was built.
+
+    Bespoke is charged differently — the athlete pays the contractor coach and
+    JST takes a per-client fee — so it is keyed off Programming Tier, which is
+    where bespoke actually lives.
+    """
+    if str(programming_tier or "").strip().lower() == "bespoke":
+        return float(bespoke_value if bespoke_value is not None else 40)
+
+    plan = str(subscription_plan or "").strip()
+    if not plan:
+        return 0.0
+
+    low = plan.lower()
+    months = next((m for word, m in _CADENCE_MONTHS.items() if word in low), None)
+    if months is None:
+        return 0.0
+
+    m = re.search(r"[£$]?\s*([0-9]+(?:\.[0-9]{1,2})?)", plan)
+    if m:
+        return round(float(m.group(1)) / months, 2)
+
+    # No figure in the string (a bare "Monthly"). Fall back to the configured
+    # price for that cadence rather than silently counting the athlete as £0.
+    fb = (fallbacks or {}).get(months)
+    return round(float(fb) / months, 2) if fb else 0.0
+
+
 def canonical_date_key(s):
     """A date string reduced to YYYY-MM-DD for comparison, else the raw text.
 

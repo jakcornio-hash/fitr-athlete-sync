@@ -88,3 +88,43 @@ def test_different_dates_stay_different():
 def test_unparseable_date_falls_back_to_text():
     assert analytics.canonical_date_key("summer 2027") == "summer 2027"
     assert analytics.canonical_date_key("") == ""
+
+
+# ── MRR from the subscription plan string ─────────────────────────────────────
+
+FB = {1: 54.99, 3: 144, 12: 549}
+
+
+def test_monthly_plan_reads_its_own_price():
+    assert analytics.monthly_value("Monthly (£54.99)", "Standard", FB) == 54.99
+
+
+def test_yearly_plan_is_spread_over_twelve_months():
+    assert analytics.monthly_value("Yearly (£549)", "Standard", FB) == 45.75
+
+
+def test_quarterly_plan_is_spread_over_three_months():
+    assert analytics.monthly_value("Quarterly (£144)", "Standard", FB) == 48.0
+
+
+def test_bare_cadence_falls_back_rather_than_counting_zero():
+    """184 athletes are on "Monthly (£54.99)" and 55 on a bare "Monthly"; the
+    bare ones must not silently count as £0."""
+    assert analytics.monthly_value("Monthly", "Standard", FB) == 54.99
+    assert analytics.monthly_value("Quarterly", "Standard", FB) == 48.0
+
+
+def test_bespoke_is_priced_off_programming_tier():
+    """Bespoke athletes pay the contractor coach; JST takes a flat fee."""
+    assert analytics.monthly_value("Monthly (£54.99)", "Bespoke", FB, bespoke_value=40) == 40
+
+
+def test_blank_or_unknown_plan_is_zero():
+    assert analytics.monthly_value("", "Standard", FB) == 0.0
+    assert analytics.monthly_value("Comped", "Standard", FB) == 0.0
+
+
+def test_the_old_programme_keyed_table_matched_nothing():
+    """Guards the actual defect: the table was keyed by programme name."""
+    old_table = {"JST Athlete": 54.99, "Strength Bias": 54.99}
+    assert old_table.get("Monthly (£54.99)", 0) == 0

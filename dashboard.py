@@ -428,6 +428,16 @@ def _mark_action_done(name, key, priority):
     _action_log_cached.clear()
 
 
+def _athlete_mrr(rec):
+    """Monthly revenue to JST for one _DATA row. One definition, three tabs."""
+    return analytics.monthly_value(
+        rec.get("Subscription Plan", ""),
+        rec.get("Programming Tier", ""),
+        fallbacks=getattr(config, "SUBSCRIPTION_FALLBACK_PRICES", {}),
+        bespoke_value=getattr(config, "BESPOKE_MONTHLY_TO_JST", 40),
+    )
+
+
 _STATUS_TAB = "Athlete Status Overrides"
 _STATUS_HEADER = ["Name", "Status", "Date", "By", "Note"]
 
@@ -5510,12 +5520,16 @@ def _crm_revenue(data_records):
     st.markdown("### Revenue")
     st.caption("Monthly recurring revenue by subscription plan, based on _DATA 'Subscription Plan' column")
 
-    # Build {plan: count} from data_records
+    # Build {plan: count} from data_records, and the per-athlete monthly value.
+    # Bespoke is priced off Programming Tier, so it is summed per athlete rather
+    # than assumed uniform across a plan.
     plan_counts = {}
+    plan_value = {}
     for r in (data_records or []):
         plan = str(r.get("Subscription Plan", "")).strip()
         if plan:
             plan_counts[plan] = plan_counts.get(plan, 0) + 1
+            plan_value[plan] = plan_value.get(plan, 0.0) + _athlete_mrr(r)
 
     if not plan_counts:
         st.info("No subscription plan data found in _DATA. Add a 'Subscription Plan' column to your athlete sheet.")
@@ -5527,8 +5541,8 @@ def _crm_revenue(data_records):
     total_athletes = 0
     total_mrr = 0
     for plan, count in sorted(plan_counts.items(), key=lambda x: -x[1]):
-        price = config.SUBSCRIPTION_PRICES.get(plan, 0)
-        mrr = price * count
+        mrr = round(plan_value.get(plan, 0.0), 2)
+        price = round(mrr / count, 2) if count else 0
         total_athletes += count
         total_mrr += mrr
         plan_rows.append({
@@ -5585,7 +5599,8 @@ def _crm_revenue(data_records):
     if unpriced:
         st.caption(
             f"Plans without a configured price: {', '.join(unpriced)}. "
-            "Update SUBSCRIPTION_PRICES in config.py to include unpriced plans."
+            "Set SUBSCRIPTION_FALLBACK_PRICES in config.py for plans recorded "
+            "without a price in the plan name."
         )
 
 
@@ -6622,16 +6637,12 @@ def page_grandslam(grandslam_results, data_records, pr_records=None, athletes=No
 
     # ── Shared pre-computation ───────────────────────────────────────────────
     data_by_nm = {str(r.get("Full Name", "")).strip(): r for r in (data_records or [])}
-    prices = getattr(config, "SUBSCRIPTION_PRICES", {})
 
     stage_counts = {}
     for r in grandslam_results:
         stage_counts[r["journey_stage"]] = stage_counts.get(r["journey_stage"], 0) + 1
 
-    mrr = sum(
-        prices.get(str(dr.get("Subscription Plan", "")).strip(), 0)
-        for dr in data_by_nm.values()
-    )
+    mrr = sum(_athlete_mrr(dr) for dr in data_by_nm.values())
     active_lifers = sum(1 for r in grandslam_results if r["journey_stage"] == "💎 Lifer")
     elite_count   = sum(1 for r in grandslam_results if r["journey_stage"] == "🏆 Elite")
     drifting      = sum(1 for r in grandslam_results if r["journey_stage"] == "⚠️ Drifting")
@@ -8638,7 +8649,6 @@ def page_finance(data_records, pr_records, athletes, gone_norm=None):
         "and gym referral credits payable."
     )
 
-    prices = getattr(config, "SUBSCRIPTION_PRICES", {})
     # Only genuinely-gone athletes come out of MRR. Excluding everyone who has
     # ever appeared in the Exit Autopsy understated revenue by ~20 athletes who
     # gave notice but are still on the Active Roster and still being billed:
@@ -8667,7 +8677,7 @@ def page_finance(data_records, pr_records, athletes, gone_norm=None):
     drifting_rows, churned_rows = [], []
     for nm, rec in data_by_nm.items():
         plan = str(rec.get("Subscription Plan", "")).strip()
-        price = prices.get(plan, 0)
+        price = _athlete_mrr(rec)
         if not price:
             continue
         total_mrr += price
@@ -8719,7 +8729,7 @@ def page_finance(data_records, pr_records, athletes, gone_norm=None):
         f"({healthy_mrr / total_mrr * 100:.0f}% of book)."
         if total_mrr else
         "No priced subscriptions found — check the 'Subscription Plan' column in _DATA "
-        "and SUBSCRIPTION_PRICES in config.py."
+        "and SUBSCRIPTION_FALLBACK_PRICES in config.py."
     )
 
     st.divider()
