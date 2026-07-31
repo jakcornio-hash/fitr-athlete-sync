@@ -33,7 +33,7 @@ def _fmt_date(d):
 
 def build_digest(date, engagement_results, trend_results,
                  rec_alert_rows, milestones, consistency_wins,
-                 declining_singles=None):
+                 declining_singles=None, health_findings=None):
     """Returns (plain_text, slack_text) — action-focused, fits ~1 hour of coaching work."""
     sections_plain = []
     sections_slack = []
@@ -126,12 +126,27 @@ def build_digest(date, engagement_results, trend_results,
 
     header = f"JST Compete — Today's Coaching Actions | {date}"
 
-    if not sections_plain:
+    # Health findings go ABOVE the coaching sections. They are the things that
+    # stop the rest of this digest being true, and burying them in a log is how
+    # they went unnoticed for months.
+    health_plain, health_slack = "", ""
+    if health_findings:
+        try:
+            import health_check
+            health_plain, health_slack = health_check.format_findings(health_findings)
+        except Exception:
+            health_plain = health_slack = ""
+
+    if not sections_plain and not health_plain:
         msg = f"{header}\n\nNothing to action today — all athletes on track. 💪"
         return msg, msg
 
     # plain text
     plain_parts = ["=" * 60, header, "=" * 60, ""]
+    if health_plain:
+        plain_parts.append("SYSTEM HEALTH")
+        plain_parts.append(health_plain)
+        plain_parts.append("")
     for heading, lines in sections_plain:
         plain_parts.append(f"{heading} ({len(lines)})")
         plain_parts.extend(lines)
@@ -141,6 +156,10 @@ def build_digest(date, engagement_results, trend_results,
 
     # slack text
     slack_parts = [f"*{header}*", ""]
+    if health_slack:
+        slack_parts.append("*SYSTEM HEALTH*")
+        slack_parts.append(health_slack)
+        slack_parts.append("")
     for heading, lines in sections_slack:
         slack_parts.append(f"{heading} ({len(lines)})")
         slack_parts.extend(lines)
@@ -696,11 +715,11 @@ def send_draft_reply_alerts(pending, programme_by_name=None, coach_channel_map=N
 
 def send_digest(date, engagement_results, trend_results,
                 rec_alert_rows, milestones, consistency_wins,
-                declining_singles=None):
+                declining_singles=None, health_findings=None):
     plain, slack_text = build_digest(
         date, engagement_results, trend_results,
         rec_alert_rows, milestones, consistency_wins,
-        declining_singles=declining_singles,
+        declining_singles=declining_singles, health_findings=health_findings,
     )
     subject = f"JST Compete Coaching Digest — {date}"
 

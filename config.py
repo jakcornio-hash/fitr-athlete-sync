@@ -349,3 +349,8 @@ SUBSCRIPTION_PRICES = {
 # send. Set AUTO_SEND_ATHLETE_MESSAGES=true to go back to sending automatically.
 AUTO_SEND_ATHLETE_MESSAGES = _get("AUTO_SEND_ATHLETE_MESSAGES", "").strip().lower() in ("1", "true", "yes")
 TAB_PENDING_MESSAGES = "Pending Messages"
+
+# Daily health check: also render every dashboard tab headlessly and report any
+# that raise. Costs ~80s and a second pass over the Sheets read quota, so it is
+# on in the scheduled GitHub Actions run and off for ad-hoc local runs.
+HEALTH_CHECK_PAGES = _get("HEALTH_CHECK_PAGES", "").strip().lower() in ("1", "true", "yes")

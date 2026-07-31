@@ -27,6 +27,7 @@ from fitr_client import FitrClient, FitrError, format_thread, profiles_from_room
 from sheets_client import SheetsClient
 import analytics
 import archetypes
+import health_check
 import notifier
 import summariser
 import coaching_voice
@@ -2019,10 +2020,33 @@ def main():
 
     # ---- digest notification ----
     print("Sending digest...")
+    # ---- health check: run before the digest so failures ride out with it ----
+    # Deliberately on the digest a coach already opens rather than in the run
+    # log. Every check here exists because the thing it looks for broke and
+    # nobody noticed for weeks.
+    health_findings = []
+    try:
+        health_findings = health_check.run_health_check(
+            sheets, analytics,
+            data_records=data_recs,
+            bespoke_names=bespoke_names,
+            gone_norm=_gone_norm,
+            engagement_results=engagement_results,
+            check_pages=config.HEALTH_CHECK_PAGES,
+        )
+        _fails = [f for f in health_findings if f.severity == health_check.FAIL]
+        print(f"Health check: {len(_fails)} broken, "
+              f"{len(health_findings) - len(_fails)} worth a look")
+        for f in health_findings:
+            print(f"  [{f.severity}] {f.line()}")
+    except Exception as exc:
+        print(f"  ! Health check failed to run: {exc}")
+
     notifier.send_digest(
         TODAY, engagement_results, trend_results,
         rec_alert_rows, milestones, consistency_wins,
         declining_singles=declining_singles,
+        health_findings=health_findings,
     )
 
     # ---- first-Monday reminder: refresh the Active Roster ----

@@ -68,6 +68,10 @@ jobs:
           SMTP_TO: ${{ secrets.SMTP_TO }}
           LOOKBACK_DAYS: "7"
           MAX_CHAT_SUMMARIES: "40"
+          # Render every dashboard tab as part of the health check, so a page
+          # that raises on load is reported on the digest the same morning
+          # rather than whenever a coach next happens to open that tab.
+          HEALTH_CHECK_PAGES: "1"
         run: python sync.py
 
       - name: Notify on failure
