@@ -214,19 +214,37 @@ def run_analytics(pr_records, athletes, rec_latest, data_records=None, competiti
     )
     consistency_wins = analytics.consistency_check(pr_records, athletes)
 
-    # Build rec_by_name from latest recovery (email → name mapping via PR log)
-    email_by_name = {}
+    # Map recovery submissions to athletes. Resolving on PR Log emails alone hid
+    # a third of all submissions, because plenty of athletes fill the form in
+    # with a personal address that never appears in the PR Log. So: PR Log
+    # emails, then _DATA emails, then the name the athlete typed on the form.
+    email_to_name = {}
     for r in pr_records:
         nm = str(r.get("Athlete Name", "")).strip()
         em = str(r.get("Email", "")).strip().lower()
         if nm and em:
-            email_by_name.setdefault(nm, em)
-    email_to_name = {v: k for k, v in email_by_name.items()}
-    rec_by_name = {
-        email_to_name[em]: row
-        for em, row in rec_latest.items()
-        if em.lower() in email_to_name
-    }
+            email_to_name.setdefault(em, nm)
+    name_lookup = {}
+    for r in (data_records or []):
+        nm = str(r.get("Full Name", "")).strip()
+        em = str(r.get("Email", "")).strip().lower()
+        if nm and em:
+            email_to_name.setdefault(em, nm)
+        if nm:
+            name_lookup[analytics.normalise_client_name(nm)] = nm
+    for r in pr_records:
+        nm = str(r.get("Athlete Name", "")).strip()
+        if nm:
+            name_lookup.setdefault(analytics.normalise_client_name(nm), nm)
+
+    rec_by_name = {}
+    for em, row in rec_latest.items():
+        nm = email_to_name.get(str(em).strip().lower())
+        if not nm:
+            typed = analytics.normalise_client_name(row.get("Name:", ""))
+            nm = name_lookup.get(typed)
+        if nm:
+            rec_by_name[nm] = row
     rec_alert_rows = analytics.recovery_alerts(rec_by_name)
 
     # Use the Competitions tab if available; fall back to _DATA columns

@@ -52,8 +52,32 @@ class SheetsClient:
             return ws
 
     def read_records(self, title):
-        """Return list of dict rows (row 1 = headers)."""
-        return self.worksheet(title).get_all_records()
+        """Return list of dict rows (row 1 = headers).
+
+        Built by position rather than via get_all_records(), which raises as soon
+        as the header row has duplicates. Sheets people actually work in pick up
+        trailing empty header cells all the time (deleting a column, pasting a
+        block), and that was enough to take a whole dashboard tab offline. Blank
+        header columns are skipped and the first occurrence of a repeated header
+        wins.
+        """
+        ws = self.worksheet(title)
+        try:
+            return ws.get_all_records()
+        except Exception:
+            pass  # duplicate/blank headers — fall back to reading by position
+        values = ws.get_all_values()
+        if not values:
+            return []
+        cols, seen = [], set()
+        for i, h in enumerate(values[0]):
+            name = str(h).strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            cols.append((i, name))
+        return [{name: (row[i] if i < len(row) else "") for i, name in cols}
+                for row in values[1:]]
 
     def read_values(self, title):
         return self.worksheet(title).get_all_values()
