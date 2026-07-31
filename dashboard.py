@@ -6667,11 +6667,11 @@ def page_grandslam(grandslam_results, data_records, pr_records=None, athletes=No
     import datetime as _dt
     _today = _dt.date.today()
     _new_mrr = sum(
-        prices.get(str(data_by_nm.get(r["name"], {}).get("Subscription Plan", "")).strip(), 0)
+        _athlete_mrr(data_by_nm.get(r["name"], {}))
         for r in grandslam_results if r.get("days_tenure", 999) <= 30
     )
     _lost_mrr = sum(
-        prices.get(str(data_by_nm.get(r["name"], {}).get("Subscription Plan", "")).strip(), 0)
+        _athlete_mrr(data_by_nm.get(r["name"], {}))
         for r in grandslam_results if 60 <= r.get("days_since_log", 0) <= 89
     )
     _net_mrr = _new_mrr - _lost_mrr
