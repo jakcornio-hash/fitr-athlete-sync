@@ -526,6 +526,67 @@ def _set_programme(name, programme):
     load_all.clear()
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def _pending_messages_cached():
+    """Drafts the sync queued instead of sending. TTL=1min."""
+    try:
+        return [r for r in get_sheets().read_records(config.TAB_PENDING_MESSAGES)
+                if str(r.get("Status", "")).strip().lower() == "pending"]
+    except Exception:
+        return []
+
+
+def _mark_pending_sent(row_idx, status="sent"):
+    """Mark a queued draft as dealt with. row_idx is the sheet row number."""
+    try:
+        ws = get_sheets().worksheet(config.TAB_PENDING_MESSAGES)
+        header = [h.strip() for h in ws.row_values(1)]
+        col = header.index("Status") + 1
+        ws.update_cell(row_idx, col, status)
+        _pending_messages_cached.clear()
+    except Exception as exc:
+        st.error(f"Couldn't update that draft: {exc}")
+
+
+def _render_pending_messages():
+    """Everything the sync drafted, waiting for a coach to send it.
+
+    Automatic sending is off, so this is the only route these messages take to
+    an athlete. If nobody works this list, nobody hears from us.
+    """
+    pending = _pending_messages_cached()
+    if not pending:
+        return
+    st.subheader(f"✉️ Drafted and waiting to send ({len(pending)})")
+    st.caption(
+        "The system wrote these but did not send them. Read, tweak, send, then "
+        "mark them sent. Nothing here reaches an athlete on its own."
+    )
+    _labels = {"congrats": "🏆 Congrats", "anniversary": "🎉 Milestone",
+               "onboarding": "👋 Onboarding", "offboarding": "👋 Offboarding",
+               "referral": "🤝 Referral", "monthly_fitr": "📅 Monthly"}
+    for i, r in enumerate(pending):
+        nm = str(r.get("Athlete Name", "")).strip()
+        mt = str(r.get("Message Type", "")).strip()
+        label = _labels.get(mt, mt.replace("_", " ").title())
+        with st.expander(f"{label} — **{nm}** · queued {r.get('Date', '')}", expanded=i < 3):
+            msg = str(r.get("Message", ""))
+            st.text_area("Message", value=msg, height=120,
+                         key=f"pend_msg_{i}", label_visibility="collapsed")
+            b1, b2, b3 = st.columns([1, 1, 3])
+            with b1:
+                if st.button("✅ Mark sent", key=f"pend_sent_{i}"):
+                    _mark_pending_sent(i + 2)   # +2: header row plus 1-indexing
+                    st.rerun()
+            with b2:
+                if st.button("🗑️ Skip", key=f"pend_skip_{i}"):
+                    _mark_pending_sent(i + 2, "skipped")
+                    st.rerun()
+            with b3:
+                _outreach_send_buttons(st.session_state.get(f"pend_msg_{i}", msg))
+    st.divider()
+
+
 def _render_athlete_quick_actions(name, rec, key_prefix):
     """Cancel / note / programme controls, for use inline on the action list."""
     t1, t2, t3 = st.tabs(["📝 Note", "🎯 Programme", "🚫 Cancelled"])
@@ -3840,6 +3901,8 @@ def page_action_list(engagement_results, trend_results, rec_alert_rows, mileston
     _rec_by_name_al = {str(r.get("Full Name", "")).strip(): r
                        for r in (data_records or [])}
 
+    _render_pending_messages()
+
     _render_archetype_deliveries({
         str(r.get("Full Name", "")).strip(): r for r in (data_records or [])
     })
@@ -5943,8 +6006,14 @@ first Monday of each month and gets a reminder to do it.
 """)
 
     # ── What the system does automatically ───────────────────────────────────
-    st.markdown("### What the system handles automatically")
-    st.caption("These run on the daily sync. You don't need to do anything for them.")
+    st.error(
+        "**Automatic messages to athletes are OFF.** The system still spots every "
+        "trigger below and writes the message, but it no longer sends anything. "
+        "Drafts appear at the top of the ✅ Actions tab under **Drafted and waiting "
+        "to send**. If nobody works that list, athletes hear nothing."
+    )
+    st.markdown("### What the system drafts for you")
+    st.caption("These are spotted on the daily sync and queued as drafts to send.")
     st.markdown("""
 | Message type | When it sends | Notes |
 |---|---|---|

@@ -962,6 +962,39 @@ def sync_programme_from_recovery(sheets, rec_latest, email_by_name):
     return len(updates)
 
 
+# ------------------------------------------------------------ message delivery
+_PENDING_MESSAGES = []
+
+
+def _deliver(fitr, room_id, msg, name, msg_type):
+    """Send an athlete message, or queue it as a draft for a coach to send.
+
+    With config.AUTO_SEND_ATHLETE_MESSAGES off (the default), nothing goes to an
+    athlete automatically. The message is written to the Pending Messages tab
+    and appears on the dashboard action list, where a coach reads it, edits it
+    if they want, and sends it. Same drafting, same triggers, a person on the end.
+    """
+    if config.AUTO_SEND_ATHLETE_MESSAGES:
+        fitr.send_chat_message(room_id, msg)
+        return True
+    _PENDING_MESSAGES.append([
+        TODAY.isoformat(), str(name), str(msg_type), str(msg), str(room_id), "pending",
+    ])
+    return False
+
+
+def flush_pending_messages(sheets):
+    """Write queued drafts to the Pending Messages tab for the dashboard."""
+    if not _PENDING_MESSAGES or config.DRY_RUN:
+        return 0
+    header = ["Date", "Athlete Name", "Message Type", "Message", "Room ID", "Status"]
+    sheets.get_or_create(config.TAB_PENDING_MESSAGES, header)
+    sheets.append_rows(config.TAB_PENDING_MESSAGES, _PENDING_MESSAGES)
+    n = len(_PENDING_MESSAGES)
+    _PENDING_MESSAGES.clear()
+    return n
+
+
 # --------------------------------------------------------------- notes writer
 def append_coaching_notes(sheets, note_lines_by_name):
     """Append (never overwrite) to the Coaching Notes column in _DATA."""
@@ -1737,10 +1770,10 @@ def main():
             )
 
             try:
-                fitr.send_chat_message(room_id, msg)
+                _deliver(fitr, room_id, msg, name, "congrats")
                 congrats_sent += 1
                 messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": name,
-                                          "Message Type": "congrats", "Room ID": room_id})
+                    "Message Type": "congrats", "Room ID": room_id})
                 if _ride_along_streak:
                     note_key = f"streak_{_ride_along_streak}d"
                     _streak_notes[name] = f"[{TODAY.isoformat()} — {note_key}]"
@@ -1765,12 +1798,12 @@ def main():
             _streak_situation, _streak_msgs[streak_days].format(first=first),
             playbook=coaching_voice.playbook_prompt(sheets, "consistency"))
         try:
-            fitr.send_chat_message(room_id, msg)
+            _deliver(fitr, room_id, msg, nm, note_key)
             _streak_notes[nm] = f"[{TODAY.isoformat()} — {note_key}]"
             _streak_sent += 1
             messages_sent_log.append({
                 "Date": TODAY.isoformat(), "Athlete Name": nm,
-                "Message Type": note_key, "Room ID": room_id,
+                    "Message Type": note_key, "Room ID": room_id,
             })
             import time as _time; _time.sleep(0.5)
         except FitrError as exc:
@@ -1866,10 +1899,10 @@ def main():
                 _off_situation, _off_fallback,
                 playbook=coaching_voice.playbook_prompt(sheets, "inactive_60d"))
             try:
-                fitr.send_chat_message(room_id, msg)
+                _deliver(fitr, room_id, msg, nm, "offboarding")
                 offboarding_sent += 1
                 messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
-                                          "Message Type": "offboarding", "Room ID": room_id})
+                    "Message Type": "offboarding", "Room ID": room_id})
                 import time as _time; _time.sleep(0.5)
             except FitrError as exc:
                 print(f"  ! Off-boarding message failed for {nm}: {exc}")
@@ -1921,7 +1954,7 @@ def main():
                 """Try Fitr DM first; fall back to coach Slack channel."""
                 _room = room_id_by_name.get(_referrer)
                 if _room:
-                    fitr.send_chat_message(_room, msg)
+                    _deliver(fitr, _room, msg, _referrer, "referral")
                     return True
                 _ch = _coach_slack.get(_referrer)
                 if _ch:
@@ -2161,10 +2194,10 @@ def main():
                 f"marking. How's it feeling compared to when you started?"
             )
         try:
-            fitr.send_chat_message(room_id, msg)
+            _deliver(fitr, room_id, msg, nm, "anniversary")
             anniversaries_sent += 1
             messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
-                                      "Message Type": "anniversary", "Room ID": room_id})
+                    "Message Type": "anniversary", "Room ID": room_id})
             import time as _time; _time.sleep(0.5)
         except FitrError as exc:
             print(f"  ! Anniversary message failed for {nm}: {exc}")
@@ -2204,10 +2237,10 @@ def main():
             f"Message me here anytime."
         )
         try:
-            fitr.send_chat_message(room_id, msg)
+            _deliver(fitr, room_id, msg, nm, "onboarding")
             onboarding_sent += 1
             messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
-                                      "Message Type": "onboarding", "Room ID": room_id})
+                    "Message Type": "onboarding", "Room ID": room_id})
             import time as _time; _time.sleep(0.5)
         except FitrError as exc:
             print(f"  ! Onboarding message failed for {nm}: {exc}")
@@ -2271,10 +2304,10 @@ def main():
         _, msg_tpl = template
         msg = msg_tpl.format(first=first, comp=comp_nm, today=TODAY.strftime("%d %b %Y"))
         try:
-            fitr.send_chat_message(room_id, msg)
+            _deliver(fitr, room_id, msg, nm, f"pre_comp_{days_out}d")
             comp_msgs_sent += 1
             messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
-                                      "Message Type": f"pre_comp_{days_out}d", "Room ID": room_id})
+                    "Message Type": f"pre_comp_{days_out}d", "Room ID": room_id})
             import time as _time; _time.sleep(0.5)
         except FitrError as exc:
             print(f"  ! Pre-comp message failed for {nm}: {exc}")
@@ -2336,10 +2369,10 @@ def main():
         else:
             msg = f"{first}, how did {comp_nm} go? What's the result and what are you taking from it?"
         try:
-            fitr.send_chat_message(room_id, msg)
+            _deliver(fitr, room_id, msg, nm, msg_type_key)
             post_comp_msgs_sent += 1
             messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
-                                      "Message Type": msg_type_key, "Room ID": room_id})
+                    "Message Type": msg_type_key, "Room ID": room_id})
             import time as _time; _time.sleep(0.5)
         except FitrError as exc:
             print(f"  ! Post-comp message failed for {nm}: {exc}")
@@ -2377,10 +2410,10 @@ def main():
         first = nm.split()[0]
         msg = f"{first}, {result} at {comp_nm}. Nice one. What stood out from the day?"
         try:
-            fitr.send_chat_message(room_id, msg)
+            _deliver(fitr, room_id, msg, nm, msg_type_key)
             comp_result_msgs_sent += 1
             messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
-                                      "Message Type": msg_type_key, "Room ID": room_id})
+                    "Message Type": msg_type_key, "Room ID": room_id})
             import time as _time; _time.sleep(0.5)
         except FitrError as exc:
             print(f"  ! Comp result message failed for {nm}: {exc}")
@@ -2520,7 +2553,7 @@ def main():
                 f"{_sessions} session{'s' if _sessions != 1 else ''} logged. Solid month."
             )
             try:
-                fitr.send_chat_message(_room, _msg)
+                _deliver(fitr, _room, _msg, _nm, "monthly_fitr")
                 _mfitr_notes[_nm] = f"[{TODAY.isoformat()} — monthly_fitr]"
                 _mfitr_sent += 1
                 messages_sent_log.append({
@@ -2594,6 +2627,11 @@ def main():
         len(rec_notes), notes_written, onboarded, emails_sent,
         ("Unknown athletes seen: " + ", ".join(unknown)) if unknown else "ok",
     ]])
+
+    _queued = flush_pending_messages(sheets)
+    if _queued:
+        print(f"Messages queued as drafts for a coach to send: {_queued} "
+              f"(automatic sending is off)")
 
     print("== Done ==")
 

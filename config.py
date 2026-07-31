@@ -343,3 +343,9 @@ SUBSCRIPTION_PRICES = {
     "Gymnastics Bias": 54.99,
     "Competition Ready": 54.99,
 }
+
+# Automated athlete messages are OFF. Everything the sync would have sent is
+# queued as a draft on the dashboard action list for a coach to read, edit and
+# send. Set AUTO_SEND_ATHLETE_MESSAGES=true to go back to sending automatically.
+AUTO_SEND_ATHLETE_MESSAGES = _get("AUTO_SEND_ATHLETE_MESSAGES", "").strip().lower() in ("1", "true", "yes")
+TAB_PENDING_MESSAGES = "Pending Messages"
