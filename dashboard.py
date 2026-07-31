@@ -353,6 +353,14 @@ def _mark_story_asked(name):
 # A message about something that happened last month isn't worth sending, and a
 # list that only ever grows stops being a to-do list. Marking one done also
 # suppresses it for 7 days so a still-unresolved issue can resurface later.
+def _neg_date(iso):
+    """Sort key that puts the newest date first while keeping other keys ascending."""
+    try:
+        return -dt.date.fromisoformat(str(iso)[:10]).toordinal()
+    except Exception:
+        return 0
+
+
 ACTION_ITEM_TTL_DAYS = 7
 ACTION_DONE_SUPPRESS_DAYS = 7
 _ACTION_LOG_TAB = "Action Log"
@@ -499,12 +507,70 @@ def _log_exit_autopsy(name, bucket, reason_text, rec=None):
         return False
 
 
-def _set_subscription_plan(name, plan):
-    """Set an athlete's plan in _DATA. 'Bespoke' suppresses automated messages,
-    so this is how a coach moves someone onto individual coaching."""
+def _set_programming_tier(name, tier):
+    """Set an athlete's Programming Tier ('Bespoke' = individual coaching).
+
+    Deliberately NOT Subscription Plan: that column holds the billing plan
+    (Monthly (£54.99), Yearly (£549)) and writing "Bespoke" over it would
+    destroy the billing record.
+    """
     get_sheets().batch_update_by_name(
-        config.TAB_DATA, "Full Name", {name: {"Subscription Plan": plan}})
+        config.TAB_DATA, "Full Name", {name: {"Programming Tier": tier}})
     load_all.clear()
+
+
+def _set_programme(name, programme):
+    """Set which programme/track an athlete is following."""
+    get_sheets().batch_update_by_name(
+        config.TAB_DATA, "Full Name", {name: {"Programme": programme}})
+    load_all.clear()
+
+
+def _render_athlete_quick_actions(name, rec, key_prefix):
+    """Cancel / note / programme controls, for use inline on the action list."""
+    t1, t2, t3 = st.tabs(["📝 Note", "🎯 Programme", "🚫 Cancelled"])
+    with t1:
+        with st.form(f"{key_prefix}_note_{name}", clear_on_submit=True):
+            txt = st.text_area("Note", key=f"{key_prefix}_nt_{name}",
+                               placeholder="What did you discuss?", height=70)
+            kind = st.selectbox("Type", ["note", "chat", "result", "recovery", "goal"],
+                                key=f"{key_prefix}_nk_{name}")
+            if st.form_submit_button("Save note") and txt.strip():
+                if _append_coaching_note(name, f"[{TODAY.isoformat()} — {kind}] {txt.strip()}"):
+                    st.success("Note saved.")
+                    st.rerun()
+    with t2:
+        cur_prog = str(rec.get("Programme", "")).strip()
+        cur_tier = str(rec.get("Programming Tier", "")).strip()
+        st.caption(f"Currently: **{cur_prog or 'not set'}** · tier **{cur_tier or 'Standard'}**")
+        with st.form(f"{key_prefix}_prog_{name}"):
+            new_prog = st.text_input("Programme / track", value=cur_prog,
+                                     key=f"{key_prefix}_pg_{name}")
+            new_tier = st.selectbox(
+                "Coaching type", ["Standard", "Bespoke"],
+                index=1 if cur_tier.lower() == "bespoke" else 0,
+                key=f"{key_prefix}_pt_{name}",
+                help="Bespoke means individual coaching, which suppresses automated messages.",
+            )
+            if st.form_submit_button("Save"):
+                if new_prog.strip() != cur_prog:
+                    _set_programme(name, new_prog.strip())
+                if new_tier != (cur_tier or "Standard"):
+                    _set_programming_tier(name, new_tier)
+                st.success("Updated.")
+                st.rerun()
+    with t3:
+        st.caption("Takes them off every list and stops all automated messages.")
+        with st.form(f"{key_prefix}_cancel_{name}"):
+            bucket = st.selectbox("Why are they leaving?", EXIT_BUCKETS,
+                                  key=f"{key_prefix}_cb_{name}")
+            why = st.text_input("Anything worth recording?", key=f"{key_prefix}_cw_{name}",
+                                placeholder="optional")
+            if st.form_submit_button("🚫 Mark as cancelled"):
+                _set_athlete_status(name, "cancelled", why)
+                _log_exit_autopsy(name, bucket, why, rec)
+                st.success(f"{name.split()[0]} marked as cancelled and logged to the CRM.")
+                st.rerun()
 
 
 def _unmark_action_done(key):
@@ -1919,7 +1985,7 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
     # ── Status: has this athlete left, and are they on individual coaching? ────
     with st.expander("⚙️ Change status (cancelled / individual)"):
         _rec = data_by_name.get(name, {})
-        _plan = str(_rec.get("Subscription Plan", "")).strip()
+        _plan = str(_rec.get("Programming Tier", "")).strip() or "Standard"
         _is_bespoke = _plan.lower() == "bespoke"
         _override = _status_overrides().get(name, "")
         _gone = _norm_client_name(name) in _not_current_clients(data_by_name)
@@ -1964,12 +2030,12 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
             )
             if not _is_bespoke:
                 if st.button("👤 Move to individual", key=f"stat_besp_{name}"):
-                    _set_subscription_plan(name, "Bespoke")
+                    _set_programming_tier(name, "Bespoke")
                     st.success(f"{name.split()[0]} moved to individual coaching.")
                     st.rerun()
             else:
                 if st.button("👥 Move to standard programme", key=f"stat_std_{name}"):
-                    _set_subscription_plan(name, "Standard")
+                    _set_programming_tier(name, "Standard")
                     st.success(f"{name.split()[0]} moved to the standard programme.")
                     st.rerun()
 
@@ -3770,6 +3836,10 @@ def page_action_list(engagement_results, trend_results, rec_alert_rows, mileston
     """Ed's daily task list — checkable action cards with messages ready to copy or send."""
     import hashlib
 
+    # Athlete records, so each card can offer note / programme / cancelled inline.
+    _rec_by_name_al = {str(r.get("Full Name", "")).strip(): r
+                       for r in (data_records or [])}
+
     _render_archetype_deliveries({
         str(r.get("Full Name", "")).strip(): r for r in (data_records or [])
     })
@@ -3836,6 +3906,17 @@ def page_action_list(engagement_results, trend_results, rec_alert_rows, mileston
         return bool(d and d >= _done_cutoff)
 
     def _is_stale(r):
+        """Too old to be worth a message.
+
+        Moment-type items (a PB, a competition, a recovery survey) carry the age
+        of the thing that triggered them, and go stale on that: congratulating
+        someone on a three week old PB reads worse than saying nothing. State-type
+        items (not logged for a month) have no such moment, they're an ongoing
+        situation, so those age out on how long they've sat on the list instead.
+        """
+        ev = r.get("_stale_days")
+        if ev is not None:
+            return ev > ACTION_ITEM_TTL_DAYS
         return _first_seen(r) < _stale_cutoff
 
     # Aged-out items leave the list entirely. They aren't "done", they're just
@@ -3845,8 +3926,10 @@ def page_action_list(engagement_results, trend_results, rec_alert_rows, mileston
 
     active = [r for r in live if not _is_done(r)]
     completed = [r for r in live if _is_done(r)]
-    # Newest first, priority breaking ties within a day.
-    active.sort(key=lambda r: (_first_seen(r), -r.get("_order", 0)), reverse=True)
+    # Priority first: the point of this list is catching the moments worth
+    # messaging about, so a celebration outranks an older routine item. Recency
+    # only breaks ties within the same priority.
+    active.sort(key=lambda r: (r.get("_order", 99), _neg_date(_first_seen(r))))
 
     total = len(live)
     n_done = len(completed)
@@ -3919,6 +4002,12 @@ def page_action_list(engagement_results, trend_results, rec_alert_rows, mileston
                 if st.button("✅ Done", key=f"done_{item_key}", use_container_width=True):
                     _mark_action_done(name, item_key, priority)
                     st.rerun()
+
+            # Sort the athlete out without leaving the list: log what was said,
+            # correct their programme, or mark them gone.
+            with st.expander("⚙️ Note · programme · cancelled", expanded=False):
+                _render_athlete_quick_actions(
+                    name, _rec_by_name_al.get(name, {}), f"al_{item_key}")
 
             # Message draft
             if comp_msg and not reason_type:

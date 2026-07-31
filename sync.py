@@ -1469,9 +1469,13 @@ def main():
         nm: str(r.get("Programme", "")).strip()
         for nm, r in data_by_name_all.items()
     }
+    # Programming Tier, not Subscription Plan: that column holds the billing
+    # plan (Monthly (£54.99), Yearly (£549)), so keying bespoke off it matched
+    # nobody and every individually-coached athlete was still being sent the
+    # automated messages they are meant to be exempt from.
     bespoke_names = {
         nm for nm, r in data_by_name_all.items()
-        if str(r.get("Subscription Plan", "")).strip().lower() == "bespoke"
+        if str(r.get("Programming Tier", "")).strip().lower() == "bespoke"
     }
     if bespoke_names:
         print(f"Bespoke athletes (automated messages suppressed): {len(bespoke_names)}")
