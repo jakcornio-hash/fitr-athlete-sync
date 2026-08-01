@@ -152,3 +152,44 @@ def test_name_matching_is_normalised():
         [_item("pat campbell jenner", [(1, "done")])], today=dt.date.today())
     out = analytics.engagement_check(pr, athletes, threshold_days=28, activity_by_name=act)
     assert out[0]["flag"] is False
+
+
+# ── reading the signal back off _DATA ─────────────────────────────────────────
+
+def test_zero_sessions_is_read_as_known_not_missing():
+    """Fitr knows this athlete and they trained nothing. That is the strongest
+    evidence they are not training, so it must not be mistaken for no data."""
+    rows = [{"Full Name": "A", "Sessions (14d)": "0", "Last Trained": "",
+             "Adherence (14d)": "0%"}]
+    got = analytics.activity_from_data_records(rows)
+    assert "A" in got
+    assert got["A"]["sessions"] == 0
+    assert got["A"]["last_trained"] is None
+    assert got["A"]["days_since_trained"] is None
+
+
+def test_athlete_fitr_has_never_heard_of_is_absent():
+    rows = [{"Full Name": "A", "Sessions (14d)": "", "Last Trained": ""}]
+    assert analytics.activity_from_data_records(rows) == {}
+
+
+def test_values_round_trip_off_the_sheet():
+    rows = [{"Full Name": "Chad Croot", "Sessions (14d)": "13",
+             "Last Trained": "2026-08-01", "Adherence (14d)": "93%",
+             "Fitr Plan": "JST Athlete"}]
+    a = analytics.activity_from_data_records(rows)["Chad Croot"]
+    assert a["sessions"] == 13
+    assert a["adherence_pct"] == 93
+    assert a["last_trained"] == dt.date(2026, 8, 1)
+    assert a["plan"] == "JST Athlete"
+
+
+def test_a_zero_session_athlete_still_gets_flagged_by_engagement():
+    """Known to Fitr, trained nothing: must stay flagged, not be excused."""
+    athletes = [{"name": "A", "jst_id": "1"}]
+    pr = [{"Athlete Name": "A", "Benchmark Name": "Row",
+           "Date": (dt.date.today() - dt.timedelta(days=120)).isoformat(), "Value": "1"}]
+    act = analytics.activity_from_data_records(
+        [{"Full Name": "A", "Sessions (14d)": "0", "Last Trained": ""}])
+    out = analytics.engagement_check(pr, athletes, threshold_days=28, activity_by_name=act)
+    assert out[0]["flag"] is True

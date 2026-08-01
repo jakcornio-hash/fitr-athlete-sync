@@ -1790,15 +1790,21 @@ def activity_from_data_records(data_records):
         name = str(r.get("Full Name", "")).strip()
         if not name:
             continue
-        last = _parse_iso(str(r.get("Last Trained", "")).strip())
-        if not last:
-            continue
         sessions = str(r.get("Sessions (14d)", "")).strip()
+        # Keyed on Sessions, not on Last Trained. An athlete Fitr knows about who
+        # trained nothing in the window has a blank Last Trained and Sessions=0,
+        # and that is the STRONGEST evidence available that they are not
+        # training — far better than the silence of an athlete Fitr has never
+        # heard of. Requiring a date conflated the two and quietly sent the
+        # confident case back to guessing from benchmark retests.
+        if not sessions.isdigit():
+            continue
+        last = _parse_iso(str(r.get("Last Trained", "")).strip())
         pct = str(r.get("Adherence (14d)", "")).strip().rstrip("%")
         out[name] = {
             "last_trained": last,
-            "days_since_trained": (dt.date.today() - last).days,
-            "sessions": int(sessions) if sessions.isdigit() else 0,
+            "days_since_trained": (dt.date.today() - last).days if last else None,
+            "sessions": int(sessions),
             "adherence_pct": int(pct) if pct.isdigit() else None,
             "plan": str(r.get("Fitr Plan", "")).strip(),
         }
