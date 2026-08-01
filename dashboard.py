@@ -5178,8 +5178,8 @@ def _crm_former_athletes(pr_records, data_records):
             "Reason": bucket,
             "Detail": r.get("reason_text", ""),
             "Track": r.get("track", ""),
-            "Tenure (days)": tenure_days if tenure_days is not None else "—",
-            "Sessions": len(session_days.get(nml, set())) or "—",
+            "Tenure (days)": tenure_days,
+            "Sessions": len(session_days.get(nml, set())),
             "Last Log": ll.isoformat() if ll else "never",
             "_cancel_sort": cancel_d.isoformat() if cancel_d else "",
         })
@@ -5972,12 +5972,17 @@ def page_sync_health():
         log_df["Run Date"] = pd.to_datetime(log_df["Run Date"], errors="coerce")
         chart_df = log_df.dropna(subset=["Run Date"])
 
+        # Each chart gets only its own two columns. Handing Altair the whole
+        # frame meant serialising columns it never draws, and the Sync Log has
+        # ragged ones — older runs wrote a blank where newer runs write a
+        # number — which fails Arrow conversion for no reason.
         if "New PR Log rows" in chart_df.columns:
-            chart_df["New PR Log rows"] = pd.to_numeric(
-                chart_df["New PR Log rows"], errors="coerce").fillna(0)
+            bar_df = chart_df[["Run Date", "New PR Log rows"]].copy()
+            bar_df["New PR Log rows"] = pd.to_numeric(
+                bar_df["New PR Log rows"], errors="coerce").fillna(0)
             st.markdown("**New results per sync run**")
             bars = (
-                alt.Chart(chart_df)
+                alt.Chart(bar_df)
                 .mark_bar()
                 .encode(
                     x=alt.X("Run Date:T", title="Date"),
@@ -5988,11 +5993,12 @@ def page_sync_health():
             st.altair_chart(bars, width="stretch")
 
         if "Total Athletes" in chart_df.columns:
-            chart_df["Total Athletes"] = pd.to_numeric(
-                chart_df["Total Athletes"], errors="coerce").fillna(0)
+            line_df = chart_df[["Run Date", "Total Athletes"]].copy()
+            line_df["Total Athletes"] = pd.to_numeric(
+                line_df["Total Athletes"], errors="coerce").fillna(0)
             st.markdown("**Squad size over time**")
             line = (
-                alt.Chart(chart_df)
+                alt.Chart(line_df)
                 .mark_line(point=True)
                 .encode(
                     x=alt.X("Run Date:T", title="Date"),
@@ -6751,7 +6757,7 @@ def page_grandslam(grandslam_results, data_records, pr_records=None, athletes=No
             "Score": r["whale_score"],
             "Tenure (days)": r["days_tenure"],
             "Sessions (90d)": r["sessions_90d"],
-            "Last log (days ago)": r["days_since_log"] if r["days_since_log"] < 900 else "—",
+            "Last log (days ago)": r["days_since_log"] if r["days_since_log"] < 900 else None,
             "Plan": r["plan"].title() if r["plan"] else "—",
         } for r in grandslam_results[:top_n]])
         st.dataframe(df_whale, use_container_width=True, hide_index=True)
@@ -6795,7 +6801,7 @@ def page_grandslam(grandslam_results, data_records, pr_records=None, athletes=No
             "Score": r["whale_score"],
             "Tenure (days)": r["days_tenure"],
             "Sessions (90d)": r["sessions_90d"],
-            "Last log (days ago)": r["days_since_log"] if r["days_since_log"] < 900 else "—",
+            "Last log (days ago)": r["days_since_log"] if r["days_since_log"] < 900 else None,
             "Plan": r["plan"].title() if r["plan"] else "—",
         } for r in filtered])
         st.dataframe(df_all, use_container_width=True, hide_index=True)
@@ -6863,7 +6869,7 @@ def page_grandslam(grandslam_results, data_records, pr_records=None, athletes=No
                     "Score": r["whale_score"],
                     "First log": _fl_map[r["name"]].strftime("%d %b %Y"),
                     "Tenure (days)": r["days_tenure"],
-                    "Last log (days ago)": r["days_since_log"] if r["days_since_log"] < 900 else "—",
+                    "Last log (days ago)": r["days_since_log"] if r["days_since_log"] < 900 else None,
                 } for r in founding])
                 st.dataframe(df_fm, use_container_width=True, hide_index=True)
                 at_risk_founding = [r for r in founding if r["journey_stage"] in ("⚠️ Drifting", "☠️ Churned")]
@@ -7313,8 +7319,8 @@ def page_grandslam(grandslam_results, data_records, pr_records=None, athletes=No
                     "Cohort": c["cohort"],
                     "Started": c["n"],
                     "30-day %": c["pct_30d"] if c["pct_30d"] is not None else "—",
-                    "60-day %": c["pct_60d"] if c["pct_60d"] is not None else "—",
-                    "90-day %": c["pct_90d"] if c["pct_90d"] is not None else "—",
+                    "60-day %": c["pct_60d"],
+                    "90-day %": c["pct_90d"],
                 } for c in cohorts])
                 st.dataframe(df_cohort, use_container_width=True, hide_index=True)
 
@@ -8720,7 +8726,7 @@ def _render_billed_not_training(data_records, pr_records, gone_norm):
             pd.DataFrame([{
                 "Athlete": r["name"],
                 "Last logged": r["last_logged"],
-                "Days since": r["days_since"] if r["days_since"] is not None else "—",
+                "Days since": r["days_since"],
                 "£/month": r["monthly_value"],
                 "Fitr status": r["fitr_status"],
                 "Joined": r["join_date"],
@@ -8786,7 +8792,7 @@ def page_finance(data_records, pr_records, athletes, gone_norm=None):
             churned_mrr += price
             churned_rows.append({
                 "Athlete": nm, "Plan": plan, "MRR (£)": price,
-                "Days Since Log": days_since if days_since is not None else "never",
+                "Days Since Log": days_since,
             })
         elif days_since >= 28:
             drifting_mrr += price
