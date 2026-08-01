@@ -67,7 +67,11 @@ EXPECTED_COLUMNS = {
         "always_populated": ["Name", "Fitr ID"],
     },
     config.TAB_PR_LOG: {
-        "required": ["Date", "Athlete Name", "Benchmark Name", "Value"],
+        # "Athlete Note" is the athlete's own comment on the result. Optional
+        # per row, so not always_populated, but it must keep its header — while
+        # it was blank, 396 athlete comments were unreadable by name.
+        "required": ["Date", "Athlete Name", "Benchmark Name", "Value",
+                     "Athlete Note"],
         "always_populated": ["Date", "Athlete Name", "Benchmark Name", "Value"],
     },
     config.TAB_SYNC_LOG: {

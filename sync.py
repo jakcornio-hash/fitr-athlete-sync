@@ -1534,6 +1534,20 @@ def main():
             print(f"Declining results flagged to coaches (not messaged to athlete): {len(declining_singles)}")
 
     # ---- writes ----
+    # Row 9 is the athlete's own note on the result. The header only named the
+    # first eight for a long time, so 396 athlete comments sat in the sheet
+    # unreadable by name — read_records skips blank headers.
+    try:
+        _pr_repaired = sheets.ensure_headers(
+            config.TAB_PR_LOG,
+            ["Date", "Athlete Name", "Email", "Benchmark Name", "Value",
+             "Type", "Previous Value", "Days Since Last", "Athlete Note"],
+        )
+        if _pr_repaired:
+            print(f"Repaired stale '{config.TAB_PR_LOG}' header (was: {_pr_repaired})")
+    except Exception as exc:
+        print(f"  ! Could not check the PR Log header: {exc}")
+
     sheets.append_rows(config.TAB_PR_LOG, bench_rows + chal_rows)
 
     # ---- draft replies for pending athlete messages ----
