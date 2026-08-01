@@ -264,3 +264,17 @@ def test_no_rejoins_is_quiet():
             return []
 
     assert health_check.check_crm_says_gone_but_training(S(), A) == []
+
+
+def test_unset_integration_is_flagged(monkeypatch):
+    """A stage whose sheet ID is empty runs and processes nothing."""
+    monkeypatch.setattr(config, "INTAKE_FORM_SHEET_ID", "", raising=False)
+    found = health_check.check_disabled_integrations()
+    assert any("INTAKE_FORM_SHEET_ID" in f.detail for f in found)
+
+
+def test_fully_configured_is_quiet(monkeypatch):
+    for name in ("INTAKE_FORM_SHEET_ID", "TSHIRT_FORM_SHEET_ID", "RECOVERY_SHEET_ID",
+                 "COMP_FORM_SHEET_ID", "SLACK_WEBHOOK_URL", "SMTP_PASSWORD"):
+        monkeypatch.setattr(config, name, "set", raising=False)
+    assert health_check.check_disabled_integrations() == []

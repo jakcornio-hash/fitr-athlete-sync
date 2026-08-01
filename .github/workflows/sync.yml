@@ -60,6 +60,12 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           RECOVERY_SHEET_ID: ${{ secrets.RECOVERY_SHEET_ID }}
           COMP_FORM_SHEET_ID: ${{ secrets.COMP_FORM_SHEET_ID }}
+          # These two were missing, and both default to an empty string, so the
+          # intake-form sync and the 180-day t-shirt reward have been silently
+          # doing nothing on every scheduled run. Listed here so that adding the
+          # secret is all it takes; unset, behaviour is exactly as it is today.
+          INTAKE_FORM_SHEET_ID: ${{ secrets.INTAKE_FORM_SHEET_ID }}
+          TSHIRT_FORM_SHEET_ID: ${{ secrets.TSHIRT_FORM_SHEET_ID }}
           SMTP_FROM: ${{ secrets.SMTP_FROM }}
           # Only needed when SMTP_FROM is a send-as alias rather than its own
           # mailbox. Left unset, the login falls back to SMTP_FROM.

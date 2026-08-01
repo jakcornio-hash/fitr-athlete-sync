@@ -364,6 +364,33 @@ def check_programming_tier_values(sheets):
         f"unexpected in it is worth correcting: {detail}")]
 
 
+def check_disabled_integrations():
+    """Stages whose config is unset, so they run and quietly do nothing.
+
+    Every one of these reads a sheet ID that defaults to an empty string. With
+    it unset the stage still "succeeds" — it just processes zero rows and logs
+    nothing unusual, which is indistinguishable from there being no new data.
+    Two of these had been off in production for the life of the workflow.
+    """
+    wired = [
+        ("INTAKE_FORM_SHEET_ID", "new athlete intake form"),
+        ("TSHIRT_FORM_SHEET_ID", "180-day t-shirt reward"),
+        ("RECOVERY_SHEET_ID", "weekly recovery survey"),
+        ("COMP_FORM_SHEET_ID", "competition planner form"),
+        ("SLACK_WEBHOOK_URL", "Slack digest"),
+        ("SMTP_PASSWORD", "email digest and athlete emails"),
+    ]
+    missing = [(name, what) for name, what in wired
+               if not str(getattr(config, name, "") or "").strip()]
+    if not missing:
+        return []
+    return [Finding(
+        WARN, "config",
+        f"{len(missing)} integration(s) are switched off because their config is unset",
+        "; ".join(f"{what} ({name})" for name, what in missing)
+        + " — these stages run and process nothing rather than failing")]
+
+
 def check_pending_message_queue(sheets):
     """Drafts nobody is sending. This is now the only route to an athlete."""
     out = []
@@ -535,6 +562,7 @@ def run_health_check(sheets, analytics_mod, *, data_records=None, bespoke_names=
         ("crm rejoins", lambda: check_crm_says_gone_but_training(sheets, analytics_mod)),
         ("duplicate athlete rows", lambda: check_duplicate_athlete_rows(sheets)),
         ("programming tier values", lambda: check_programming_tier_values(sheets)),
+        ("disabled integrations", check_disabled_integrations),
     ]
     if check_pages:
         checks.append(("dashboard pages", lambda: check_dashboard_pages()))
