@@ -587,13 +587,32 @@ def _pending_messages_cached():
     return out
 
 
-def _mark_pending_sent(row_idx, status="sent"):
-    """Mark a queued draft as dealt with. row_idx is the sheet row number."""
+def _mark_pending_sent(row_idx, status="sent", record=None):
+    """Mark a queued draft as dealt with. row_idx is the sheet row number.
+
+    Marking one sent also writes it to the Message Log, because that log is
+    meant to be the record of what an athlete was actually told — the reply
+    scanner reads it to look for answers and the response rates divide by it.
+    With automatic sending off, a coach clicking this button is the only moment
+    a message becomes real, so it is the only honest moment to log it. Skipped
+    for "skipped", which means the opposite.
+    """
     try:
-        ws = get_sheets().worksheet(config.TAB_PENDING_MESSAGES)
+        sh = get_sheets()
+        ws = sh.worksheet(config.TAB_PENDING_MESSAGES)
         header = [h.strip() for h in ws.row_values(1)]
         col = header.index("Status") + 1
         ws.update_cell(row_idx, col, status)
+        if status == "sent" and record:
+            try:
+                sh.log_messages([{
+                    "Date": TODAY.isoformat(),
+                    "Athlete Name": str(record.get("Athlete Name", "")).strip(),
+                    "Message Type": str(record.get("Message Type", "")).strip(),
+                    "Room ID": str(record.get("Room ID", "")).strip(),
+                }])
+            except Exception as log_exc:
+                st.warning(f"Marked sent, but couldn't add it to the Message Log: {log_exc}")
         _pending_messages_cached.clear()
     except Exception as exc:
         st.error(f"Couldn't update that draft: {exc}")
@@ -627,7 +646,7 @@ def _render_pending_messages():
             b1, b2, b3 = st.columns([1, 1, 3])
             with b1:
                 if st.button("✅ Mark sent", key=f"pend_sent_{i}"):
-                    _mark_pending_sent(r["_row"])
+                    _mark_pending_sent(r["_row"], record=r)
                     st.rerun()
             with b2:
                 if st.button("🗑️ Skip", key=f"pend_skip_{i}"):
