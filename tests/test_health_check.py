@@ -278,3 +278,26 @@ def test_fully_configured_is_quiet(monkeypatch):
                  "COMP_FORM_SHEET_ID", "SLACK_WEBHOOK_URL", "SMTP_PASSWORD"):
         monkeypatch.setattr(config, name, "set", raising=False)
     assert health_check.check_disabled_integrations() == []
+
+
+# ── the training signal must not silently revert ──────────────────────────────
+
+def test_missing_last_trained_column_is_flagged():
+    sheets = FakeSheets({config.TAB_DATA: [["Full Name"], ["Amy R"]]})
+    found = health_check.check_training_signal(sheets)
+    assert any("Last Trained" in f.title for f in found)
+
+
+def test_column_present_but_never_filled_is_a_failure():
+    """The regression that would put engagement back on benchmark retests."""
+    sheets = FakeSheets({config.TAB_DATA: [
+        ["Full Name", "Last Trained"], ["Amy R", ""], ["Ben H", ""]]})
+    found = health_check.check_training_signal(sheets)
+    assert any(f.severity == health_check.FAIL for f in found)
+
+
+def test_healthy_coverage_is_quiet():
+    sheets = FakeSheets({config.TAB_DATA: [
+        ["Full Name", "Last Trained"],
+        ["A", "2026-08-01"], ["B", "2026-07-30"], ["C", "2026-07-28"], ["D", ""]]})
+    assert health_check.check_training_signal(sheets) == []

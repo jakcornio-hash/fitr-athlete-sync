@@ -115,7 +115,8 @@ def trend_analysis(pr_log_records):
     return results
 
 
-def engagement_check(pr_log_records, athletes, threshold_days=21, last_contact_by_name=None):
+def engagement_check(pr_log_records, athletes, threshold_days=21, last_contact_by_name=None,
+                     activity_by_name=None):
     """
     Return sorted list of {name, jst_id, last_logged, days_since, flag}
     — most-overdue athletes first, never-logged athletes at the top.
@@ -123,6 +124,16 @@ def engagement_check(pr_log_records, athletes, threshold_days=21, last_contact_b
     last_contact_by_name: optional {name: date} of most recent coach contact
     (from Fitr chat). When provided, an athlete who hasn't logged but was
     contacted recently won't be flagged.
+
+    activity_by_name: optional output of training_activity() — real session
+    completions from Fitr. When an athlete is in it, THAT decides whether they
+    are training, because the PR Log only records benchmark retests. Judging
+    engagement on retests alone flagged 87 of 183 athletes who had trained in
+    the last fortnight, Chad Croot among them at 13 sessions out of 14. A flag
+    that wrong is worse than no flag: coaches learn to ignore it, and chasing
+    someone who never stopped is why "No Reply" is the top recorded churn
+    reason. Athletes absent from Fitr's activity list still fall back to the
+    benchmark signal.
     """
     last_logged = {}
     for rec in pr_log_records:
@@ -136,6 +147,9 @@ def engagement_check(pr_log_records, athletes, threshold_days=21, last_contact_b
 
     last_contact = last_contact_by_name or {}
 
+    activity = activity_by_name or {}
+    activity_norm = {normalise_client_name(k): v for k, v in activity.items()}
+
     out = []
     for a in athletes:
         name = a["name"]
@@ -145,7 +159,16 @@ def engagement_check(pr_log_records, athletes, threshold_days=21, last_contact_b
         days_since_log = (TODAY - last_log).days if last_log else None
         days_since_contact = (TODAY - last_chat).days if last_chat else None
 
+        # Real training beats benchmark retests wherever Fitr knows about it.
+        act = activity_norm.get(normalise_client_name(name))
+        trained_recently = False
+        if act:
+            dst = act.get("days_since_trained")
+            trained_recently = dst is not None and dst < threshold_days
+
         log_inactive = days_since_log is None or days_since_log >= threshold_days
+        if trained_recently:
+            log_inactive = False
         contact_recent = days_since_contact is not None and days_since_contact < threshold_days
 
         # nudge_flag: not logging but coach is in contact — softer monthly prompt
@@ -161,6 +184,11 @@ def engagement_check(pr_log_records, athletes, threshold_days=21, last_contact_b
             "days_since": days_since_log,
             "flag": flag,
             "nudge_flag": nudge_flag,
+            # Real training, where Fitr has it. None means Fitr had nothing for
+            # this athlete and the flag rests on benchmark retests alone.
+            "days_since_trained": (act or {}).get("days_since_trained"),
+            "sessions_14d": (act or {}).get("sessions"),
+            "adherence_pct": (act or {}).get("adherence_pct"),
         })
 
     out.sort(key=lambda x: (0 if x["days_since"] is None else 1, -(x["days_since"] or 99999)))
@@ -1680,6 +1708,74 @@ def normalise_client_name(s):
     """Lowercase, alphanumerics only. Makes 'Pat Campbell-Jenner' and
     'Pat Campbell Jenner' the same key, which exact-match comparison misses."""
     return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
+
+
+# Fitr day statuses. "empty" means nothing was programmed that day, so it is
+# neither a session done nor a session missed — counting it as missed would
+# make every rest day look like a failure.
+TRAINED_STATUSES = ("done", "partial")
+MISSED_STATUSES = ("skipped",)
+
+
+def training_activity(activity_items, today=None):
+    """Turn Fitr's per-day adherence into a per-athlete training summary.
+
+    This is the signal the dashboard was missing. Everything before it measured
+    how often an athlete retested a benchmark, which is not the same question as
+    whether they are still training — an athlete training five days a week who
+    has not retested a lift in six weeks looked identical to one who had quit.
+
+    Returns {athlete_name: {...}} with:
+        fitr_id, last_trained (date|None), days_since_trained (int|None),
+        sessions (days with a full or partial tick),
+        missed (days with work scheduled and nothing done),
+        scheduled (sessions + missed),
+        adherence_pct (sessions / scheduled, or None if nothing was scheduled),
+        plan, membership_state, chat_room_id, window_days
+    """
+    today = today or dt.date.today()
+    out = {}
+    for item in (activity_items or ()):
+        name = str(item.get("full_name", "")).strip()
+        if not name:
+            continue
+        days = ((item.get("display_plan") or {}).get("performance_by_days")) or []
+        trained_dates, missed = [], 0
+        for d in days:
+            status = str(d.get("status", "")).strip().lower()
+            day = None
+            try:
+                day = dt.date.fromisoformat(str(d.get("date", ""))[:10])
+            except ValueError:
+                pass
+            # Never count a future day as missed: an athlete has not failed to
+            # do tomorrow's session.
+            if day and day > today:
+                continue
+            if status in TRAINED_STATUSES:
+                if day:
+                    trained_dates.append(day)
+            elif status in MISSED_STATUSES:
+                missed += 1
+
+        sessions = len(trained_dates)
+        scheduled = sessions + missed
+        last = max(trained_dates) if trained_dates else None
+        plan = item.get("plan") or {}
+        out[name] = {
+            "fitr_id": item.get("id"),
+            "last_trained": last,
+            "days_since_trained": (today - last).days if last else None,
+            "sessions": sessions,
+            "missed": missed,
+            "scheduled": scheduled,
+            "adherence_pct": round(sessions / scheduled * 100) if scheduled else None,
+            "plan": str(plan.get("title", "")).strip(),
+            "membership_state": str((plan.get("membership") or {}).get("state") or "").strip(),
+            "chat_room_id": item.get("chat_room_id"),
+            "window_days": len(days),
+        }
+    return out
 
 
 def revenue_anomalies(data_records, pr_records, gone_norm=None, today=None,

@@ -237,19 +237,89 @@ class FitrClient:
 
     # --------------------------------------------------------------- clients
     def clients(self, max_pages=30):
-        """Coach's athletes (for name <-> fitr id reconciliation)."""
+        """Coach's athletes (for name <-> fitr id reconciliation).
+
+        NOTE: /api/coach/clients returns 404 — the endpoint does not exist.
+        Use client_activity() instead, which is the one the Fitr coach UI
+        actually calls. Kept only so any old caller fails loudly rather than
+        looking like it found no athletes.
+        """
+        raise FitrError(
+            "/api/coach/clients does not exist on the Fitr API. "
+            "Use client_activity() instead."
+        )
+
+    # ------------------------------------------------- training adherence
+    # PERIODS: the API accepts "week" (7 days) and "2weeks" (14 days). Anything
+    # else — including "month" and "year" — silently returns 7 days or none at
+    # all, so do not pass one and assume you got a longer window.
+    ACTIVITY_PERIODS = {"week": 7, "2weeks": 14}
+
+    def client_activity(self, period="2weeks", max_pages=60, per_page=50):
+        """Per-day training adherence for every active athlete.
+
+        This is what the coach client list in Fitr shows: for each day, whether
+        the athlete ticked off a full session, part of one, or nothing. It is
+        the only squad-wide source of whether people are actually TRAINING —
+        the benchmark log only says whether they retested a lift.
+
+        Returns the raw `items` from /api/coach/search_clients with
+        data_kind=activity. Each item carries id, full_name, chat_room_id, the
+        plan and its membership state, and display_plan.performance_by_days:
+
+            [{"date": "2026-07-31", "status": "done", "online": true}, ...]
+
+        Statuses: done (whole session), partial (some sections), skipped
+        (sessions were scheduled and none were done), empty (nothing was
+        scheduled — NOT a missed session, so never count it as one).
+        """
+        if period not in self.ACTIVITY_PERIODS:
+            raise FitrError(
+                f"period {period!r} is not supported by Fitr; "
+                f"use one of {sorted(self.ACTIVITY_PERIODS)}"
+            )
         out, page = [], 1
         while page <= max_pages:
-            data = self._get("/api/coach/clients", {"page": page})
-            if not data:
-                break
-            items = data if isinstance(data, list) else data.get("items", [])
+            data = self._get("/api/coach/search_clients", {
+                "athlete_type": "active",
+                "page": page,
+                "per_page": per_page,
+                "q[first_name_or_last_name_or_full_name_start]": "",
+                "q[s][]": "full_name asc",
+                "q[performance_period]": period,
+                "q[mood_period]": "week",
+                "q[plan_sort]": "section_completion",
+                "data_kind": "activity",
+            })
+            items = (data or {}).get("items") or []
             if not items:
                 break
             out.extend(items)
+            # Page against active_pagination, NOT activity_pagination.
+            # activity_pagination counts only the athletes who have a live
+            # schedule (481), but the endpoint paginates the whole active
+            # client list (1698) sorted by name. Trusting the smaller number
+            # stops the sweep at "S" — it silently lost every athlete later in
+            # the alphabet, Scott Sumner included, while looking complete.
+            pag = (data or {}).get("active_pagination") or {}
+            total_pages = pag.get("total_pages")
+            if total_pages and page >= total_pages:
+                break
             page += 1
             time.sleep(0.3)
         return out
+
+    def athlete_schedule(self, athlete_id, date_from, date_to):
+        """One athlete's programmed days and how much of each they completed.
+
+        Section-level detail for a date range of any length, which the
+        squad-wide call cannot give: each day carries its sections, their
+        titles, and completed_count. Costs one request per athlete, so this is
+        for looking at one person on demand, not for sweeping the squad.
+        """
+        data = self._get(f"/api/coach/athletes/{athlete_id}/schedule",
+                         {"from": str(date_from), "to": str(date_to)})
+        return (data or {}).get("plans") or []
 
 
 # ------------------------------------------------------------------ helpers

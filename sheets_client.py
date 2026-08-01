@@ -97,6 +97,33 @@ class SheetsClient:
             self._ws_cache[title] = ws
             return ws
 
+    def ensure_headers_present(self, title, headers):
+        """Add any missing column headers to the END of a tab's header row.
+
+        Unlike ensure_headers, this never rewrites or reorders what is already
+        there, so it is safe on tabs a coach edits by hand like _DATA — adding
+        a column must not risk renaming forty existing ones. Returns the list of
+        headers it added.
+        """
+        ws = self.worksheet(title)
+        current = (ws.get_all_values() or [[]])[0]
+        have = {str(h).strip() for h in current}
+        missing = [h for h in headers if h not in have]
+        if not missing:
+            return []
+        if config.DRY_RUN:
+            print(f"[DRY_RUN] would add columns to '{title}': {missing}")
+            return missing
+        start = len(current) + 1
+        end = start + len(missing) - 1
+        rng = f"{gspread.utils.rowcol_to_a1(1, start)}:{gspread.utils.rowcol_to_a1(1, end)}"
+        # Widen the sheet first if the new columns fall outside it.
+        if end > ws.col_count:
+            ws.add_cols(end - ws.col_count)
+        ws.update(values=[missing], range_name=rng, value_input_option="RAW")
+        self._ws_cache.pop(title, None)
+        return missing
+
     def ensure_headers(self, title, headers):
         """Create the tab, or repair its header row if it has drifted.
 

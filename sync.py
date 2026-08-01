@@ -990,6 +990,43 @@ def _deliver(fitr, room_id, msg, name, msg_type):
     return False
 
 
+TRAINING_WINDOW = "2weeks"   # the longest window Fitr's activity view supports
+
+
+def write_training_activity(sheets, activity_by_name, known_names=None):
+    """Write each athlete's real training summary onto their _DATA row.
+
+    Goes into _DATA rather than a tab of its own so every existing view gets it
+    for nothing — the squad cards, the athlete profile, the action list and the
+    billing check all read _DATA already.
+
+    known_names restricts the write to athletes actually on the sheet. Fitr
+    returns the entire client base — 1,698 people, most of whom bought a one-off
+    plan years ago — against a _DATA tab of about 360.
+    """
+    keep = ({analytics.normalise_client_name(n) for n in known_names}
+            if known_names else None)
+    updates = {}
+    for name, a in activity_by_name.items():
+        if keep is not None and analytics.normalise_client_name(name) not in keep:
+            continue
+        updates[name] = {
+            "Last Trained": a["last_trained"].isoformat() if a["last_trained"] else "",
+            "Sessions (14d)": a["sessions"],
+            "Adherence (14d)": f"{a['adherence_pct']}%" if a["adherence_pct"] is not None else "",
+            "Fitr Plan": a["plan"],
+        }
+    if not updates:
+        return 0
+    try:
+        sheets.ensure_headers_present(config.TAB_DATA, [
+            "Last Trained", "Sessions (14d)", "Adherence (14d)", "Fitr Plan"])
+        return sheets.batch_update_by_name(config.TAB_DATA, "Full Name", updates) or len(updates)
+    except Exception as exc:
+        print(f"  ! Could not write training summary to _DATA: {exc}")
+        return 0
+
+
 def _sent_or_drafted(n):
     """Wording for the run log: these only leave the building if sending is on."""
     return (f"{n} sent" if config.AUTO_SEND_ATHLETE_MESSAGES
@@ -1659,10 +1696,33 @@ def main():
     trend_results = analytics.trend_analysis(pr_records)
     # Athletes contacted in this sync run count as recently reached — don't flag them
     last_contact_by_name = {name: TODAY for name in chat_notes}
+    # ---- real training adherence from Fitr ----
+    # The PR Log only records benchmark retests, so on its own it cannot answer
+    # "is this athlete still training". This is the coach client list Fitr
+    # itself shows: per day, whether they ticked off a full session, part of
+    # one, or nothing.
+    activity_by_name = {}
+    try:
+        _activity_items = fitr.client_activity(period=TRAINING_WINDOW)
+        activity_by_name = analytics.training_activity(_activity_items)
+        _trained = sum(1 for a in activity_by_name.values() if a["sessions"])
+        print(f"Training adherence pulled from Fitr: {len(activity_by_name)} athletes, "
+              f"{_trained} trained in the last {config.TRAINING_WINDOW_DAYS} days")
+    except FitrError as exc:
+        print(f"  ! Could not pull training adherence: {exc}")
+    except Exception as exc:
+        print(f"  ! Training adherence failed: {type(exc).__name__}: {exc}")
+
+    if activity_by_name:
+        _written = write_training_activity(
+            sheets, activity_by_name, known_names=data_by_name_all.keys())
+        print(f"Training summary written to _DATA: {_written} athletes")
+
     engagement_results = analytics.engagement_check(
         pr_records, active_athletes,
         threshold_days=config.ENGAGEMENT_THRESHOLD_DAYS,
         last_contact_by_name=last_contact_by_name,
+        activity_by_name=activity_by_name,
     )
     milestones = analytics.milestone_detection(bench_rows)
     consistency_wins = analytics.consistency_check(pr_records, active_athletes)

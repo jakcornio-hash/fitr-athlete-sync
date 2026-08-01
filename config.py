@@ -366,3 +366,9 @@ HEALTH_CHECK_PAGES = _get("HEALTH_CHECK_PAGES", "").strip().lower() in ("1", "tr
 # not "at risk", it is "we are charging someone who has not trained in a
 # quarter". Shared by the dashboard and health_check.
 REVENUE_DORMANT_DAYS = int(_get("REVENUE_DORMANT_DAYS", "90"))
+
+# Fitr training adherence. Fitr's coach activity view supports a 7- or 14-day
+# window only, so 14 is the longest real training history available per run.
+# This is the signal that answers "is this athlete still training" — the PR Log
+# only answers "did they retest a benchmark".
+TRAINING_WINDOW_DAYS = 14

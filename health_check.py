@@ -364,6 +364,44 @@ def check_programming_tier_values(sheets):
         f"unexpected in it is worth correcting: {detail}")]
 
 
+def check_training_signal(sheets):
+    """The training-adherence columns must keep filling.
+
+    This signal is pulled from an undocumented Fitr endpoint. If Fitr renames a
+    field or changes how it paginates, the pull returns nothing and engagement
+    quietly falls back to judging people on benchmark retests — which is the
+    bug this replaced. That regression would be invisible: the dashboard would
+    look fine and simply start flagging the wrong 87 athletes again.
+    """
+    out = []
+    try:
+        rows = sheets.read_records(config.TAB_DATA)
+    except Exception:
+        return out
+    if not rows:
+        return out
+    if "Last Trained" not in (rows[0] or {}):
+        return [Finding(
+            WARN, "training", "The Last Trained column is missing from _DATA",
+            "the Fitr training-adherence pull has not run yet, so engagement is "
+            "still being judged on benchmark retests alone")]
+
+    filled = sum(1 for r in rows if str(r.get("Last Trained", "")).strip())
+    if filled == 0:
+        out.append(Finding(
+            FAIL, "training", "No athlete has a Last Trained date",
+            "the Fitr adherence pull is returning nothing, so engagement flags "
+            "have silently reverted to benchmark retests — expect a large jump "
+            "in false 'inactive' flags"))
+    elif filled < len(rows) * 0.25:
+        out.append(Finding(
+            WARN, "training",
+            f"Only {filled} of {len(rows)} athletes have a Last Trained date",
+            "coverage was around 78% of the roster when this was built; a sharp "
+            "drop usually means Fitr changed its pagination"))
+    return out
+
+
 def check_disabled_integrations():
     """Stages whose config is unset, so they run and quietly do nothing.
 
@@ -562,6 +600,7 @@ def run_health_check(sheets, analytics_mod, *, data_records=None, bespoke_names=
         ("crm rejoins", lambda: check_crm_says_gone_but_training(sheets, analytics_mod)),
         ("duplicate athlete rows", lambda: check_duplicate_athlete_rows(sheets)),
         ("programming tier values", lambda: check_programming_tier_values(sheets)),
+        ("training signal", lambda: check_training_signal(sheets)),
         ("disabled integrations", check_disabled_integrations),
     ]
     if check_pages:
