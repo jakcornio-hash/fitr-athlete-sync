@@ -1778,8 +1778,36 @@ def training_activity(activity_items, today=None):
     return out
 
 
+def activity_from_data_records(data_records):
+    """Rebuild the training signal from the _DATA columns the sync wrote.
+
+    The sync pulls adherence from Fitr once a day and lands it on _DATA. Readers
+    — the dashboard, the health check — take it from there rather than calling
+    Fitr again, so there is one pull a day and everything agrees on it.
+    """
+    out = {}
+    for r in (data_records or ()):
+        name = str(r.get("Full Name", "")).strip()
+        if not name:
+            continue
+        last = _parse_iso(str(r.get("Last Trained", "")).strip())
+        if not last:
+            continue
+        sessions = str(r.get("Sessions (14d)", "")).strip()
+        pct = str(r.get("Adherence (14d)", "")).strip().rstrip("%")
+        out[name] = {
+            "last_trained": last,
+            "days_since_trained": (dt.date.today() - last).days,
+            "sessions": int(sessions) if sessions.isdigit() else 0,
+            "adherence_pct": int(pct) if pct.isdigit() else None,
+            "plan": str(r.get("Fitr Plan", "")).strip(),
+        }
+    return out
+
+
 def revenue_anomalies(data_records, pr_records, gone_norm=None, today=None,
-                      dormant_days=90, monthly_value_fn=None):
+                      dormant_days=90, monthly_value_fn=None,
+                      activity_by_name=None):
     """Current athletes whose billing and their training don't line up.
 
     Someone being charged while not training is either a person who has
@@ -1793,8 +1821,14 @@ def revenue_anomalies(data_records, pr_records, gone_norm=None, today=None,
 
     Reasons, in priority order:
       Missed Payment  — Fitr says billing failed, but they're still counted
-      Never logged    — on the roster, billed, not one session ever recorded
-      Dormant         — last logged over `dormant_days` ago
+      Never trained   — on the roster, billed, no training on record at all
+      Dormant         — last trained over `dormant_days` ago
+
+    activity_by_name (from training_activity) is authoritative on whether
+    someone is training. Without it this falls back to the PR Log, which only
+    records benchmark retests — and that wrongly called athletes "never logged
+    a session" while the dashboard showed them training yesterday. Two views of
+    the same athlete disagreeing is worse than either being slightly wrong.
     """
     today = today or dt.date.today()
     gone_norm = gone_norm or set()
@@ -1805,6 +1839,12 @@ def revenue_anomalies(data_records, pr_records, gone_norm=None, today=None,
         d = _parse_iso(str(r.get("Date", "")).strip()[:10])
         if nm and d and d > last_log.get(nm, dt.date.min):
             last_log[nm] = d
+
+    # Real training wins where Fitr knows about it.
+    for nm, a in (activity_by_name or {}).items():
+        lt = a.get("last_trained")
+        if lt and lt > last_log.get(nm, dt.date.min):
+            last_log[nm] = lt
 
     out = []
     for rec in (data_records or ()):
@@ -1820,7 +1860,7 @@ def revenue_anomalies(data_records, pr_records, gone_norm=None, today=None,
         if status.lower() == "missed payment":
             reason = "Missed payment"
         elif seen is None:
-            reason = "Never logged a session"
+            reason = "No training on record"
         elif days >= dormant_days:
             reason = f"No session in {days} days"
         else:

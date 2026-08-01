@@ -48,7 +48,8 @@ _ensure_fresh(arch_mod, "result_is_close", "athlete_result_message")
 # until someone reboots the app. Add to this list when you add a function.
 _ensure_fresh(analytics, "not_current_client_names", "retest_analysis",
               "normalise_client_name", "monthly_value", "match_athlete_name",
-              "canonical_date_key", "revenue_anomalies")
+              "canonical_date_key", "revenue_anomalies", "training_activity",
+              "activity_from_data_records")
 # config too, and for the same reason. A stale config does not raise — the
 # getattr defaults just quietly take over, so new prices read as missing and
 # money figures come out low. That is worse than a crash, because it looks
@@ -8709,6 +8710,10 @@ def _render_billed_not_training(data_records, pr_records, gone_norm):
         data_records, pr_records, gone_norm=gone_norm,
         dormant_days=int(getattr(config, "REVENUE_DORMANT_DAYS", 90)),
         monthly_value_fn=_athlete_mrr,
+        # Real training, read off the columns the sync wrote. Without this the
+        # list called athletes "never trained" while the same page showed them
+        # training yesterday.
+        activity_by_name=analytics.activity_from_data_records(data_records),
     )
     if not rows:
         st.success("Everyone being billed has trained recently. 🎉")
@@ -8724,9 +8729,9 @@ def _render_billed_not_training(data_records, pr_records, gone_norm):
          lambda r: r["reason"] == "Missed payment",
          "Fitr says the payment did not go through, but they are still counted "
          "at full price. Either the payment gets fixed or they come off the roster."),
-        ("👻 Never logged a session — onboarding never landed",
-         lambda r: r["reason"].startswith("Never"),
-         "On the roster, being billed, and no session has ever been recorded. "
+        ("👻 No training on record — onboarding never landed",
+         lambda r: r["reason"].startswith("No training"),
+         "On the roster, being billed, with no benchmark and no Fitr session "
          "Some of these joined years ago."),
         ("🌙 Gone quiet — coaching job",
          lambda r: r["reason"].startswith("No session"),

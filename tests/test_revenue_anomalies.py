@@ -31,12 +31,27 @@ def _run(data, prs, **kw):
 
 # ── the three reasons ─────────────────────────────────────────────────────────
 
-def test_never_logged_is_flagged():
+def test_no_training_on_record_is_flagged():
     rows = _run([_athlete("Harry Hanford")], [])
     assert len(rows) == 1
-    assert rows[0]["reason"] == "Never logged a session"
+    assert rows[0]["reason"] == "No training on record"
     assert rows[0]["last_logged"] == "never"
     assert rows[0]["monthly_value"] == 54.99
+
+
+def test_real_fitr_training_clears_a_benchmark_only_flag():
+    """Marcus Baxby had no benchmark but trained yesterday. The billing list
+    called him "never logged a session" while the same dashboard showed the
+    session. Two views of one athlete must not disagree."""
+    act = {"Marcus Baxby": {"last_trained": TODAY - dt.timedelta(days=1)}}
+    rows = _run([_athlete("Marcus Baxby")], [], activity_by_name=act)
+    assert rows == []
+
+
+def test_fitr_training_also_clears_a_stale_dormant_flag():
+    act = {"A": {"last_trained": TODAY - dt.timedelta(days=2)}}
+    rows = _run([_athlete("A")], [_log("A", "2024-01-01")], activity_by_name=act)
+    assert rows == []
 
 
 def test_long_dormant_is_flagged_with_the_day_count():

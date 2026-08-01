@@ -503,14 +503,15 @@ def check_revenue_anomalies(sheets, analytics_mod, data_records, gone_norm,
 
     rows = analytics_mod.revenue_anomalies(
         data_records, pr_records, gone_norm=gone_norm,
-        dormant_days=REVENUE_DORMANT_DAYS, monthly_value_fn=monthly_value_fn)
+        dormant_days=REVENUE_DORMANT_DAYS, monthly_value_fn=monthly_value_fn,
+        activity_by_name=analytics_mod.activity_from_data_records(data_records))
     if not rows:
         return out
 
     groups = {}
     for r in rows:
         key = "Missed payment" if r["reason"] == "Missed payment" else (
-            "Never logged a session" if r["reason"].startswith("Never")
+            "No training on record" if r["reason"].startswith("No training")
             else f"No session in {REVENUE_DORMANT_DAYS}+ days")
         groups.setdefault(key, []).append(r)
 
