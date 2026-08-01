@@ -135,13 +135,27 @@ def get_sheets():
 @st.cache_data(ttl=900, show_spinner="Loading athlete data...")
 def load_all():
     sheets = get_sheets()
+
+    # Every optional load below is wrapped, because one unavailable tab should
+    # not take the whole dashboard down. But swallowing the error silently is
+    # how a throttled read came to look like an empty tab: the page renders
+    # perfectly, just missing data, and nobody can tell. Each failure is
+    # recorded and surfaced instead.
+    load_warnings = []
+
+    def _optional(label, fn, default):
+        try:
+            return fn()
+        except Exception as exc:
+            load_warnings.append(f"{label}: {type(exc).__name__}: {exc}"[:200])
+            return default
+
     # The tone-of-voice document lives in the Sheet, not the repo, so anything
     # here that generates athlete-facing copy needs it pulled in at runtime.
-    try:
+    def _load_voice():
         import coaching_voice as _cvoice
         _cvoice.refresh_from_sheet(sheets)
-    except Exception:
-        pass
+    _optional("Tone of voice", _load_voice, None)
 
     pr_records = sheets.read_records(config.TAB_PR_LOG)
     bm_values = sheets.read_values(config.TAB_BENCHMARKS)
@@ -161,30 +175,15 @@ def load_all():
                 "row": i,
             })
 
-    data_records = []
-    try:
-        data_records = sheets.read_records(config.TAB_DATA)
-    except Exception:
-        pass
-
-    rec_latest = {}
-    try:
-        if config.RECOVERY_SHEET_ID:
-            rec_latest = rec_mod.latest_by_email(sheets)
-    except Exception:
-        pass
-
-    archetype_rows = []
-    try:
-        archetype_rows = sheets.load_archetype_assessments()
-    except Exception:
-        pass
-
-    competition_rows = []
-    try:
-        competition_rows = sheets.load_competitions()
-    except Exception:
-        pass
+    data_records = _optional("Athlete profiles (_DATA)",
+                             lambda: sheets.read_records(config.TAB_DATA), [])
+    rec_latest = _optional(
+        "Recovery survey",
+        lambda: rec_mod.latest_by_email(sheets) if config.RECOVERY_SHEET_ID else {},
+        {})
+    archetype_rows = _optional("Archetype assessments",
+                               sheets.load_archetype_assessments, [])
+    competition_rows = _optional("Competitions", sheets.load_competitions, [])
 
     # Cancelled athletes come off the working roster so they don't appear in
     # at-risk lists, engagement flags, or athlete tables. data_records stay
@@ -196,6 +195,11 @@ def load_all():
     # Active Roster with a Fitr status of All Good: people who gave notice and
     # are still training, still paying, and still savable. They were invisible
     # on every tab while the sync went on treating them as current.
+    # This one is the most dangerous failure in the whole load. If it throws,
+    # gone_norm is empty, nobody is filtered, and athletes who left months ago
+    # reappear across every tab looking exactly like current clients. That is
+    # not a blank page a coach would question — it is a wrong page they would
+    # act on. So it is called out loudly rather than passed over.
     cancelled_names = set()
     gone_norm = set()
     try:
@@ -207,11 +211,13 @@ def load_all():
         if gone_norm:
             athletes = [a for a in athletes
                         if analytics.normalise_client_name(a["name"]) not in gone_norm]
-    except Exception:
-        pass
+    except Exception as exc:
+        load_warnings.append(
+            "Former-athlete filter FAILED — athletes who have left may be "
+            f"showing as current on every tab: {type(exc).__name__}: {exc}"[:250])
 
     return (pr_records, athletes, rec_latest, data_records, archetype_rows,
-            competition_rows, cancelled_names, gone_norm)
+            competition_rows, cancelled_names, gone_norm, load_warnings)
 
 
 def run_analytics(pr_records, athletes, rec_latest, data_records=None, competition_rows=None):  # noqa: too-many-locals
@@ -5530,12 +5536,20 @@ def _crm_revenue(data_records):
     st.markdown("### Revenue")
     st.caption("Monthly recurring revenue by subscription plan, based on _DATA 'Subscription Plan' column")
 
+    # Former athletes are excluded, same as the Finance tab. This view used to
+    # count everyone who had ever had a plan, so the two tabs showed different
+    # numbers both labelled "Total MRR" — people who left are not recurring
+    # revenue on either of them.
+    _gone = st.session_state.get("_gone_norm") or set()
+
     # Build {plan: count} from data_records, and the per-athlete monthly value.
     # Bespoke is priced off Programming Tier, so it is summed per athlete rather
     # than assumed uniform across a plan.
     plan_counts = {}
     plan_value = {}
     for r in (data_records or []):
+        if analytics.normalise_client_name(r.get("Full Name", "")) in _gone:
+            continue
         plan = str(r.get("Subscription Plan", "")).strip()
         if plan:
             plan_counts[plan] = plan_counts.get(plan, 0) + 1
@@ -9521,10 +9535,22 @@ def main():
 
     with st.spinner("Loading..."):
         (pr_records, athletes, rec_latest, data_records, archetype_rows,
-         competition_rows, cancelled_names, gone_norm) = load_all()
+         competition_rows, cancelled_names, gone_norm, load_warnings) = load_all()
         st.session_state["_cancelled_count"] = len(cancelled_names)
         st.session_state["_cancelled_names_lower"] = cancelled_names
         st.session_state["_gone_norm"] = gone_norm
+        st.session_state["_load_warnings"] = load_warnings
+
+    # A tab that failed to load says so in its own tab. A failed *data* load is
+    # worse and quieter: every tab still renders, just with less behind it. Say
+    # so once, at the top, where it cannot be missed.
+    if load_warnings:
+        st.error(
+            "**Some data could not be loaded, so figures below are incomplete.**\n\n"
+            + "\n".join(f"- {w}" for w in load_warnings)
+            + "\n\nThis is usually the Google Sheets read limit — reloading in a "
+              "minute normally fixes it. The daily health check reports it too."
+        )
         trend_results, engagement_results, consistency_wins, rec_alert_rows, rec_by_name, comp_results = run_analytics(
             pr_records, athletes, rec_latest, data_records, competition_rows=competition_rows
         )

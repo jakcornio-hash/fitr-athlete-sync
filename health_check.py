@@ -296,6 +296,74 @@ def check_roster_agrees_with_dashboard(sheets, analytics_mod, gone_norm):
     return out
 
 
+def check_crm_says_gone_but_training(sheets, analytics_mod):
+    """Athletes the CRM has as cancelled who are demonstrably still training.
+
+    The code already handles this safely — they are treated as rejoined and
+    kept in — so nothing breaks. But the CRM is wrong, and it stays wrong,
+    because the only place this was ever mentioned was a line in the sync log
+    that nobody reads.
+    """
+    try:
+        exit_rows = sheets.load_exit_autopsy()
+        pr_records = sheets.read_records(config.TAB_PR_LOG)
+    except Exception:
+        return []
+    _, rejoined = analytics_mod.cancelled_athletes(exit_rows, pr_records)
+    if not rejoined:
+        return []
+    names = ", ".join(sorted(rejoined)[:8])
+    if len(rejoined) > 8:
+        names += f" and {len(rejoined) - 8} more"
+    return [Finding(
+        WARN, "crm",
+        f"{len(rejoined)} athlete(s) are marked cancelled in the CRM but are training again",
+        f"They are correctly kept on the lists; the CRM Exit Autopsy is what needs "
+        f"correcting: {names}")]
+
+
+def check_duplicate_athlete_rows(sheets):
+    """Two rows for one athlete means two half-profiles and split history."""
+    try:
+        rows = sheets.read_records(config.TAB_DATA)
+    except Exception:
+        return []
+    seen = {}
+    for r in rows:
+        nm = str(r.get("Full Name", "")).strip()
+        if nm:
+            seen[nm] = seen.get(nm, 0) + 1
+    dupes = sorted(nm for nm, n in seen.items() if n > 1)
+    if not dupes:
+        return []
+    return [Finding(
+        WARN, "sheets", f"{len(dupes)} athlete(s) have more than one row in _DATA",
+        "profile edits and coaching notes will land on one row and not the "
+        "other: " + ", ".join(dupes[:8]))]
+
+
+def check_programming_tier_values(sheets):
+    """Programming Tier drives message suppression, so junk in it is a risk."""
+    try:
+        rows = sheets.read_records(config.TAB_DATA)
+    except Exception:
+        return []
+    allowed = {"", "standard", "bespoke", "semi-bespoke"}
+    odd = {}
+    for r in rows:
+        v = str(r.get("Programming Tier", "")).strip()
+        if v.lower() not in allowed:
+            odd.setdefault(v, []).append(str(r.get("Full Name", "")).strip())
+    if not odd:
+        return []
+    detail = "; ".join(f"{v[:45]!r} ({len(names)})" for v, names in list(odd.items())[:3])
+    return [Finding(
+        WARN, "sheets",
+        f"{sum(len(n) for n in odd.values())} athlete(s) have an unrecognised Programming Tier",
+        "this column decides who is exempt from automated messages, so anything "
+        f"unexpected in it is worth correcting: {detail}")]
+
+
 def check_pending_message_queue(sheets):
     """Drafts nobody is sending. This is now the only route to an athlete."""
     out = []
@@ -421,6 +489,15 @@ def check_dashboard_pages(timeout=600):
     for tab, err in (failures or {}).items():
         out.append(Finding(FAIL, "dashboard", f"The {tab} tab failed to load", str(err)[:200]))
 
+    # A data load that failed is quieter than a tab that crashed: every tab
+    # still renders, just with less behind it.
+    try:
+        warnings = at.session_state["_load_warnings"]
+    except Exception:
+        warnings = []
+    for w in (warnings or []):
+        out.append(Finding(FAIL, "dashboard", "Dashboard data failed to load", str(w)[:200]))
+
     for exc in at.exception:
         out.append(Finding(FAIL, "dashboard", "Unhandled dashboard exception",
                            str(exc.value)[:200]))
@@ -455,6 +532,9 @@ def run_health_check(sheets, analytics_mod, *, data_records=None, bespoke_names=
             sheets, analytics_mod, gone_norm)),
         ("pending queue", lambda: check_pending_message_queue(sheets)),
         ("message log replies", lambda: check_message_log_replies(sheets)),
+        ("crm rejoins", lambda: check_crm_says_gone_but_training(sheets, analytics_mod)),
+        ("duplicate athlete rows", lambda: check_duplicate_athlete_rows(sheets)),
+        ("programming tier values", lambda: check_programming_tier_values(sheets)),
     ]
     if check_pages:
         checks.append(("dashboard pages", lambda: check_dashboard_pages()))

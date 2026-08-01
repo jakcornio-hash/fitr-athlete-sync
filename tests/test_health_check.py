@@ -194,3 +194,73 @@ def test_a_broken_check_does_not_break_the_sync():
 
     findings = health_check.run_health_check(Exploding(), FakeAnalytics)
     assert isinstance(findings, list)   # returned rather than raised
+
+
+# ── data-hygiene checks ───────────────────────────────────────────────────────
+
+def test_duplicate_athlete_row_is_flagged():
+    sheets = FakeSheets({config.TAB_DATA: [
+        ["Full Name"], ["Andreas Sinados"], ["Andreas Sinados"], ["Amy R"],
+    ]})
+    found = health_check.check_duplicate_athlete_rows(sheets)
+    assert len(found) == 1
+    assert "Andreas Sinados" in found[0].detail
+
+
+def test_single_rows_are_not_flagged():
+    sheets = FakeSheets({config.TAB_DATA: [["Full Name"], ["Amy R"], ["Ben H"]]})
+    assert health_check.check_duplicate_athlete_rows(sheets) == []
+
+
+def test_unrecognised_programming_tier_is_flagged():
+    """Intake-form prose landing in the column that drives message suppression."""
+    sheets = FakeSheets({config.TAB_DATA: [
+        ["Full Name", "Programming Tier"],
+        ["Amy R", "Standard"],
+        ["Ben H", "Elite / Quarterfinalist (3+ years experience)"],
+    ]})
+    found = health_check.check_programming_tier_values(sheets)
+    assert len(found) == 1
+    assert "Elite" in found[0].detail
+
+
+def test_known_tiers_and_blanks_are_accepted():
+    sheets = FakeSheets({config.TAB_DATA: [
+        ["Full Name", "Programming Tier"],
+        ["A", "Standard"], ["B", "Bespoke"], ["C", ""], ["D", "bespoke"],
+    ]})
+    assert health_check.check_programming_tier_values(sheets) == []
+
+
+def test_crm_rejoins_are_reported():
+    class A:
+        @staticmethod
+        def cancelled_athletes(exit_rows, pr):
+            return set(), ["Abi Evans", "Andy Saxon"]
+
+    class S:
+        def load_exit_autopsy(self):
+            return []
+
+        def read_records(self, tab):
+            return []
+
+    found = health_check.check_crm_says_gone_but_training(S(), A)
+    assert len(found) == 1
+    assert "Abi Evans" in found[0].detail
+
+
+def test_no_rejoins_is_quiet():
+    class A:
+        @staticmethod
+        def cancelled_athletes(exit_rows, pr):
+            return set(), []
+
+    class S:
+        def load_exit_autopsy(self):
+            return []
+
+        def read_records(self, tab):
+            return []
+
+    assert health_check.check_crm_says_gone_but_training(S(), A) == []
