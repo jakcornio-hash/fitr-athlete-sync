@@ -525,11 +525,23 @@ Weekly submission via Typeform. Captures soreness, stress, and motivation (1–1
 of the Slack + email digest, above the coaching actions. Run it standalone with
 `python health_check.py` (add `--pages` to render every dashboard tab).
 
-It covers: sheet tabs missing expected columns or carrying duplicate/blank
-headers; a column the code reads that is entirely empty; a suppression rule
-that matches nobody; cancelled athletes reappearing on a coaching list; the
-dashboard and sync disagreeing on who has gone; drafted messages unsent for 3+
-days; and every dashboard tab rendered headlessly via Streamlit's `AppTest`.
+It covers:
+
+*Structure* — sheet tabs missing expected columns or carrying duplicate/blank
+headers; a column the code reads that is entirely empty; a machine-owned tab
+whose header has drifted from its writer.
+
+*Correctness* — a suppression rule that matches nobody; cancelled athletes
+reappearing on a coaching list; the dashboard and sync disagreeing on who has
+gone; every dashboard tab rendered headlessly via Streamlit's `AppTest`; and
+any data load that failed inside `load_all` (which otherwise looks like an
+empty tab rather than an error).
+
+*Business* — drafted messages unsent for 3+ days; athletes being billed who
+are not training, split into missed payments, never-logged and long-dormant;
+athletes the CRM has as cancelled who are training again; duplicate athlete
+rows in `_DATA`; unrecognised `Programming Tier` values; and integrations
+whose config is unset, so the stage runs and processes nothing.
 
 `EXPECTED_COLUMNS` in that file is the schema contract. **When you add a column
 read by name, add it there**, and to `always_populated` if an empty column
