@@ -107,26 +107,44 @@ _RECOVERY_SHEET_ID = "1hSBGVWppOfzI1GUO-ZK74tgLbSye8apDpLn3b2QDoys"
 
 
 @st.cache_resource
+def _secrets():
+    """st.secrets, or an empty mapping when there is no secrets file.
+
+    Touching st.secrets at all raises when no secrets.toml exists — it does not
+    return empty. That is fine on Streamlit Cloud and fine locally, but it means
+    the dashboard cannot be loaded anywhere without one, which broke the health
+    check's page render in GitHub Actions: every scheduled run reported the whole
+    dashboard as failing when the truth was that CI has no secrets file and does
+    not need one, because the credentials are already in the environment.
+    """
+    try:
+        _ = "GOOGLE_SERVICE_ACCOUNT" in st.secrets
+        return st.secrets
+    except Exception:
+        return {}
+
+
 def get_sheets():
     """Return SheetsClient, using Streamlit secrets on Cloud or .env locally."""
     from sheets_client import SheetsClient
+    st_secrets = _secrets()
     # Support both key names: GOOGLE_SERVICE_ACCOUNT (our template) and
     # gcp_service_account (Streamlit's built-in gspread shorthand)
     sa_key = next(
-        (k for k in ("GOOGLE_SERVICE_ACCOUNT", "gcp_service_account") if k in st.secrets),
+        (k for k in ("GOOGLE_SERVICE_ACCOUNT", "gcp_service_account") if k in st_secrets),
         None,
     )
     if sa_key:
-        sa = dict(st.secrets[sa_key])
+        sa = dict(st_secrets[sa_key])
         # Read IDs directly from secrets — don't rely on config module variable
-        sheet_id = str(st.secrets.get("SHEET_ID", "") or config.SHEET_ID).strip()
+        sheet_id = str(st_secrets.get("SHEET_ID", "") or config.SHEET_ID).strip()
         # Also propagate to config for other modules that read it
         if sheet_id:
             config.SHEET_ID = sheet_id
         if not config.RECOVERY_SHEET_ID:
-            config.RECOVERY_SHEET_ID = str(st.secrets.get("RECOVERY_SHEET_ID", "")).strip()
+            config.RECOVERY_SHEET_ID = str(st_secrets.get("RECOVERY_SHEET_ID", "")).strip()
         if not config.COMP_FORM_SHEET_ID:
-            config.COMP_FORM_SHEET_ID = str(st.secrets.get("COMP_FORM_SHEET_ID", "")).strip()
+            config.COMP_FORM_SHEET_ID = str(st_secrets.get("COMP_FORM_SHEET_ID", "")).strip()
         return SheetsClient(service_account_info=sa, sheet_id=sheet_id)
     return SheetsClient()  # local dev — uses .env + service_account.json
 
@@ -861,7 +879,7 @@ def get_fitr():
     from fitr_client import FitrClient
     for key in ("FITR_ACCESS_TOKEN", "FITR_EMAIL", "FITR_PASSWORD",
                 "FITR_CLIENT_ID", "FITR_CLIENT_SECRET"):
-        val = str(st.secrets.get(key, "") or "").strip()
+        val = str(_secrets().get(key, "") or "").strip()
         if val:
             setattr(config, key, val)
     client = FitrClient()
@@ -881,7 +899,7 @@ def _bridge_anthropic_config():
     try:
         import streamlit as _st
         for key in ("ANTHROPIC_API_KEY", "ANTHROPIC_MODEL"):
-            val = str(_st.secrets.get(key, "") or "").strip()
+            val = str(_secrets().get(key, "") or "").strip()
             if val:
                 setattr(config, key, val)
     except Exception:
@@ -1481,8 +1499,8 @@ def _archetype_panel(name, archetype_by_name, profile=None, history=None):
             if athlete_email:
                 if st.button(f"📧 Email progress page to {name.split()[0]}", key=f"email_progress_{name}"):
                     try:
-                        smtp_from = st.secrets.get("SMTP_FROM", "") or config.SMTP_FROM
-                        smtp_pw = st.secrets.get("SMTP_PASSWORD", "") or config.SMTP_PASSWORD
+                        smtp_from = _secrets().get("SMTP_FROM", "") or config.SMTP_FROM
+                        smtp_pw = _secrets().get("SMTP_PASSWORD", "") or config.SMTP_PASSWORD
                         if smtp_from and smtp_pw:
                             notifier.send_progress_page_email(
                                 smtp_from, smtp_pw, athlete_email, name, jst_id, _base
@@ -2293,8 +2311,8 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
                     if st.button(f"📧 Email to {name.split()[0]}", key=f"send_review_{name}"):
                         try:
                             _review_to_send = st.session_state.get(f"review_text_{name}", _cached_review)
-                            _smtp_from = str(st.secrets.get("SMTP_FROM", "") or "").strip() or config.SMTP_FROM
-                            _smtp_pw = str(st.secrets.get("SMTP_PASSWORD", "") or "").strip() or config.SMTP_PASSWORD
+                            _smtp_from = str(_secrets().get("SMTP_FROM", "") or "").strip() or config.SMTP_FROM
+                            _smtp_pw = str(_secrets().get("SMTP_PASSWORD", "") or "").strip() or config.SMTP_PASSWORD
                             if not _smtp_from or not _smtp_pw:
                                 st.warning("SMTP credentials not configured (set SMTP_FROM and SMTP_PASSWORD in secrets).")
                             else:
@@ -7991,8 +8009,8 @@ def _render_story_system(pr_records, competition_rows, first_log_by_nm, data_by_
     if not str(getattr(config, "ANTHROPIC_API_KEY", "")).strip():
         _scalars, _sections = [], []
         try:
-            for _k in st.secrets.keys():
-                _v = st.secrets[_k]
+            for _k in _secrets().keys():
+                _v = _secrets()[_k]
                 (_sections if hasattr(_v, "keys") else _scalars).append(_k)
         except Exception:
             pass

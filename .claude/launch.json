@@ -6,6 +6,12 @@
       "runtimeExecutable": ".venv/bin/streamlit",
       "runtimeArgs": ["run", "dashboard.py", "--server.headless", "true"],
       "port": 8501
+    },
+    {
+      "name": "jst-programme-library",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8743", "--directory", "/Users/jakcornthwaite/JST - Claude/Program Database"],
+      "port": 8743
     }
   ]
 }

@@ -281,7 +281,10 @@ def send_email(subject, plain_text):
     msg["Subject"] = subject
     msg["From"] = _from_header(config.SMTP_FROM)
     msg["To"] = config.SMTP_TO
-    msg.set_content(plain_text)
+    # utf-8 explicitly — see _send_email_to. This is the digest path, and a
+    # single non-breaking space in it silently killed the email for weeks'
+    # worth of runs while Slack kept working.
+    msg.set_content(plain_text, charset="utf-8")
     with smtplib.SMTP("smtp.gmail.com", 587) as s:
         s.ehlo()
         s.starttls()
@@ -313,7 +316,11 @@ def _send_email_to(smtp_from, smtp_password, to_addr, subject, body):
     msg["Subject"] = subject
     msg["From"] = _from_header(smtp_from)
     msg["To"] = to_addr
-    msg.set_content(body)
+    # charset explicitly utf-8: the digest contains £, em dashes and
+    # non-breaking spaces, and set_content defaults to attempting ascii. A
+    # single non-breaking space in a coach's name took down the entire email
+    # digest while Slack went out fine, so nobody noticed the email was gone.
+    msg.set_content(body, charset="utf-8")
     with smtplib.SMTP("smtp.gmail.com", 587) as s:
         s.ehlo()
         s.starttls()
@@ -329,8 +336,9 @@ def _send_html_email_to(smtp_from, smtp_password, to_addr, subject, plain_body, 
     msg["Subject"] = subject
     msg["From"] = _from_header(smtp_from)
     msg["To"] = to_addr
-    msg.attach(MIMEText(plain_body, "plain"))
-    msg.attach(MIMEText(html_body, "html"))
+    # utf-8: athlete names and £ figures are not ascii.
+    msg.attach(MIMEText(plain_body, "plain", "utf-8"))
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
     with smtplib.SMTP("smtp.gmail.com", 587) as s:
         s.ehlo()
         s.starttls()
