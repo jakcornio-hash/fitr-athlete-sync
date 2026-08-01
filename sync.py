@@ -2632,7 +2632,15 @@ def main():
         _last_month_end   = TODAY.replace(day=1) - dt.timedelta(days=1)
         _last_month_start = _last_month_end.replace(day=1)
         _month_label      = _last_month_end.strftime("%B")
-        _month_guard      = f"{TODAY.strftime('%Y-%m')} — monthly_fitr"
+        # Matches the note this block writes — "[2026-08-01 — monthly_fitr]" —
+        # for any day in the current month. The old guard looked for the
+        # substring "2026-08 — monthly_fitr", which never appears in that note
+        # because the date is written in full, so the once-a-month guard has
+        # never actually held. It only stayed hidden because the block runs on
+        # day 1 and the sync normally runs once a day; the moment a second run
+        # happened on the 1st it queued all 91 monthly messages again.
+        _month_guard_re = re.compile(
+            rf"\[{TODAY.strftime('%Y-%m')}-\d\d — monthly_fitr\]")
 
         _month_sessions: dict = {}
         _month_prs: dict = {}
@@ -2646,15 +2654,31 @@ def main():
                 if _b and _v:
                     _month_prs.setdefault(_nm, []).append((_b, _v))
 
+        _data_names_norm = {analytics.normalise_client_name(n) for n in data_by_name_all}
         _mfitr_notes: dict = {}
         _mfitr_sent = 0
+        _skipped_not_ours = 0
         for _nm, _sess_dates in _month_sessions.items():
             if _nm in bespoke_names or _is_gone(_nm):
+                continue
+            # Must be a JST athlete, i.e. on _DATA. Fitr hands over every chat
+            # contact the account has ever had — 1,698 people, most of whom
+            # bought a one-off plan years ago — and 19 of the 90 monthly messages
+            # drafted this month went to people with no row on the sheet. Those
+            # are not ours to send a personal monthly note to, and the guard
+            # cannot work for them either: there is no row to record it against.
+            #
+            # Matched on the normalised name, not the exact one. Fitr spells
+            # people differently from the sheet ("Jake foster" against "Jake
+            # Foster"), and an exact check would have quietly dropped a real
+            # athlete while claiming to filter out strangers.
+            if analytics.normalise_client_name(_nm) not in _data_names_norm:
+                _skipped_not_ours += 1
                 continue
             _room = room_id_by_name.get(_nm)
             if not _room:
                 continue
-            if _month_guard in str(data_by_name_all.get(_nm, {}).get("Coaching Notes", "")):
+            if _month_guard_re.search(str(data_by_name_all.get(_nm, {}).get("Coaching Notes", ""))):
                 continue
             _sessions = len(_sess_dates)
             _prs      = _month_prs.get(_nm, [])
@@ -2680,6 +2704,9 @@ def main():
                 print(f"  ! Monthly Fitr message failed for {_nm}: {_exc}")
         if _mfitr_notes:
             append_coaching_notes(sheets, _mfitr_notes)
+        if _skipped_not_ours:
+            print(f"  Monthly message skipped for {_skipped_not_ours} Fitr contact(s) "
+                  f"who are not on the athlete sheet")
         if _mfitr_sent:
             print(f"Monthly Fitr progress messages: {_sent_or_drafted(_mfitr_sent)}")
 

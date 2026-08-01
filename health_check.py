@@ -254,6 +254,20 @@ def check_cancelled_not_on_lists(engagement_results, gone_norm, analytics_mod):
     return out
 
 
+def status_overrides(sheets):
+    """{athlete: 'cancelled'|'active'} — a coach's explicit call on who is still
+    a client. Outranks the Active Roster and the CRM, so any recomputation of
+    gone-ness that leaves it out will disagree with the sync by exactly the
+    number of overrides and report it as a fault."""
+    try:
+        rows = sheets.read_records("Athlete Status Overrides")
+    except Exception:
+        return {}
+    return {str(r.get("Name", "")).strip(): str(r.get("Status", "")).strip().lower()
+            for r in rows
+            if str(r.get("Name", "")).strip() and str(r.get("Status", "")).strip()}
+
+
 def check_roster_agrees_with_dashboard(sheets, analytics_mod, gone_norm):
     """The dashboard and the sync must exclude the same people.
 
@@ -272,7 +286,8 @@ def check_roster_agrees_with_dashboard(sheets, analytics_mod, gone_norm):
         return [Finding(WARN, "roster", "Could not cross-check the roster", str(exc)[:140])]
 
     cancelled_lower, _ = analytics_mod.cancelled_athletes(exit_rows, pr_records)
-    shared = analytics_mod.not_current_client_names(cancelled_lower, data_records, roster)
+    shared = analytics_mod.not_current_client_names(
+        cancelled_lower, data_records, roster, overrides=status_overrides(sheets))
 
     raw_only = {analytics_mod.normalise_client_name(n) for n in cancelled_lower} - shared
     if raw_only:
@@ -657,7 +672,8 @@ if __name__ == "__main__":
     roster = [str(r.get("Full Name", "")).strip()
               for r in sh.read_records("Active Roster")
               if str(r.get("Full Name", "")).strip()]
-    gone = analytics.not_current_client_names(cancelled, data, roster)
+    gone = analytics.not_current_client_names(
+        cancelled, data, roster, overrides=status_overrides(sh))
 
     results = run_health_check(sh, analytics, data_records=data, bespoke_names=bespoke,
                                gone_norm=gone, check_pages=want_pages)
