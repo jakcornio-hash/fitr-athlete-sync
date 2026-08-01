@@ -956,6 +956,14 @@ def sync_programme_from_recovery(sheets, rec_latest, email_by_name):
 
 # ------------------------------------------------------------ message delivery
 _PENDING_MESSAGES = []
+# Messages that genuinely reached an athlete. The Message Log is supposed to be
+# the record of what we actually said to people — the reply scanner reads it to
+# look for answers, and the response-rate figures divide by it. Call sites used
+# to log every message they *composed*, so with automatic sending off the log
+# would fill with drafts nobody had sent, and we would scan for replies to
+# messages that were never delivered. Recorded here instead, at the one place
+# that knows whether it sent or queued.
+_DELIVERED = []
 
 
 def _deliver(fitr, room_id, msg, name, msg_type):
@@ -971,11 +979,21 @@ def _deliver(fitr, room_id, msg, name, msg_type):
         return False
     if config.AUTO_SEND_ATHLETE_MESSAGES:
         fitr.send_chat_message(room_id, msg)
+        _DELIVERED.append({
+            "Date": TODAY.isoformat(), "Athlete Name": str(name),
+            "Message Type": str(msg_type), "Room ID": str(room_id),
+        })
         return True
     _PENDING_MESSAGES.append([
         TODAY.isoformat(), str(name), str(msg_type), str(msg), str(room_id), "pending",
     ])
     return False
+
+
+def _sent_or_drafted(n):
+    """Wording for the run log: these only leave the building if sending is on."""
+    return (f"{n} sent" if config.AUTO_SEND_ATHLETE_MESSAGES
+            else f"{n} drafted for a coach to send")
 
 
 def flush_pending_messages(sheets):
@@ -1799,7 +1817,7 @@ def main():
                 import time as _time; _time.sleep(0.5)
             except FitrError as exc:
                 print(f"  ! Congrats message failed for {name}: {exc}")
-        print(f"Congratulations messages sent: {congrats_sent}")
+        print(f"Congratulations messages: {_sent_or_drafted(congrats_sent)}")
 
     # Standalone streak messages — athletes with a milestone but no PBs this run
     for nm, streak_days in _pending_streaks.items():
@@ -1824,7 +1842,7 @@ def main():
     if _streak_notes:
         append_coaching_notes(sheets, _streak_notes)
     if _streak_sent:
-        print(f"Streak milestone messages sent: {_streak_sent}")
+        print(f"Streak milestone messages: {_sent_or_drafted(_streak_sent)}")
 
     # ---- archetype delivery is now coach-sent from the dashboard ----
     # The Typeform shows the athlete a provisional result instantly; the coach
@@ -1921,7 +1939,7 @@ def main():
             except FitrError as exc:
                 print(f"  ! Off-boarding message failed for {nm}: {exc}")
         if offboarding_sent:
-            print(f"Off-boarding check-in messages sent: {offboarding_sent}")
+            print(f"Off-boarding check-in messages: {_sent_or_drafted(offboarding_sent)}")
 
     # ---- referral acknowledgements ----
     _referrals = sheets.load_referrals()
@@ -2239,7 +2257,7 @@ def main():
         except FitrError as exc:
             print(f"  ! Anniversary message failed for {nm}: {exc}")
     if anniversaries_sent:
-        print(f"Anniversary messages sent: {anniversaries_sent}")
+        print(f"Anniversary messages: {_sent_or_drafted(anniversaries_sent)}")
     if summit_flag_names:
         try:
             _lines = "\n".join(f"  • {nm}" for nm in summit_flag_names)
@@ -2282,7 +2300,7 @@ def main():
         except FitrError as exc:
             print(f"  ! Onboarding message failed for {nm}: {exc}")
     if onboarding_sent:
-        print(f"New athlete onboarding messages sent: {onboarding_sent}")
+        print(f"New athlete onboarding messages: {_sent_or_drafted(onboarding_sent)}")
 
     # ---- pre-competition automated messages ----
     # A comp milestones: send once on exact day (sync runs daily)
@@ -2349,7 +2367,7 @@ def main():
         except FitrError as exc:
             print(f"  ! Pre-comp message failed for {nm}: {exc}")
     if comp_msgs_sent:
-        print(f"Pre-competition messages sent: {comp_msgs_sent}")
+        print(f"Pre-competition messages: {_sent_or_drafted(comp_msgs_sent)}")
 
     # ---- comp message dedup set (covers post_comp_ and comp_result_ prefixes) ----
     sent_comp_keys = set()
@@ -2414,7 +2432,7 @@ def main():
         except FitrError as exc:
             print(f"  ! Post-comp message failed for {nm}: {exc}")
     if post_comp_msgs_sent:
-        print(f"Post-competition messages sent: {post_comp_msgs_sent}")
+        print(f"Post-competition messages: {_sent_or_drafted(post_comp_msgs_sent)}")
 
     # ---- competition result congratulations ----
     # Send once when a result is entered for a recent comp, deduped via sent_comp_keys.
@@ -2455,7 +2473,7 @@ def main():
         except FitrError as exc:
             print(f"  ! Comp result message failed for {nm}: {exc}")
     if comp_result_msgs_sent:
-        print(f"Competition result messages sent: {comp_result_msgs_sent}")
+        print(f"Competition result messages: {_sent_or_drafted(comp_result_msgs_sent)}")
 
     # ---- capture athlete replies to post-comp messages ----
     post_comp_replies = capture_postcomp_responses(fitr, sheets, TODAY)
@@ -2603,7 +2621,7 @@ def main():
         if _mfitr_notes:
             append_coaching_notes(sheets, _mfitr_notes)
         if _mfitr_sent:
-            print(f"Monthly Fitr progress messages sent: {_mfitr_sent}")
+            print(f"Monthly Fitr progress messages: {_sent_or_drafted(_mfitr_sent)}")
 
         # Monthly gym owner credit statements
         try:
@@ -2623,9 +2641,15 @@ def main():
             print(f"  ! Gym credit emails failed: {_gym_err}")
 
     # ---- log automated messages + check for replies ----
-    if messages_sent_log:
-        sheets.log_messages(messages_sent_log)
-        print(f"Automated messages logged: {len(messages_sent_log)}")
+    # _DELIVERED, not messages_sent_log: only what actually reached an athlete
+    # belongs in the Message Log. With automatic sending off that is nothing,
+    # and the drafts are on the Pending Messages tab waiting for a coach.
+    if _DELIVERED:
+        sheets.log_messages(_DELIVERED)
+        print(f"Automated messages logged: {len(_DELIVERED)}")
+    elif messages_sent_log:
+        print(f"Messages composed: {len(messages_sent_log)} — none sent "
+              f"(automatic sending is off), so none logged as sent")
 
     pending_msgs = sheets.load_pending_messages()
     if pending_msgs and not config.DRY_RUN:
