@@ -10,3 +10,14 @@ state.json
 .DS_Store
 .claude/settings.local.json
 JST-Tone-of-Voice-Guidelines.md
+
+# Jak's working documents. Deliberately NOT in the repo: this is a public
+# repository and these are working notes and briefs, not project source.
+# Ignored rather than merely untracked because a `git add -A` swept them into
+# a commit twice, and the second time it reached GitHub before anyone noticed.
+DASHBOARD_OVERHAUL_PROMPT.md
+coach-guide-ed.md
+archetype_typeform_build.md
+archetype_typeform_cowork_prompt.md
+archetype_typeform_prompt.txt
+archetype_typeform_spec.json
