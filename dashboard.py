@@ -9541,16 +9541,6 @@ def main():
         st.session_state["_gone_norm"] = gone_norm
         st.session_state["_load_warnings"] = load_warnings
 
-    # A tab that failed to load says so in its own tab. A failed *data* load is
-    # worse and quieter: every tab still renders, just with less behind it. Say
-    # so once, at the top, where it cannot be missed.
-    if load_warnings:
-        st.error(
-            "**Some data could not be loaded, so figures below are incomplete.**\n\n"
-            + "\n".join(f"- {w}" for w in load_warnings)
-            + "\n\nThis is usually the Google Sheets read limit — reloading in a "
-              "minute normally fixes it. The daily health check reports it too."
-        )
         trend_results, engagement_results, consistency_wins, rec_alert_rows, rec_by_name, comp_results = run_analytics(
             pr_records, athletes, rec_latest, data_records, competition_rows=competition_rows
         )
@@ -9601,6 +9591,17 @@ def main():
         "📚 Playbook", "💎 Grandslam", "📣 Marketing", "🏋️ Gym Referrals",
         "💷 Finance", "⚙️ Sync", "❓ Help",
     ])
+
+    # A tab that failed to load says so in its own tab. A failed *data* load is
+    # worse and quieter: every tab still renders, just with less behind it. Say
+    # so once, at the top, where it cannot be missed.
+    if load_warnings:
+        st.error(
+            "**Some data could not be loaded, so figures below are incomplete.**\n\n"
+            + "\n".join(f"- {w}" for w in load_warnings)
+            + "\n\nThis is usually the Google Sheets read limit — reloading in a "
+              "minute normally fixes it. The daily health check reports it too."
+        )
 
     st.session_state[TAB_RENDER_FAILURES_KEY] = {}
 
