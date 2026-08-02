@@ -1873,7 +1873,7 @@ def humanise_benchmark(name):
     m = re.match(r"^Max\s+(.+?)\s+in\s+(\d+)\s*(?:Minutes?|Mins?)$", raw, re.IGNORECASE)
     if m:
         return f"max {_lower_words(m.group(1))} in {m.group(2)} minutes"
-    return _lower_words(raw)
+    return _lower_words(raw.replace(" - ", " "))
 
 
 # Movements a coach writes hyphenated. The database spells them apart.
@@ -1943,32 +1943,76 @@ def months_logging_streak(pr_records, athlete_name, today=None, achievement_only
     return streak
 
 
-def monthly_message(first_name, results, streak_months=0, min_streak=3):
+def _dedupe_results(results):
+    """One entry per benchmark, improvements first, most recent kept.
+
+    Nick Flint logged 37 results across 22 benchmarks in a month, the 1RM clean
+    five times. Listing a lift five times reads like a machine emptying a table.
+    """
+    latest = {}
+    for item in results:
+        bench = str(item[0]).strip()
+        value = str(item[1]).strip()
+        improved = bool(item[2]) if len(item) > 2 else False
+        if not bench or not value:
+            continue
+        prev = latest.get(bench)
+        # Keep the most recent, but never lose the fact that one of them was a PB.
+        latest[bench] = (bench, value, improved or bool(prev and prev[2]))
+    ordered = list(latest.values())
+    ordered.sort(key=lambda r: 0 if r[2] else 1)   # stable: PBs first
+    return ordered
+
+
+def _join_results(items):
+    """"100 kg on the 1RM clean, 85 kg on the strict press and 20:00 on the row"."""
+    phrases = [f"{v} on the {humanise_benchmark(b)}" for b, v, _ in items]
+    if len(phrases) == 1:
+        return phrases[0]
+    return ", ".join(phrases[:-1]) + " and " + phrases[-1]
+
+
+def monthly_message(first_name, results, streak_months=0, min_streak=3,
+                    max_listed=4):
     """The monthly note to an athlete, or None when there is nothing to say.
 
-    results: [(benchmark, value), ...] logged last month, best first.
+    results: [(benchmark, value)] or [(benchmark, value, was_a_pb)] logged last
+    month.
 
-    Leads with one specific result and, where it is real, the consistency
-    story. Deliberately states no counts: the previous version opened with
-    "You hit 4 results... 3 sessions logged. Solid month", which advertises a
-    thin month and makes the praise ring hollow. It was also wrong, because
-    those "sessions" were days on which a benchmark was retested, not training
-    sessions.
+    Leads with one specific result, names the other results worth shouting
+    about, and tells the consistency story where it is real. Deliberately
+    states no count of "results" or "sessions": the previous version opened
+    with "You hit 4 results... 3 sessions logged. Solid month", which
+    advertises a thin month and makes the praise ring hollow. The session
+    figure was wrong as well, counting days a benchmark was retested rather
+    than sessions trained.
 
     Returns None when the athlete logged nothing worth citing. Silence beats a
     hollow "solid month".
     """
     first = str(first_name or "").strip()
-    if not first or not results:
+    if not first:
+        return None
+    items = _dedupe_results(results or ())
+    if not items:
         return None
 
-    bench, value = results[0][0], results[0][1]
-    bench_h = humanise_benchmark(bench)
-    value = str(value).strip()
-    if not bench_h or not value:
+    head_bench = humanise_benchmark(items[0][0])
+    if not head_bench:
         return None
 
-    parts = [f"Hey {first}, saw you logged {value} on the {bench_h} last month."]
+    parts = [f"Hey {first}, saw you logged {items[0][1]} on the {head_bench} last month."]
+
+    others = items[1:max_listed]
+    if others:
+        parts.append(f"You also hit {_join_results(others)}.")
+
+    remaining = len(items) - 1 - len(others)
+    # Only ever state a number when it is one worth stating. Two or three other
+    # lifts on top of four named ones is a month worth remarking on; one is not.
+    if remaining >= 2:
+        parts.append(f"That's on top of {remaining} other results.")
+
     if streak_months >= min_streak:
         parts.append(
             f"You've logged a result every month for the last {streak_months} "

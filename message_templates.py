@@ -222,7 +222,7 @@ def _build_templates():
     )
     t[("consistency", "warmth")] = lambda f, ctx: (
         f"Hey {f}, {_weeks_phrase(ctx)} without a break. You might not feel it day to day, but that "
-        f"adds up to something real. Really good to see."
+        f"adds up to something real. How's it been fitting around everything else?"
     )
     t[("consistency", "autonomy")] = lambda f, ctx: (
         f"Hey {f}, {_weeks_phrase(ctx)} in a row. Nobody made that happen but you, and it's adding up. "
@@ -238,7 +238,7 @@ def _build_templates():
     )
     t[("consistency", "generic")] = lambda f, ctx: (
         f"Hey {f}, {_weeks_phrase(ctx)} of logging in a row, that's real discipline. "
-        f"Keep the momentum going."
+        f"What's making it stick at the minute?"
     )
 
     # ── performance_concern ───────────────────────────────────────────────────

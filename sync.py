@@ -1820,7 +1820,9 @@ def main():
     _streak_sent = 0
 
     def _tidy_bench(b):
-        return str(b).replace(" - ", " ")
+        # Full humanising, not just dropping the dash: these names go straight
+        # into a congratulations message an athlete reads.
+        return analytics.humanise_benchmark(b)
 
     if _wins_by_name:
         congrats_sent = 0
@@ -2666,7 +2668,14 @@ def main():
                 # Leading a monthly note with "saw you logged 78 kg on the
                 # bodyweight" would be worse than saying nothing.
                 if _b and _v and config.is_achievement_benchmark(_b):
-                    _month_prs.setdefault(_nm, []).append((_b, _v))
+                    # Carry whether it beat their previous, so the message can
+                    # lead with a PB rather than whatever happened to be first.
+                    _prev = str(_rec.get("Previous Value", "")).strip()
+                    _improved = (
+                        bool(_prev) and _prev.lower() != "first entry"
+                        and analytics.compare_result(_b, _prev, _v) == "improved"
+                    )
+                    _month_prs.setdefault(_nm, []).append((_b, _v, _improved))
 
         _data_names_norm = {analytics.normalise_client_name(n) for n in data_by_name_all}
         _mfitr_notes: dict = {}

@@ -136,3 +136,61 @@ def test_january_rolls_back_a_year():
     today = dt.date(2026, 1, 1)
     rows = [_pr("A", "2025-12-10"), _pr("A", "2025-11-10")]
     assert analytics.months_logging_streak(rows, "A", today=today) == 2
+
+
+# ── multiple results worth shouting about ─────────────────────────────────────
+
+def test_other_results_are_named_specifically():
+    """Jak: "if there's multiple results to shout about let's recognise them
+    too. List out the other specific results and what he got.\""""
+    msg = analytics.monthly_message("Nick", [
+        ("AMRAP 5 Minutes - Bar Muscle Ups", "56 reps"),
+        ("1RM Clean (Full)", "100 kg"),
+        ("1RM Back Squat", "180 kg"),
+    ], streak_months=29)
+    assert "You also hit 100 kg on the 1RM clean (full) and 180 kg on the 1RM back squat." in msg
+
+
+def test_three_others_are_comma_joined_with_and():
+    msg = analytics.monthly_message("Nick", [
+        ("1RM Snatch", "80 kg"), ("1RM Clean", "100 kg"),
+        ("2km Row", "7:20"), ("1RM Back Squat", "180 kg"),
+    ])
+    assert "100 kg on the 1RM clean, 7:20 on the 2km row and 180 kg on the 1RM back squat" in msg
+
+
+def test_a_repeated_benchmark_is_listed_once():
+    """Nick logged the 1RM clean five times in July."""
+    msg = analytics.monthly_message("Nick", [
+        ("1RM Clean", "95 kg"), ("1RM Clean", "98 kg"), ("1RM Clean", "100 kg"),
+    ])
+    assert msg.count("1RM clean") == 1
+    assert "100 kg" in msg      # the most recent is kept
+
+
+def test_a_big_month_gets_a_tail_count_because_it_is_worth_stating():
+    results = [(f"Lift {i}", f"{i} kg") for i in range(1, 9)]
+    msg = analytics.monthly_message("Nick", results)
+    assert "That's on top of 4 other results." in msg
+
+
+def test_one_leftover_result_is_not_announced_as_a_number():
+    """"on top of 1 other result" is not a number worth writing home about."""
+    results = [(f"Lift {i}", f"{i} kg") for i in range(1, 6)]
+    msg = analytics.monthly_message("Nick", results)
+    assert "on top of" not in msg
+
+
+def test_a_pb_leads_even_when_logged_later():
+    msg = analytics.monthly_message("Amy", [
+        ("1RM Snatch", "60 kg", False),
+        ("1RM Deadlift", "150 kg", True),
+    ])
+    assert msg.startswith("Hey Amy, saw you logged 150 kg on the 1RM deadlift last month.")
+
+
+def test_a_single_result_still_reads_as_before():
+    msg = analytics.monthly_message("Tom", [("1RM Overhead Press", "85 kg")], streak_months=8)
+    assert "You also hit" not in msg
+    assert "on top of" not in msg
+    assert msg.startswith("Hey Tom, saw you logged 85 kg on the 1RM overhead press last month.")

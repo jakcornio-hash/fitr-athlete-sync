@@ -3873,8 +3873,11 @@ def _build_outreach_rows(engagement_results, trend_results, rec_alert_rows, mile
                     parts.append(f"declining ({s['trend_pct']:+.1f}%/entry)")
                 if s["peak_drop_flag"]:
                     parts.append(f"{s['peak_drop_pct']:.0f}% below peak")
+                # Humanised: this string goes into a message an athlete reads,
+                # and "AMRAP 5 Minutes - Bar Muscle Ups" is a database row, not
+                # something a coach would ever say out loud.
                 _perf_issues.setdefault(athlete, []).append(
-                    f"{s['benchmark']}: {', '.join(parts)}"
+                    f"{analytics.humanise_benchmark(s['benchmark'])}: {', '.join(parts)}"
                 )
     for athlete, bench_lines in _perf_issues.items():
         rows.append({
