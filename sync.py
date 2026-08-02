@@ -1501,6 +1501,7 @@ def main():
     rec_latest = recovery.latest_by_email(sheets)
     rec_by_name = {}
     rec_notes = {}
+    rec_history_by_name = {}
     if rec_latest:
         email_to_name = {v.lower(): k for k, v in email_by_name.items()}
         for email, row in rec_latest.items():
@@ -1510,6 +1511,15 @@ def main():
                 rstr = recovery.readiness_string(row)
                 if rstr:
                     rec_notes[nm] = rstr
+        # Full history so the alerts can tell a run of bad weeks from one bad
+        # week. Read failure degrades to no trend context, not to no alerts.
+        try:
+            for email, rows in (recovery.all_by_email(sheets) or {}).items():
+                nm = email_to_name.get(email.lower())
+                if nm and rows:
+                    rec_history_by_name[nm] = rows
+        except Exception as exc:
+            print(f"  ! Recovery history unavailable, alerts lose trend context: {exc}")
     print(f"Recovery responses merged: {len(rec_notes)}")
 
     progs_updated = sync_programme_from_recovery(sheets, rec_latest, email_by_name)
@@ -1727,7 +1737,8 @@ def main():
     milestones = analytics.milestone_detection(bench_rows)
     consistency_wins = analytics.consistency_check(pr_records, active_athletes)
     streak_hits = analytics.daily_streak_check(pr_records, active_athletes)
-    rec_alert_rows = analytics.recovery_alerts(rec_by_name)
+    rec_alert_rows = analytics.recovery_alerts(
+        rec_by_name, history_by_name=rec_history_by_name)
 
     # ---- weekly-send guard: run the Monday sends at most once per week ----
     # If the sync runs more than once on a Monday (manual trigger + a delayed

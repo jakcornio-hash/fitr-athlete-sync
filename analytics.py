@@ -442,40 +442,108 @@ def load_analysis(pr_log_records, rec_by_name=None, data_records=None, weeks_bac
     return results
 
 
-def recovery_alerts(recovery_by_name):
+def _rec_num(val):
+    try:
+        return float(str(val).strip())
+    except (ValueError, TypeError):
+        return None
+
+
+# Recovery metrics: (column, direction, red threshold, wording).
+# direction "high" = a big number is bad; "low" = a small number is bad.
+_REC_METRICS = (
+    ("Soreness", "high", 7, "soreness"),
+    ("Stress", "high", 7, "stress"),
+    ("Motivation", "low", 3, "motivation"),
+)
+
+
+def _rec_series(rows, column):
+    """Chronological numeric values for one metric, oldest first."""
+    out = []
+    for r in (rows or ()):
+        v = _rec_num(r.get(column))
+        if v is not None:
+            out.append(v)
+    return out
+
+
+def _elevated(value, direction, threshold):
+    return value >= threshold if direction == "high" else value <= threshold
+
+
+def recovery_alerts(recovery_by_name, history_by_name=None, persistent_weeks=2):
     """
     Flag athletes with concerning recovery survey scores.
 
-    recovery_by_name: {athlete_name: raw_row_dict} from sheets (Typeform column headers).
-    Returns list of [athlete, issue, submitted_at].
-    Thresholds: soreness >= 7, stress >= 7, motivation <= 3, injury mention in availability.
-    """
-    def _num(val):
-        try:
-            return float(str(val).strip())
-        except (ValueError, TypeError):
-            return None
+    recovery_by_name: {athlete_name: raw_row_dict} — the most recent response.
+    history_by_name:  {athlete_name: [rows oldest-first]} — optional. With it,
+    a run of bad weeks reads differently from one bad week, and a metric that
+    is climbing toward the threshold is caught before it crosses.
 
+    Returns list of [athlete, issue, submitted_at], worst first.
+
+    Judging solely on the latest response — which is what this did — treats one
+    rough week and a month-long slide as the same alert. They are not the same
+    coaching problem, and the second is the one that precedes someone quitting.
+    """
     alerts = []
     for name in sorted(recovery_by_name):
         row = recovery_by_name[name]
-        issues = []
-        s = _num(row.get("Soreness"))
-        if s is not None and s >= 7:
-            issues.append(f"High soreness ({s:.0f}/10)")
-        st = _num(row.get("Stress"))
-        if st is not None and st >= 7:
-            issues.append(f"High stress ({st:.0f}/10)")
-        m = _num(row.get("Motivation"))
-        if m is not None and m <= 3:
-            issues.append(f"Low motivation ({m:.0f}/10)")
+        hist = (history_by_name or {}).get(name) or []
+        ts = str(row.get("Submitted At", "")).strip()
+
+        for column, direction, threshold, word in _REC_METRICS:
+            latest = _rec_num(row.get(column))
+            if latest is None:
+                continue
+            series = _rec_series(hist, column)
+
+            if _elevated(latest, direction, threshold):
+                # How many consecutive submissions, ending at the latest, are bad?
+                streak = 0
+                for v in reversed(series):
+                    if _elevated(v, direction, threshold):
+                        streak += 1
+                    else:
+                        break
+                streak = max(streak, 1)
+                label = ("High" if direction == "high" else "Low")
+                if streak >= persistent_weeks:
+                    alerts.append([
+                        name,
+                        f"{label} {word} ({latest:.0f}/10) — {streak} weeks running, not a one-off",
+                        ts, 0,
+                    ])
+                else:
+                    alerts.append([name, f"{label} {word} ({latest:.0f}/10)", ts, 1])
+                continue
+
+            # Not over the line yet, but heading there. This is the whole point
+            # of keeping history: catch the slide, not just the crash.
+            if len(series) >= 3:
+                recent = series[-3:]
+                rising = (all(b >= a for a, b in zip(recent, recent[1:]))
+                          if direction == "high"
+                          else all(b <= a for a, b in zip(recent, recent[1:])))
+                moved = abs(recent[-1] - recent[0]) >= 2
+                near = (latest >= threshold - 2 if direction == "high"
+                        else latest <= threshold + 2)
+                if rising and moved and near:
+                    trend = "→".join(f"{v:.0f}" for v in recent)
+                    alerts.append([
+                        name,
+                        f"{word.capitalize()} worsening ({trend}) — not red yet, worth a word",
+                        ts, 2,
+                    ])
+
         avail = str(row.get("Availability this week", "")).strip()
         if any(w in avail.lower() for w in ("injur", "carrying", "niggle")):
-            issues.append(f"Injury flag: {avail}")
-        ts = str(row.get("Submitted At", "")).strip()
-        for issue in issues:
-            alerts.append([name, issue, ts])
-    return alerts
+            alerts.append([name, f"Injury flag: {avail}", ts, 0])
+
+    # Persistent problems first, then new red flags, then early warnings.
+    alerts.sort(key=lambda a: (a[3], a[0]))
+    return [a[:3] for a in alerts]
 
 
 # ── Competition prep ──────────────────────────────────────────────────────────

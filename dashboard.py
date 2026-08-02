@@ -284,15 +284,32 @@ def run_analytics(pr_records, athletes, rec_latest, data_records=None, competiti
         if nm:
             name_lookup.setdefault(analytics.normalise_client_name(nm), nm)
 
-    rec_by_name = {}
-    for em, row in rec_latest.items():
+    def _rec_name_for(em, row):
         nm = email_to_name.get(str(em).strip().lower())
         if not nm:
             typed = analytics.normalise_client_name(row.get("Name:", ""))
             nm = name_lookup.get(typed)
+        return nm
+
+    rec_by_name = {}
+    for em, row in rec_latest.items():
+        nm = _rec_name_for(em, row)
         if nm:
             rec_by_name[nm] = row
-    rec_alert_rows = analytics.recovery_alerts(rec_by_name)
+
+    # Full submission history, resolved to the same names, so a run of bad weeks
+    # can be told apart from one bad week. Optional: if the history read fails
+    # the alerts still work, just without trend context.
+    rec_history_by_name = {}
+    try:
+        for em, rows in (_load_recovery_all_cached() or {}).items():
+            nm = _rec_name_for(em, (rows or [{}])[0])
+            if nm and rows:
+                rec_history_by_name[nm] = rows
+    except Exception:
+        pass
+    rec_alert_rows = analytics.recovery_alerts(
+        rec_by_name, history_by_name=rec_history_by_name)
 
     # Use the Competitions tab if available; fall back to _DATA columns
     if competition_rows:
