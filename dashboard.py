@@ -50,7 +50,8 @@ _ensure_fresh(arch_mod, "result_is_close", "athlete_result_message")
 _ensure_fresh(analytics, "not_current_client_names", "retest_analysis",
               "normalise_client_name", "monthly_value", "match_athlete_name",
               "canonical_date_key", "revenue_anomalies", "training_activity",
-              "merge_athlete_drafts",
+              "merge_athlete_drafts", "monthly_message", "humanise_benchmark",
+              "months_logging_streak",
               "activity_from_data_records")
 # config too, and for the same reason. A stale config does not raise — the
 # getattr defaults just quietly take over, so new prices read as missing and

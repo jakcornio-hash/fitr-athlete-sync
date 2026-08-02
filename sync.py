@@ -2662,7 +2662,10 @@ def main():
                 _month_sessions.setdefault(_nm, set()).add(_d_str)
                 _b = str(_rec.get("Benchmark Name", "")).strip()
                 _v = str(_rec.get("Value", "")).strip()
-                if _b and _v:
+                # Bodyweight, heart rate and macro logs are data, not results.
+                # Leading a monthly note with "saw you logged 78 kg on the
+                # bodyweight" would be worse than saying nothing.
+                if _b and _v and config.is_achievement_benchmark(_b):
                     _month_prs.setdefault(_nm, []).append((_b, _v))
 
         _data_names_norm = {analytics.normalise_client_name(n) for n in data_by_name_all}
@@ -2691,17 +2694,17 @@ def main():
                 continue
             if _month_guard_re.search(str(data_by_name_all.get(_nm, {}).get("Coaching Notes", ""))):
                 continue
-            _sessions = len(_sess_dates)
-            _prs      = _month_prs.get(_nm, [])
-            _first    = _nm.split()[0]
-            _pr_line  = (
-                f" {_prs[0][0]} came in at {_prs[0][1]}." if len(_prs) == 1
-                else f" You hit {len(_prs)} results, {_prs[0][0]} at {_prs[0][1]} stands out."
-            ) if _prs else ""
-            _msg = (
-                f"{_first}, {_month_label} done.{_pr_line} "
-                f"{_sessions} session{'s' if _sessions != 1 else ''} logged. Solid month."
-            )
+            _prs   = _month_prs.get(_nm, [])
+            _first = _nm.split()[0]
+            # Lead with one real result and the consistency story. No counts:
+            # "you hit 4 results, 3 sessions logged" advertises a thin month and
+            # makes the praise ring hollow, and the session figure was wrong
+            # anyway — those were days a benchmark got retested, not training
+            # sessions. No result worth citing means no message.
+            _streak = analytics.months_logging_streak(pr_records, _nm, today=TODAY)
+            _msg = analytics.monthly_message(_first, _prs, streak_months=_streak)
+            if not _msg:
+                continue
             try:
                 _deliver(fitr, _room, _msg, _nm, "monthly_fitr")
                 _mfitr_notes[_nm] = f"[{TODAY.isoformat()} — monthly_fitr]"

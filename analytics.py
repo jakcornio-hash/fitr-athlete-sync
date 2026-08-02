@@ -1846,6 +1846,138 @@ def training_activity(activity_items, today=None):
     return out
 
 
+# Acronyms that stay upper case when a benchmark name is made readable.
+_BENCH_ACRONYMS = {
+    "1RM", "2RM", "3RM", "4RM", "5RM", "6RM", "7RM", "8RM", "9RM", "10RM",
+    "11RM", "12RM", "15RM", "20RM", "AMRAP", "EMOM", "HSPU", "RMU", "BMU",
+    "TTB", "GHD", "GHDSU", "C2B", "FTP", "RPM", "RHR", "DU", "OHS", "RDL",
+    "DB", "KB", "BB", "PB", "HYROX", "JST", "AAA",
+}
+
+
+def humanise_benchmark(name):
+    """A raw benchmark name written the way a coach would say it.
+
+    The PR Log holds database names ("AMRAP 5 Minutes - Bar Muscle Ups").
+    Dropping those verbatim into a message to an athlete is the clearest tell
+    that a machine wrote it.
+    """
+    raw = str(name or "").strip()
+    if not raw:
+        return ""
+
+    # "AMRAP 5 Minutes - Bar Muscle Ups" -> "5-minute AMRAP bar muscle-ups"
+    m = re.match(r"^AMRAP\s+(\d+)\s*(?:Minutes?|Mins?)\s*[-–:]\s*(.+)$", raw, re.IGNORECASE)
+    if m:
+        return f"{m.group(1)}-minute AMRAP {_lower_words(m.group(2))}"
+    m = re.match(r"^Max\s+(.+?)\s+in\s+(\d+)\s*(?:Minutes?|Mins?)$", raw, re.IGNORECASE)
+    if m:
+        return f"max {_lower_words(m.group(1))} in {m.group(2)} minutes"
+    return _lower_words(raw)
+
+
+# Movements a coach writes hyphenated. The database spells them apart.
+_BENCH_HYPHENATE = (
+    ("muscle ups", "muscle-ups"), ("muscle up", "muscle-up"),
+    ("pull ups", "pull-ups"), ("pull up", "pull-up"),
+    ("push ups", "push-ups"), ("push up", "push-up"),
+    ("chin ups", "chin-ups"), ("chin up", "chin-up"),
+    ("sit ups", "sit-ups"), ("sit up", "sit-up"),
+    ("wall walks", "wall walks"),
+    ("toes to bar", "toes-to-bar"), ("chest to bar", "chest-to-bar"),
+    ("double unders", "double-unders"), ("handstand walk", "handstand walk"),
+)
+
+
+def _lower_words(text):
+    """Lower-case a benchmark name, leaving acronyms and units alone."""
+    out = []
+    for word in str(text).split():
+        bare = word.strip("()[],.").upper()
+        if bare in _BENCH_ACRONYMS or re.match(r"^\d+[A-Za-z]*$", word):
+            out.append(word)
+        else:
+            out.append(word.lower())
+    joined = " ".join(out)
+    for spaced, hyphenated in _BENCH_HYPHENATE:
+        joined = joined.replace(spaced, hyphenated)
+    return joined
+
+
+def months_logging_streak(pr_records, athlete_name, today=None, achievement_only=True):
+    """Consecutive months up to last month in which the athlete logged a result.
+
+    "You've logged a result every month for the last nine months" is a real
+    story and it is the one worth telling. A count of four results in a month
+    is not, and saying it out loud draws attention to a low number.
+    """
+    today = today or dt.date.today()
+    target = normalise_client_name(athlete_name)
+    months = set()
+    for r in (pr_records or ()):
+        if normalise_client_name(r.get("Athlete Name", "")) != target:
+            continue
+        if achievement_only:
+            bench = str(r.get("Benchmark Name", "")).strip()
+            try:
+                import config as _config
+                if not _config.is_achievement_benchmark(bench):
+                    continue
+            except Exception:
+                pass
+        d = _parse_iso(str(r.get("Date", "")).strip()[:10])
+        if d:
+            months.add((d.year, d.month))
+
+    # Walk back from last month for as long as every month has something in it.
+    year, month = today.year, today.month
+    month -= 1
+    if month == 0:
+        year, month = year - 1, 12
+    streak = 0
+    while (year, month) in months:
+        streak += 1
+        month -= 1
+        if month == 0:
+            year, month = year - 1, 12
+    return streak
+
+
+def monthly_message(first_name, results, streak_months=0, min_streak=3):
+    """The monthly note to an athlete, or None when there is nothing to say.
+
+    results: [(benchmark, value), ...] logged last month, best first.
+
+    Leads with one specific result and, where it is real, the consistency
+    story. Deliberately states no counts: the previous version opened with
+    "You hit 4 results... 3 sessions logged. Solid month", which advertises a
+    thin month and makes the praise ring hollow. It was also wrong, because
+    those "sessions" were days on which a benchmark was retested, not training
+    sessions.
+
+    Returns None when the athlete logged nothing worth citing. Silence beats a
+    hollow "solid month".
+    """
+    first = str(first_name or "").strip()
+    if not first or not results:
+        return None
+
+    bench, value = results[0][0], results[0][1]
+    bench_h = humanise_benchmark(bench)
+    value = str(value).strip()
+    if not bench_h or not value:
+        return None
+
+    parts = [f"Hey {first}, saw you logged {value} on the {bench_h} last month."]
+    if streak_months >= min_streak:
+        parts.append(
+            f"You've logged a result every month for the last {streak_months} "
+            "months now, which is proper consistency."
+        )
+    parts.append("How's the training feeling at the minute?")
+    return " ".join(parts)
+
+
 def _strip_greeting(text, first_name):
     """Remove a leading "Hey Amy," / "Amy —" so messages can be joined.
 
