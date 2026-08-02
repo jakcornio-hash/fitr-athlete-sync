@@ -50,6 +50,7 @@ _ensure_fresh(arch_mod, "result_is_close", "athlete_result_message")
 _ensure_fresh(analytics, "not_current_client_names", "retest_analysis",
               "normalise_client_name", "monthly_value", "match_athlete_name",
               "canonical_date_key", "revenue_anomalies", "training_activity",
+              "merge_athlete_drafts",
               "activity_from_data_records")
 # config too, and for the same reason. A stale config does not raise — the
 # getattr defaults just quietly take over, so new prices read as missing and
@@ -624,6 +625,18 @@ def _pending_messages_cached():
     return out
 
 
+def _mark_pending_drafts(records, status="sent"):
+    """Settle every row behind a merged draft, and log one entry per trigger.
+
+    A merged card represents several queued rows. Marking it sent has to close
+    all of them, or the leftovers reappear tomorrow and the athlete gets the
+    same thing twice.
+    """
+    for rec in (records or []):
+        _mark_pending_sent(rec.get("_row"), status=status,
+                           record=rec if status == "sent" else None)
+
+
 def _mark_pending_sent(row_idx, status="sent", record=None):
     """Mark a queued draft as dealt with. row_idx is the sheet row number.
 
@@ -674,13 +687,19 @@ def _render_pending_messages():
     Automatic sending is off, so this is the only route these messages take to
     an athlete. If nobody works this list, nobody hears from us.
     """
-    pending = _pending_messages_cached()
-    if not pending:
+    raw_pending = _pending_messages_cached()
+    if not raw_pending:
         return
+    # One card per athlete, not one per trigger: two things firing on the same
+    # day used to queue two messages minutes apart, each opening with their name.
+    pending = analytics.merge_athlete_drafts(raw_pending)
+    merged_away = len(raw_pending) - len(pending)
     st.subheader(f"✉️ Drafted and waiting to send ({len(pending)})")
     st.caption(
         "The system wrote these but did not send them. Read, tweak, send, then "
         "mark them sent. Nothing here reaches an athlete on its own."
+        + (f" {merged_away} extra message(s) were merged so nobody gets two at once."
+           if merged_away else "")
     )
     _labels = {"congrats": "🏆 Congrats", "anniversary": "🎉 Milestone",
                "onboarding": "👋 Onboarding", "offboarding": "👋 Offboarding",
@@ -696,18 +715,26 @@ def _render_pending_messages():
         # summary. The send buttons read that same box, so the wrong athlete's
         # message could go to the wrong athlete.
         wid = _pending_widget_key(r)
-        with st.expander(f"{label} — **{nm}** · queued {r.get('Date', '')}", expanded=i < 3):
+        n_merged = int(r.get("_merged_count", 1) or 1)
+        if n_merged > 1:
+            label = " + ".join(_labels.get(t, t.replace("_", " ").title())
+                               for t in r.get("_types", []))
+        header = f"{label} — **{nm}** · queued {r.get('Date', '')}"
+        if n_merged > 1:
+            header += f" · {n_merged} merged into one"
+        with st.expander(header, expanded=i < 3):
             msg = str(r.get("Message", ""))
-            st.text_area("Message", value=msg, height=120,
+            st.text_area("Message", value=msg, height=120 if n_merged == 1 else 200,
                          key=f"pend_msg_{wid}", label_visibility="collapsed")
+            recs = r.get("_records") or [r]
             b1, b2, b3 = st.columns([1, 1, 3])
             with b1:
                 if st.button("✅ Mark sent", key=f"pend_sent_{wid}"):
-                    _mark_pending_sent(r["_row"], record=r)
+                    _mark_pending_drafts(recs, "sent")
                     st.rerun()
             with b2:
                 if st.button("🗑️ Skip", key=f"pend_skip_{wid}"):
-                    _mark_pending_sent(r["_row"], "skipped")
+                    _mark_pending_drafts(recs, "skipped")
                     st.rerun()
             with b3:
                 _outreach_send_buttons(st.session_state.get(f"pend_msg_{wid}", msg))

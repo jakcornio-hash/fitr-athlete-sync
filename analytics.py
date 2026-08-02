@@ -1846,6 +1846,66 @@ def training_activity(activity_items, today=None):
     return out
 
 
+def _strip_greeting(text, first_name):
+    """Remove a leading "Hey Amy," / "Amy —" so messages can be joined.
+
+    Only ever strips the athlete's own name, so a message that happens to open
+    with something else is left exactly as written.
+    """
+    body = str(text or "").lstrip()
+    if not first_name:
+        return body
+    pattern = rf"^(hey\s+|hi\s+)?{re.escape(first_name)}\s*[,.—\-:]\s*"
+    stripped = re.sub(pattern, "", body, count=1, flags=re.IGNORECASE)
+    if stripped is body or not stripped:
+        return body
+    # "that's nine months..." reads wrong mid-message; "That's" does not.
+    return stripped[0].upper() + stripped[1:]
+
+
+def merge_athlete_drafts(rows):
+    """One message per athlete, not one per trigger.
+
+    Two things firing on the same day — a monthly summary and a nine-month
+    anniversary, say — queued two separate drafts, so the athlete received two
+    messages minutes apart, each opening with their name. That reads like
+    automation, which is the one thing these messages are meant not to do.
+
+    Groups by athlete in sheet order, keeps the first message's greeting, drops
+    the repeated greeting from the rest, and joins them as paragraphs. Each
+    merged draft keeps every underlying row so marking it sent settles all of
+    them and the Message Log still records one entry per trigger type.
+    """
+    grouped = {}
+    for r in (rows or ()):
+        name = str(r.get("Athlete Name", "")).strip()
+        if not name:
+            continue
+        grouped.setdefault(normalise_client_name(name), []).append(r)
+
+    out = []
+    for group in grouped.values():
+        first_row = group[0]
+        name = str(first_row.get("Athlete Name", "")).strip()
+        first_name = name.split()[0] if name else ""
+
+        parts = [str(first_row.get("Message", "")).strip()]
+        for r in group[1:]:
+            body = _strip_greeting(r.get("Message", ""), first_name)
+            if body:
+                parts.append(body)
+
+        merged = dict(first_row)
+        merged["Message"] = "\n\n".join(p for p in parts if p)
+        merged["Athlete Name"] = name
+        merged["_rows"] = [r.get("_row") for r in group if r.get("_row")]
+        merged["_types"] = [str(r.get("Message Type", "")).strip() for r in group]
+        merged["_merged_count"] = len(group)
+        merged["_records"] = group
+        out.append(merged)
+    return out
+
+
 def activity_from_data_records(data_records):
     """Rebuild the training signal from the _DATA columns the sync wrote.
 
