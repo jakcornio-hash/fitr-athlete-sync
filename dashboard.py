@@ -5,6 +5,7 @@ Run locally:  streamlit run dashboard.py
 Deploy:       Streamlit Community Cloud → connect GitHub repo → add secrets
 """
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -654,6 +655,19 @@ def _mark_pending_sent(row_idx, status="sent", record=None):
         st.error(f"Couldn't update that draft: {exc}")
 
 
+def _pending_widget_key(record):
+    """A widget key tied to the message itself, not to where it sits in a list.
+
+    Streamlit stops honouring value= once a key has session state, so a key
+    built from the loop index makes the text box show whatever was at that
+    position last run. The sheet row is unique and stable for the life of the
+    row; athlete and type are folded in so that even if rows were ever
+    reordered the key follows the message rather than the slot.
+    """
+    raw = "|".join(str(record.get(k, "")) for k in ("_row", "Athlete Name", "Message Type", "Date"))
+    return hashlib.md5(raw.encode()).hexdigest()[:12]
+
+
 def _render_pending_messages():
     """Everything the sync drafted, waiting for a coach to send it.
 
@@ -675,21 +689,28 @@ def _render_pending_messages():
         nm = str(r.get("Athlete Name", "")).strip()
         mt = str(r.get("Message Type", "")).strip()
         label = _labels.get(mt, mt.replace("_", " ").title())
+        # Key every widget on the message's sheet row, never on its position in
+        # this list. Streamlit ignores value= once a key holds state, so an
+        # index-based key kept showing the previous occupant's message after the
+        # list shifted: the card said Tom Woods and the box held Cau's monthly
+        # summary. The send buttons read that same box, so the wrong athlete's
+        # message could go to the wrong athlete.
+        wid = _pending_widget_key(r)
         with st.expander(f"{label} — **{nm}** · queued {r.get('Date', '')}", expanded=i < 3):
             msg = str(r.get("Message", ""))
             st.text_area("Message", value=msg, height=120,
-                         key=f"pend_msg_{i}", label_visibility="collapsed")
+                         key=f"pend_msg_{wid}", label_visibility="collapsed")
             b1, b2, b3 = st.columns([1, 1, 3])
             with b1:
-                if st.button("✅ Mark sent", key=f"pend_sent_{i}"):
+                if st.button("✅ Mark sent", key=f"pend_sent_{wid}"):
                     _mark_pending_sent(r["_row"], record=r)
                     st.rerun()
             with b2:
-                if st.button("🗑️ Skip", key=f"pend_skip_{i}"):
+                if st.button("🗑️ Skip", key=f"pend_skip_{wid}"):
                     _mark_pending_sent(r["_row"], "skipped")
                     st.rerun()
             with b3:
-                _outreach_send_buttons(st.session_state.get(f"pend_msg_{i}", msg))
+                _outreach_send_buttons(st.session_state.get(f"pend_msg_{wid}", msg))
     st.divider()
 
 
