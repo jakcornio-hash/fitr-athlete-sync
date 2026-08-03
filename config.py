@@ -372,3 +372,7 @@ REVENUE_DORMANT_DAYS = int(_get("REVENUE_DORMANT_DAYS", "90"))
 # This is the signal that answers "is this athlete still training" — the PR Log
 # only answers "did they retest a benchmark".
 TRAINING_WINDOW_DAYS = 14
+
+# Where the daily health check records what it found, so the dashboard can show
+# the same findings the digest reported without re-running every check.
+TAB_HEALTH_LOG = "Health Log"

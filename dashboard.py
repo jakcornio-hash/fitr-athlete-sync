@@ -6035,9 +6035,62 @@ def _crm_dedup(athletes, data_records, pr_records):
     )
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _latest_health_log():
+    """The findings the last sync recorded. One cheap read, TTL=5min.
+
+    Deliberately reads what the sync wrote rather than re-running the checks
+    here: re-running doubled the Sheets traffic and made the Sync tab take
+    minutes to open. This also shows exactly what the digest said, which is the
+    question being asked when someone opens this tab.
+    """
+    import health_check
+    try:
+        return health_check.latest_health_findings(get_sheets())
+    except Exception:
+        return "", []
+
+
+def _render_health_findings():
+    st.markdown("### System health")
+    st.caption(
+        "What the last daily check found. Shown here as well as on the digest "
+        "because Slack and email can both fail quietly, and on 1 August the "
+        "email leg did."
+    )
+    run_date, rows = _latest_health_log()
+    if not rows:
+        st.info(
+            "No health check has been recorded yet. The first one lands with "
+            "tomorrow's sync."
+        )
+        st.divider()
+        return
+
+    fails = [r for r in rows if str(r.get("Severity", "")).strip() == "fail"]
+    warns = [r for r in rows if str(r.get("Severity", "")).strip() == "warn"]
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Broken", len(fails))
+    c2.metric("Worth a look", len(warns))
+    c3.metric("Checked", run_date or "—")
+
+    if not fails and not warns:
+        st.success("Everything the daily check looks at is healthy.")
+        st.divider()
+        return
+    for r in fails:
+        st.error(f"**{r.get('Title','')}**"
+                 + (f"\n\n{r.get('Detail','')}" if str(r.get("Detail", "")).strip() else ""))
+    for r in warns:
+        st.warning(f"**{r.get('Title','')}**"
+                   + (f"\n\n{r.get('Detail','')}" if str(r.get("Detail", "")).strip() else ""))
+    st.divider()
+
+
 def page_sync_health():
     """Sync health monitoring — run history, PR row trends, errors, message log stats."""
     st.header("⚙️ Sync Health")
+    _render_health_findings()
 
     sheets = get_sheets()
 

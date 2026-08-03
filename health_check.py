@@ -632,6 +632,41 @@ def run_health_check(sheets, analytics_mod, *, data_records=None, bespoke_names=
     return findings
 
 
+def write_health_log(sheets, findings, run_date=None):
+    """Record this run's findings so the dashboard can show them.
+
+    The digest was the only place these appeared, and on the first real run the
+    email leg failed outright. A second delivery channel that cannot fail
+    quietly is the point: the sheet is written once a day by the sync, and the
+    dashboard reads it rather than re-running every check, which would double
+    the Sheets traffic and take minutes.
+    """
+    run_date = str(run_date or TODAY.isoformat())
+    header = ["Run Date", "Severity", "Area", "Title", "Detail"]
+    rows = [[run_date, f.severity, f.area, f.title, f.detail] for f in (findings or [])]
+    if not rows:
+        rows = [[run_date, "ok", "health-check", "All checks passed", ""]]
+    try:
+        sheets.ensure_headers(config.TAB_HEALTH_LOG, header)
+        sheets.append_rows(config.TAB_HEALTH_LOG, rows)
+        return len(rows)
+    except Exception as exc:
+        print(f"  ! Could not write the health log: {exc}")
+        return 0
+
+
+def latest_health_findings(sheets):
+    """The most recent run's findings, as written by write_health_log."""
+    try:
+        rows = sheets.read_records(config.TAB_HEALTH_LOG)
+    except Exception:
+        return "", []
+    if not rows:
+        return "", []
+    last_date = str(rows[-1].get("Run Date", "")).strip()
+    return last_date, [r for r in rows if str(r.get("Run Date", "")).strip() == last_date]
+
+
 def format_findings(findings):
     """(plain, slack) blocks for the digest, or ("", "") when all is well."""
     if not findings:

@@ -170,6 +170,14 @@ def build_digest(date, engagement_results, trend_results,
 
 
 def send_slack(slack_text):
+    """Post to the incoming webhook, and check Slack actually accepted it.
+
+    The response body was previously ignored, so "Slack digest sent" only ever
+    meant "the POST did not raise". Slack answers a good post with the literal
+    body "ok"; anything else means the message did not land where you expect,
+    and a digest nobody receives while the log says it was sent is worse than
+    an obvious failure.
+    """
     url = config.SLACK_WEBHOOK_URL
     if not url:
         print("  ! Slack not configured (SLACK_WEBHOOK_URL missing)")
@@ -178,7 +186,15 @@ def send_slack(slack_text):
     req = urllib.request.Request(
         url, data=payload, headers={"Content-Type": "application/json"}
     )
-    urllib.request.urlopen(req, timeout=10, context=_SSL_CONTEXT)
+    with urllib.request.urlopen(req, timeout=10, context=_SSL_CONTEXT) as resp:
+        status = resp.status
+        body = (resp.read() or b"").decode("utf-8", "replace").strip()
+    if status != 200 or body.lower() != "ok":
+        raise RuntimeError(
+            f"Slack accepted the request but did not confirm delivery "
+            f"(HTTP {status}, body {body[:120]!r}). The webhook may be revoked, "
+            f"or bound to a channel nobody is watching."
+        )
 
 
 def send_slack_message(channel, text):

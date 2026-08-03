@@ -2146,6 +2146,9 @@ def main():
         _fails = [f for f in health_findings if f.severity == health_check.FAIL]
         print(f"Health check: {len(_fails)} broken, "
               f"{len(health_findings) - len(_fails)} worth a look")
+        # Recorded to the sheet as well as the digest. Slack and email can both
+        # fail quietly; a tab on the dashboard cannot.
+        health_check.write_health_log(sheets, health_findings)
         for f in health_findings:
             print(f"  [{f.severity}] {f.line()}")
     except Exception as exc:
