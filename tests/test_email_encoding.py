@@ -55,3 +55,39 @@ def test_notifier_sets_utf8_on_every_send_path():
     bare_mime = [ln.strip() for ln in src.splitlines()
                  if "MIMEText(" in ln and "utf-8" not in ln and not ln.strip().startswith("#")]
     assert bare_mime == [], f"MIMEText without utf-8: {bare_mime}"
+
+
+# ── the real cause: an invisible character in the recipient list ──────────────
+
+def test_a_non_breaking_space_in_the_address_list_is_stripped():
+    """Three days of digests failed on this. The body was never the problem:
+    smtplib encodes recipient addresses as ascii, so one invisible character
+    pasted into the SMTP_TO secret killed every send at a fixed position."""
+    import notifier
+    got = notifier.clean_address_list("jak@x.com,\xa0ed@x.com")
+    assert got == ["jak@x.com", "ed@x.com"]
+    for a in got:
+        a.encode("ascii")          # would raise before the fix
+
+
+def test_other_invisible_characters_are_stripped():
+    import notifier
+    for ch in ("​", "‎", "﻿", " "):
+        assert notifier.clean_address_list(f"a@x.com,{ch}b@x.com") == ["a@x.com", "b@x.com"]
+
+
+def test_semicolons_and_spacing_are_tolerated():
+    import notifier
+    assert notifier.clean_address_list(" a@x.com ;  b@x.com , ") == ["a@x.com", "b@x.com"]
+
+
+def test_a_genuinely_broken_address_is_dropped_not_fatal():
+    """One bad address must not take the whole digest down."""
+    import notifier
+    assert notifier.clean_address_list("good@x.com,bröken@x.com") == ["good@x.com"]
+
+
+def test_empty_config_yields_no_recipients():
+    import notifier
+    assert notifier.clean_address_list("") == []
+    assert notifier.clean_address_list(None) == []

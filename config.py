@@ -342,7 +342,7 @@ FOUNDING_MEMBER_CUTOFF = _get("FOUNDING_MEMBER_CUTOFF", "2024-12-31")
 SUBSCRIPTION_FALLBACK_PRICES = {
     1: 54.99,     # monthly
     3: 144,       # quarterly
-    12: 549,      # yearly
+    12: 480,      # yearly (confirmed against Fitr, 4 Aug 2026)
 }
 
 # Bespoke athletes pay the contractor coach directly; JST charges that coach a

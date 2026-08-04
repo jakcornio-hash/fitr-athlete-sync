@@ -293,19 +293,69 @@ def send_email(subject, plain_text):
     if not config.SMTP_FROM or not config.SMTP_PASSWORD:
         print("  ! Email not configured (SMTP_FROM / SMTP_PASSWORD missing)")
         return
+    recipients = clean_address_list(config.SMTP_TO)
+    if not recipients:
+        print("  ! Email not sent: SMTP_TO has no usable address")
+        return
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = _from_header(config.SMTP_FROM)
-    msg["To"] = config.SMTP_TO
-    # utf-8 explicitly — see _send_email_to. This is the digest path, and a
-    # single non-breaking space in it silently killed the email for weeks'
-    # worth of runs while Slack kept working.
+    msg["To"] = ", ".join(recipients)
+    # utf-8 explicitly: the digest is full of £, em dashes and emoji.
     msg.set_content(plain_text, charset="utf-8")
     with smtplib.SMTP("smtp.gmail.com", 587) as s:
         s.ehlo()
         s.starttls()
         s.login(_smtp_login_user(config.SMTP_FROM), config.SMTP_PASSWORD)
-        s.send_message(msg)
+        # Recipients passed explicitly rather than let smtplib parse the header:
+        # it encodes them as ascii, and one invisible character pasted into the
+        # SMTP_TO secret stopped the digest for three days running.
+        s.send_message(msg, to_addrs=recipients)
+
+
+# Characters that look like a space when pasted into a config field but are not
+# one. smtplib encodes recipient addresses as ascii, so a single one of these in
+# an address list fails the send outright, at the same character position every
+# time, while the message body is perfectly fine.
+_INVISIBLE = {
+    "\xa0": "",        # non-breaking space
+    "​": "",      # zero-width space
+    "‎": "",      # left-to-right mark
+    "‏": "",      # right-to-left mark
+    "﻿": "",      # byte-order mark
+    " ": "",      # line separator
+    " ": "",      # paragraph separator
+}
+
+
+def clean_address_list(raw):
+    """Split a configured address list into clean, ascii-safe addresses.
+
+    The digest email failed for three consecutive days with
+    "'ascii' codec can't encode character '\\xa0' in position 30" while Slack
+    went out fine. The body was never the problem: it was an invisible
+    character in the recipient list, which comes from a GitHub secret and so
+    differs from the local .env that always worked. Pasting an address list
+    from anywhere but a plain editor is enough to do it.
+
+    Anything still non-ascii after cleaning is a genuinely broken address and
+    is dropped with a warning rather than taking the whole send down.
+    """
+    text = str(raw or "")
+    for bad, good in _INVISIBLE.items():
+        text = text.replace(bad, good)
+    out = []
+    for part in text.replace(";", ",").split(","):
+        addr = part.strip()
+        if not addr:
+            continue
+        try:
+            addr.encode("ascii")
+        except UnicodeEncodeError:
+            print(f"  ! Dropping unusable email address {addr!r} (contains non-ascii)")
+            continue
+        out.append(addr)
+    return out
 
 
 def _from_header(smtp_from):
@@ -315,7 +365,9 @@ def _from_header(smtp_from):
     name containing a comma or non-ascii can't break the header.
     """
     name = str(getattr(config, "SMTP_FROM_NAME", "") or "").strip()
-    return formataddr((name, smtp_from)) if name else smtp_from
+    clean = clean_address_list(smtp_from)
+    addr = clean[0] if clean else str(smtp_from or "").strip()
+    return formataddr((name, addr)) if name else addr
 
 
 def _smtp_login_user(smtp_from):
@@ -328,6 +380,10 @@ def _smtp_login_user(smtp_from):
 
 
 def _send_email_to(smtp_from, smtp_password, to_addr, subject, body):
+    to_clean = clean_address_list(to_addr)
+    if not to_clean:
+        raise ValueError(f"no usable email address in {to_addr!r}")
+    to_addr = to_clean[0]
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = _from_header(smtp_from)
