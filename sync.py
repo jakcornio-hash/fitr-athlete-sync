@@ -1233,10 +1233,38 @@ def auto_onboard_new_athletes(sheets, rooms, fitr=None, room_id_by_name=None,
     for name, fid, prog in to_onboard:
         print(f"  [auto-onboard] Added {name!r} (Fitr ID {fid}) → {prog!r}")
 
-    # No onboarding message sent here on purpose. Fitr's own native welcome
-    # (WhatsApp group, /athleteonboard intake form, the Athlete Handbook) owns
-    # onboarding and does it better. This used to fire a second, colder message
-    # on top of it, with a different intake link, that got a 0% reply rate.
+    # A welcome DRAFT, never an automatic send.
+    #
+    # This block used to auto-send a checklist on top of Fitr's own welcome
+    # (WhatsApp group, intake form, Athlete Handbook), with a competing intake
+    # link, and it got a 0% reply rate. It was removed for good reason. What
+    # goes out now is different in the way that mattered: it duplicates none of
+    # the logistics Fitr already covers, it is one question rather than a list,
+    # and a coach reads it and presses send. A person getting in touch in
+    # someone's first week is not the same thing as a second automated welcome.
+    welcomed = 0
+    if fitr is not None and room_id_by_name:
+        for name, _fid, _prog in to_onboard:
+            if bespoke_names and name in bespoke_names:
+                continue
+            room_id = room_id_by_name.get(name)
+            if not room_id:
+                continue
+            first = name.split()[0] if name else ""
+            if not first:
+                continue
+            msg = (
+                f"Hey {first}, welcome to JST. Good to have you with us. "
+                f"Before you get stuck in, what are you hoping to get out of "
+                f"the next few months?"
+            )
+            try:
+                _deliver(fitr, room_id, msg, name, "onboarding_welcome")
+                welcomed += 1
+            except FitrError as exc:
+                print(f"  ! Welcome draft failed for {name}: {exc}")
+    if welcomed:
+        print(f"Welcome messages: {_sent_or_drafted(welcomed)}")
 
     return len(to_onboard)
 

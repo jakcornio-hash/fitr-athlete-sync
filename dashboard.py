@@ -703,7 +703,8 @@ def _render_pending_messages():
            if merged_away else "")
     )
     _labels = {"congrats": "🏆 Congrats", "anniversary": "🎉 Milestone",
-               "onboarding": "👋 Onboarding", "offboarding": "👋 Offboarding",
+               "onboarding": "👋 First log", "onboarding_welcome": "👋 Welcome",
+               "offboarding": "👋 Offboarding",
                "referral": "🤝 Referral", "monthly_fitr": "📅 Monthly"}
     for i, r in enumerate(pending):
         nm = str(r.get("Athlete Name", "")).strip()
@@ -2289,6 +2290,7 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
             _msg_type_labels = {
                 "congrats": "🏆 Congrats", "onboarding": "👋 Onboarding",
                 "anniversary": "🎉 Anniversary", "onboard_checklist": "👋 Onboarding",
+                "onboarding_welcome": "👋 Welcome",
             }
             with st.expander(f"📨 Message History ({len(athlete_msgs)} automated messages)", expanded=False):
                 msg_display = []
