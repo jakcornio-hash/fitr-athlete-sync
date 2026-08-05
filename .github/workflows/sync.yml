@@ -26,7 +26,10 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # A clean run is around 20 minutes. The Sheets pacing added in
+    # sheets_client can hold a burst back by a minute or two, so this leaves
+    # room for that rather than killing the run at the wire.
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -78,7 +81,12 @@ jobs:
           # that raises on load is reported on the digest the same morning
           # rather than whenever a coach next happens to open that tab.
           HEALTH_CHECK_PAGES: "1"
-        run: python sync.py
+        # -u so the log reads in the order things actually happened. Without
+        # it, print() is block-buffered while Streamlit's logger and every
+        # traceback go straight to stderr, so the 5 August failure appeared to
+        # happen at a point in the run it had not reached yet. That cost more
+        # time to diagnose than the bug did to fix.
+        run: python -u sync.py
 
       - name: Notify on failure
         if: failure()

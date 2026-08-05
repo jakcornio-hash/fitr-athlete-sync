@@ -301,3 +301,50 @@ def test_healthy_coverage_is_quiet():
         ["Full Name", "Last Trained"],
         ["A", "2026-08-01"], ["B", "2026-07-30"], ["C", "2026-07-28"], ["D", ""]]})
     assert health_check.check_training_signal(sheets) == []
+
+
+# ── did the last run actually finish? ─────────────────────────────────────────
+# Added after 5 August, when the sync died two thirds of the way through and
+# the only trace was a traceback in a workflow log. A gap in the Sync Log is
+# the evidence that survives whatever killed the run.
+
+class _SyncLogSheets:
+    def __init__(self, dates):
+        self._dates = dates
+
+    def read_records(self, title):
+        return [{"Run Date": d, "Total Athletes": "300"} for d in self._dates]
+
+
+def _sync_log_days_ago(*days):
+    return _SyncLogSheets([(health_check.TODAY - dt.timedelta(days=d)).isoformat()
+                           for d in sorted(days, reverse=True)])
+
+
+def test_yesterdays_run_is_fine():
+    """The check runs before today's row is written, so yesterday is normal."""
+    assert health_check.check_last_sync_completed(_sync_log_days_ago(3, 2, 1)) == []
+
+
+def test_a_run_that_already_wrote_today_is_fine():
+    assert health_check.check_last_sync_completed(_sync_log_days_ago(1, 0)) == []
+
+
+def test_a_missing_day_is_reported_as_broken():
+    out = health_check.check_last_sync_completed(_sync_log_days_ago(5, 4, 3))
+    assert len(out) == 1
+    assert out[0].severity == health_check.FAIL
+    assert "3 days ago" in out[0].title
+
+
+def test_an_empty_sync_log_says_so_without_crying_wolf():
+    out = health_check.check_last_sync_completed(_SyncLogSheets([]))
+    assert len(out) == 1
+    assert out[0].severity == health_check.WARN
+
+
+def test_an_unreadable_sync_log_is_not_a_finding():
+    class Broken:
+        def read_records(self, title):
+            raise RuntimeError("429")
+    assert health_check.check_last_sync_completed(Broken()) == []

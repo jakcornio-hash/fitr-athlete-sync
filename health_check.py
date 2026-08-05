@@ -444,6 +444,37 @@ def check_disabled_integrations():
         + " — these stages run and process nothing rather than failing")]
 
 
+def check_last_sync_completed(sheets):
+    """Did the previous run reach the end, or die somewhere in the middle?
+
+    On 5 August the sync hit the Sheets read quota two thirds of the way
+    through main() and the process ended there. Every later stage was skipped,
+    including the Sync Log row itself, so the only evidence was a traceback in
+    a workflow log. From the dashboard the day simply looked quiet.
+
+    A gap in the Sync Log is that evidence, and it survives whatever took the
+    run down. This check runs before today's row is written, so the newest row
+    it can legitimately see is yesterday's.
+    """
+    try:
+        rows = sheets.read_records(config.TAB_SYNC_LOG)
+    except Exception:
+        return []
+    dates = sorted(d for d in (_parse_date(r.get("Run Date", "")) for r in rows) if d)
+    if not dates:
+        return [Finding(WARN, "sync", "The Sync Log has no dated runs in it",
+                        "nothing can be said about whether the sync is running")]
+    last = dates[-1]
+    days = (TODAY - last).days
+    if days <= 1:
+        return []
+    return [Finding(
+        FAIL, "sync",
+        f"The last sync to finish was {days} days ago ({last})",
+        "a run that starts but never writes its Sync Log row died part way "
+        "through, so the stages after the failure did nothing that day")]
+
+
 def check_pending_message_queue(sheets):
     """Drafts nobody is sending. This is now the only route to an athlete."""
     out = []
@@ -611,6 +642,7 @@ def run_health_check(sheets, analytics_mod, *, data_records=None, bespoke_names=
             engagement_results, gone_norm, analytics_mod)),
         ("roster agreement", lambda: check_roster_agrees_with_dashboard(
             sheets, analytics_mod, gone_norm)),
+        ("last sync completed", lambda: check_last_sync_completed(sheets)),
         ("pending queue", lambda: check_pending_message_queue(sheets)),
         ("message log replies", lambda: check_message_log_replies(sheets)),
         ("crm rejoins", lambda: check_crm_says_gone_but_training(sheets, analytics_mod)),
