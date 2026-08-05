@@ -17,14 +17,17 @@ What it does each run:
 Run:  python sync.py            (live)
       DRY_RUN=1 python sync.py  (pull + print, write nothing)
 """
+import contextlib
 import datetime as dt
 import json
 import re
 import sys
+import traceback
 
 import config
 from fitr_client import (FitrClient, FitrError, format_thread, message_date,
                          message_is_from, profiles_from_rooms)
+import sheets_client
 from sheets_client import SheetsClient
 import analytics
 import archetypes
@@ -1471,6 +1474,64 @@ def generate_weekly_athlete_digests(sheets, athletes, pr_records, rec_by_name, d
 
 
 # --------------------------------------------------------------------- driver
+
+# Stages that failed this run. Reported at the end, on Slack and in the Health
+# Log, and they set the exit code so the workflow still goes red.
+STAGE_FAILURES = []
+
+
+@contextlib.contextmanager
+def stage(name):
+    """Run one pipeline stage. A failure costs that stage and nothing else.
+
+    On 5 August a single 429 from Sheets landed inside auto-onboard, two thirds
+    of the way through main(), and ended the process. The anniversaries, the
+    new athlete welcomes, the competition messages, the monthly check-in, the
+    message log and the Sync Log row were all skipped, and the only trace was a
+    traceback in a workflow log nobody reads. The stages do not depend on each
+    other; only the process did.
+
+    Anything that outlives its stage is given a default before the first one
+    runs, so a failure here cannot surface as a NameError further down.
+    """
+    try:
+        yield
+    except Exception as exc:
+        STAGE_FAILURES.append((name, f"{type(exc).__name__}: {exc}"[:300]))
+        print(f"  !! Stage '{name}' failed. Carrying on with the rest of the run.")
+        traceback.print_exc()
+
+
+def report_stage_failures(sheets):
+    """Put a mid-run failure where a coach will actually see it.
+
+    The digest has already gone out by the time these stages run, so this is a
+    separate Slack message plus a Health Log row. The Health Log is the leg
+    that cannot fail quietly: Slack and email have each gone silent on their
+    own, but the dashboard reads the sheet.
+    """
+    findings = [
+        health_check.Finding(
+            health_check.FAIL, "sync",
+            f"The '{name}' stage of today's sync failed and was skipped", detail)
+        for name, detail in STAGE_FAILURES
+    ]
+    try:
+        health_check.write_health_log(sheets, findings)
+    except Exception as exc:
+        print(f"  ! Could not record the stage failures: {exc}")
+    body = "\n".join(f"  • *{name}* — {detail}" for name, detail in STAGE_FAILURES)
+    try:
+        notifier.send_slack(
+            f"🛑 *The daily sync finished with {len(STAGE_FAILURES)} failed stage(s).*\n"
+            f"{body}\n"
+            f"Everything else ran. These stages did not, so anything they would "
+            f"have drafted or written is missing for today."
+        )
+    except Exception as exc:
+        print(f"  ! Could not post the stage failures to Slack: {exc}")
+
+
 def main():
     if not config.SHEET_ID:
         raise RuntimeError("Missing required env var: SHEET_ID")
@@ -2242,614 +2303,646 @@ def main():
         if summaries_sent:
             print(f"Weekly squad summaries sent to {summaries_sent} coach channel(s)")
 
-    # ---- auto-onboard new bespoke athletes from chat rooms ----
-    onboarded = auto_onboard_new_athletes(
-        sheets, rooms, fitr=fitr, room_id_by_name=room_id_by_name,
-        messages_sent_log=messages_sent_log, bespoke_names=bespoke_names,
-    )
-    if onboarded:
-        print(f"New bespoke athletes auto-onboarded: {onboarded}")
 
-    # ---- athlete anniversaries via Fitr chat ----
-    _ANNIVERSARY_MILESTONES = {90: "3 months", 180: "6 months", 270: "9 months",
-                                365: "1 year", 730: "2 years"}
+    # Defaults for every value that outlives the stage that sets it. Without
+    # these, one failed stage turns into a NameError three stages later and
+    # the cause is buried.
+    onboarded = 0
     first_log_by_name = {}
-    for rec in pr_records:
-        nm = str(rec.get("Athlete Name", "")).strip()
-        d_str = str(rec.get("Date", "")).strip()
-        if nm and d_str:
-            try:
-                import datetime as _dt
-                d = _dt.datetime.strptime(d_str, "%Y-%m-%d").date()
-            except ValueError:
-                continue
-            if nm not in first_log_by_name or d < first_log_by_name[nm]:
-                first_log_by_name[nm] = d
-    anniversaries_sent = 0
-    summit_flag_names = []
-    for a in active_athletes:
-        nm = a["name"]
-        if nm in bespoke_names:
-            continue
-        first_log = first_log_by_name.get(nm)
-        if not first_log:
-            continue
-        days_training = (TODAY - first_log).days
-        milestone_label = _ANNIVERSARY_MILESTONES.get(days_training)
-        if not milestone_label:
-            continue
-        room_id = room_id_by_name.get(nm)
-        if not room_id or config.DRY_RUN:
-            continue
-        first = nm.split()[0]
-        # No booking link here any more: the 90-day message offers to send one
-        # if they want it rather than pushing a calendar at them.
-        _tshirt_url = getattr(config, "TSHIRT_FORM_URL", "")
-        if days_training == 90:
-            # Jak's copy. Note "your first result", not "you joined us": the
-            # milestone counts from their first logged result because Join Date
-            # in _DATA can't be trusted (for the median athlete it lands months
-            # AFTER their first log, which can't happen). First log is the only
-            # date here we can stand behind.
-            msg = (
-                f"Hey {first}, that's 90 days since your first result with us. Worth a "
-                f"proper catch up at this point. Not because anything's wrong, but because "
-                f"three months in is when we can actually see what's working and what "
-                f"isn't, and we want to make sure you are on the right track rather than "
-                f"guessing from your numbers.\n\n"
-                f"If you are keen, let us know and we can send you a booking link. If not, "
-                f"that's all good as well.\n\n"
-                f"One final thing is, what's felt like the biggest change since you started?"
-            )
-        elif days_training == 180:
-            msg = (
-                f"Hey {first}, six months with us! The core of our community is down to "
-                f"committed athletes like yourself.\n\n"
-                f"We send a JST tee at this point, so drop your address and size here: "
-                f"{_tshirt_url}\n\n"
-                f"And if you know anyone who'd do really well joining JST, please send them "
-                f"our way. If it's anyone within your gym or any friends, let us know and we "
-                f"can also give you a code for them.\n\n"
-                f"What are you chasing during your next 6 months?"
-            )
-        elif days_training == 270:
-            msg = (
-                f"Hey {first}, that's nine months of results logged with us now. No ask "
-                f"here, we just don't think that kind of consistency should go "
-                f"unmentioned. You're three months out from your first full year, so if "
-                f"there's anything in your training you want us to look at before then, "
-                f"this is a good time to say. How's it all feeling compared to when you "
-                f"started?"
-            )
-        elif days_training == 365:
-            # The athlete is still flagged for the summit list, but the message no
-            # longer promises it. "I'll send details when it's confirmed" is a
-            # promise the system can't keep: if nothing is booked when this fires,
-            # it sits unanswered at the biggest milestone we have. The invite goes
-            # out personally once dates exist.
-            summit_flag_names.append(nm)
-            msg = (
-                f"Hey {first}, one year today since your first result with us. That's a "
-                f"proper milestone and we don't say it lightly. We'd like to do a full "
-                f"year-one review with you, sit down with your coach, go through the "
-                f"whole year's numbers, and set year two up properly. If you're keen, let "
-                f"us know and we'll send a booking link. And so we mark it right: what's "
-                f"the one result from this year you're proudest of?"
-            )
-        elif days_training == 730:
-            msg = (
-                f"Hey {first}, two years with us today. Very few athletes stay this "
-                f"consistent with anything, and honestly, athletes like you are why JST "
-                f"works. Thank you. Going into year three, is there anything about your "
-                f"programming or how we work with you that you'd change? We'd rather hear "
-                f"it from you than guess."
-            )
-        else:
-            # Safety net: only fires if a milestone is added to the table above
-            # without copy of its own. Same shape as the rest so a forgotten
-            # milestone still sounds like us.
-            msg = (
-                f"Hey {first}, that's {milestone_label} of training logged with us. Worth "
-                f"marking. How's it feeling compared to when you started?"
-            )
-        try:
-            _deliver(fitr, room_id, msg, nm, "anniversary")
-            anniversaries_sent += 1
-            messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
-                    "Message Type": "anniversary", "Room ID": room_id})
-            import time as _time; _time.sleep(0.5)
-        except FitrError as exc:
-            print(f"  ! Anniversary message failed for {nm}: {exc}")
-    if anniversaries_sent:
-        print(f"Anniversary messages: {_sent_or_drafted(anniversaries_sent)}")
-    if summit_flag_names:
-        try:
-            _lines = "\n".join(f"  • {nm}" for nm in summit_flag_names)
-            notifier.send_slack(
-                f"🏔️ *Summit ticket — action needed*\n"
-                f"The following athlete(s) just hit 12 months and have been promised a free summit ticket:\n"
-                f"{_lines}\n"
-                f"Send them the event details and access code when the next summit is confirmed."
-            )
-            print(f"Summit flag sent to Slack for: {', '.join(summit_flag_names)}")
-        except Exception as exc:
-            print(f"  ! Summit flag Slack alert failed: {exc}")
-
-    # ---- new athlete onboarding (first log == today) ----
-    onboarding_sent = 0
-    for a in active_athletes:
-        nm = a["name"]
-        if nm in bespoke_names:
-            continue
-        first_log = first_log_by_name.get(nm)
-        if not first_log or first_log != TODAY:
-            continue
-        room_id = room_id_by_name.get(nm)
-        if not room_id or config.DRY_RUN:
-            continue
-        first = nm.split()[0]
-        msg = (
-            f"{first}, first log's in. Nice one. Two things to help me coach you well from day one:\n\n"
-            f"1. Log every session as soon as you finish, even a quick note. Makes a big difference.\n"
-            f"2. Weekly recovery check-in: https://jstcompete.typeform.com/to/Q1tL7MmR. "
-            f"2 minutes, helps me manage your load week to week.\n\n"
-            f"Message me here anytime."
-        )
-        try:
-            _deliver(fitr, room_id, msg, nm, "onboarding")
-            onboarding_sent += 1
-            messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
-                    "Message Type": "onboarding", "Room ID": room_id})
-            import time as _time; _time.sleep(0.5)
-        except FitrError as exc:
-            print(f"  ! Onboarding message failed for {nm}: {exc}")
-    if onboarding_sent:
-        print(f"New athlete onboarding messages: {_sent_or_drafted(onboarding_sent)}")
-
-    # ---- pre-competition automated messages ----
-    # A comp milestones: send once on exact day (sync runs daily)
-    _COMP_MSG_DAYS = {
-        70: ("10 weeks out",
-             "Hey {first}, 10 weeks to {comp} starts {today}. "
-             "Everything from here is pointed at that day. "
-             "Before I lock in your programme, what does a successful performance look like to you at {comp}?"),
-        21: ("3 weeks out",
-             "Hey {first}, three weeks to {comp}. "
-             "The preparation is in. This is the sharpening phase now. "
-             "What's your headspace going into the final stretch?"),
-        7:  ("race week",
-             "Hey {first}, {comp} is seven days away. "
-             "The work is done. "
-             "How are you feeling going into race week?"),
-        1:  ("day before",
-             "Hey {first}, {comp} is tomorrow. "
-             "I've watched what you've put into this prep and you've done the work. "
-             "How are you feeling going into the day?"),
-    }
-    competition_rows = sheets.load_competitions()
-    comp_msgs_sent = 0
-    for row in competition_rows:
-        nm = str(row.get("Athlete Name", "")).strip()
-        if not nm or nm in bespoke_names or _is_gone(nm):
-            continue
-        comp_nm = str(row.get("Competition Name", "")).strip() or "your competition"
-        comp_type = str(row.get("Type", "A")).strip().upper()
-        raw_date = str(row.get("Date", "")).strip()
-        if not raw_date:
-            continue
-        import datetime as _dt2
-        comp_date = None
-        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%b-%Y", "%d %b %Y"):
-            try:
-                comp_date = _dt2.datetime.strptime(raw_date, fmt).date()
-                break
-            except ValueError:
-                continue
-        if not comp_date:
-            continue
-        days_out = (comp_date - TODAY).days
-        template = _COMP_MSG_DAYS.get(days_out)
-        if not template:
-            continue
-        # Only auto-message for A comps; 21d applies to A+B
-        if comp_type == "C":
-            continue
-        if days_out in (70, 1) and comp_type != "A":
-            continue
-        room_id = room_id_by_name.get(nm)
-        if not room_id or config.DRY_RUN:
-            continue
-        first = nm.split()[0]
-        _, msg_tpl = template
-        msg = msg_tpl.format(first=first, comp=comp_nm, today=TODAY.strftime("%d %b %Y"))
-        try:
-            _deliver(fitr, room_id, msg, nm, f"pre_comp_{days_out}d")
-            comp_msgs_sent += 1
-            messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
-                    "Message Type": f"pre_comp_{days_out}d", "Room ID": room_id})
-            import time as _time; _time.sleep(0.5)
-        except FitrError as exc:
-            print(f"  ! Pre-comp message failed for {nm}: {exc}")
-    if comp_msgs_sent:
-        print(f"Pre-competition messages: {_sent_or_drafted(comp_msgs_sent)}")
-
-    # ---- comp message dedup set (covers post_comp_ and comp_result_ prefixes) ----
+    competition_rows = []
     sent_comp_keys = set()
-    if not config.DRY_RUN:
-        try:
-            _msg_log_rows = sheets.sh.worksheet(config.TAB_MESSAGE_LOG).get_all_records()
-            sent_comp_keys = {
-                (str(r.get("Athlete Name", "")).strip(), str(r.get("Message Type", "")).strip())
-                for r in _msg_log_rows
-                if str(r.get("Message Type", "")).startswith(("post_comp_", "comp_result_"))
-            }
-        except Exception:
-            pass
+    emails_sent = 0
+    with stage("auto-onboard new athletes"):
+        # ---- auto-onboard new bespoke athletes from chat rooms ----
+        onboarded = auto_onboard_new_athletes(
+            sheets, rooms, fitr=fitr, room_id_by_name=room_id_by_name,
+            messages_sent_log=messages_sent_log, bespoke_names=bespoke_names,
+        )
+        if onboarded:
+            print(f"New bespoke athletes auto-onboarded: {onboarded}")
 
-    # ---- post-competition messages (fires the day after each competition) ----
-    post_comp_msgs_sent = 0
-    for row in competition_rows:
-        nm = str(row.get("Athlete Name", "")).strip()
-        if not nm or nm in bespoke_names or _is_gone(nm):
-            continue
-        comp_nm = str(row.get("Competition Name", "")).strip() or "your competition"
-        comp_type = str(row.get("Type", "A")).strip().upper()
-        raw_date = str(row.get("Date", "")).strip()
-        if not raw_date:
-            continue
-        import datetime as _dt4
-        comp_date = None
-        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%b-%Y", "%d %b %Y"):
-            try:
-                comp_date = _dt4.datetime.strptime(raw_date, fmt).date()
-                break
-            except ValueError:
-                continue
-        if not comp_date:
-            continue
-        days_out = (comp_date - TODAY).days
-        if days_out != -1:
-            continue
-        msg_type_key = f"post_comp_{comp_nm[:25].replace(' ', '_')}"
-        if (nm, msg_type_key) in sent_comp_keys:
-            continue
-        room_id = room_id_by_name.get(nm)
-        if not room_id or config.DRY_RUN:
-            continue
-        first = nm.split()[0]
-        if comp_type in ("A", "B"):
-            msg = (
-                f"{first}, how did {comp_nm} go? When you get a chance:\n\n"
-                f"1. Result / placing\n"
-                f"2. What went well\n"
-                f"3. One thing you'd do differently\n"
-                f"4. How your body's feeling right now"
-            )
-        else:
-            msg = f"{first}, how did {comp_nm} go? What's the result and what are you taking from it?"
-        try:
-            _deliver(fitr, room_id, msg, nm, msg_type_key)
-            post_comp_msgs_sent += 1
-            messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
-                    "Message Type": msg_type_key, "Room ID": room_id})
-            import time as _time; _time.sleep(0.5)
-        except FitrError as exc:
-            print(f"  ! Post-comp message failed for {nm}: {exc}")
-    if post_comp_msgs_sent:
-        print(f"Post-competition messages: {_sent_or_drafted(post_comp_msgs_sent)}")
-
-    # ---- competition result congratulations ----
-    # Send once when a result is entered for a recent comp, deduped via sent_comp_keys.
-    comp_result_msgs_sent = 0
-    for row in competition_rows:
-        nm = str(row.get("Athlete Name", "")).strip()
-        if not nm or nm in bespoke_names or _is_gone(nm):
-            continue
-        result = str(row.get("Result", "")).strip()
-        comp_nm = str(row.get("Competition Name", "")).strip()
-        if not result or not comp_nm:
-            continue
-        raw_date = str(row.get("Date", "")).strip()
-        comp_date = None
-        import datetime as _dt3
-        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%b-%Y", "%d %b %Y"):
-            try:
-                comp_date = _dt3.datetime.strptime(raw_date, fmt).date()
-                break
-            except ValueError:
-                continue
-        if not comp_date or (TODAY - comp_date).days > 14 or comp_date > TODAY:
-            continue
-        msg_type_key = f"comp_result_{comp_nm[:25].replace(' ', '_')}"
-        if (nm, msg_type_key) in sent_comp_keys:
-            continue
-        room_id = room_id_by_name.get(nm)
-        if not room_id or config.DRY_RUN:
-            continue
-        first = nm.split()[0]
-        msg = f"{first}, {result} at {comp_nm}. Nice one. What stood out from the day?"
-        try:
-            _deliver(fitr, room_id, msg, nm, msg_type_key)
-            comp_result_msgs_sent += 1
-            messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
-                    "Message Type": msg_type_key, "Room ID": room_id})
-            import time as _time; _time.sleep(0.5)
-        except FitrError as exc:
-            print(f"  ! Comp result message failed for {nm}: {exc}")
-    if comp_result_msgs_sent:
-        print(f"Competition result messages: {_sent_or_drafted(comp_result_msgs_sent)}")
-
-    # ---- capture athlete replies to post-comp messages ----
-    post_comp_replies = capture_postcomp_responses(fitr, sheets, TODAY)
-    if post_comp_replies:
-        print(f"Post-competition responses captured: {post_comp_replies}")
-
-    # ---- weekly athlete progress emails (Mondays only) ----
-    # The sync runs daily, but this email fired every run — and because
-    # "has an upcoming competition" stays true for weeks at a time, athletes
-    # with a comp booked were getting the "weekly snapshot" every single day.
-    # Gate to Mondays, and widen the PR window to the past 7 days so the
-    # snapshot covers the whole week rather than just Monday morning's rows.
-    emails_sent = 0  # referenced unconditionally by the Sync Log row below
-    if _do_weekly:  # Monday, once per week (see weekly-send guard)
-        archetype_rows = sheets.load_archetype_assessments()
-        archetype_by_name = {
-            str(r.get("Athlete Name", "")).strip(): r
-            for r in archetype_rows
-            if str(r.get("Athlete Name", "")).strip()
-        }
-        _week_cutoff = TODAY - dt.timedelta(days=7)
-        _weekly_pr_rows = []
-        for _rec in pr_records:
-            _d = _parse_date(str(_rec.get("Date", "")))
-            if not _d or _d < _week_cutoff:
-                continue
-            _nm = str(_rec.get("Athlete Name", "")).strip()
-            _b  = str(_rec.get("Benchmark Name", "")).strip()
-            _v  = str(_rec.get("Value", "")).strip()
-            if _nm and _b:
-                # same positional shape as bench_rows: [date, name, email, bench, value]
-                _weekly_pr_rows.append([str(_rec.get("Date", "")), _nm, "", _b, _v])
-        # Start from the PR Log emails, then backfill from _DATA for anyone we
-        # don't have a valid address for. email_by_name comes from PR Log only,
-        # and _DATA often holds a real address where PR Log holds none or held
-        # a redacted "Hidden by client" that has now been filtered out. Without
-        # this backfill those athletes are silently skipped despite us having
-        # their email one tab over.
-        _email_map = dict(email_by_name)
-        for _rec in data_recs:
-            _nm = str(_rec.get("Full Name", "")).strip()
-            _em = str(_rec.get("Email", "")).strip()
-            if _nm and _nm not in _email_map and _looks_like_email(_em):
-                _email_map[_nm] = _em
-        non_bespoke_email_by_name = {
-            k: v for k, v in _email_map.items()
-            if k not in bespoke_names and not _is_gone(k)
-        }
-        # On the first Monday of the month, the email carries the month in
-        # review instead of the week. Athlete emails now only ever leave on a
-        # Monday, alongside the Fitr batch, so there's one moment we speak to
-        # them rather than a monthly report landing on whatever weekday the
-        # 1st happened to be.
-        _month_review = None
-        if TODAY.day <= 7:
-            _prev_month_end   = TODAY.replace(day=1) - dt.timedelta(days=1)
-            _prev_month_start = _prev_month_end.replace(day=1)
-            _m_sessions, _m_prs = {}, {}
-            for _rec in pr_records:
-                _nm = str(_rec.get("Athlete Name", "")).strip()
-                _ds = str(_rec.get("Date", "")).strip()
-                if not _nm or not (_prev_month_start.isoformat() <= _ds <= _prev_month_end.isoformat()):
+    with stage("athlete anniversaries"):
+        # ---- athlete anniversaries via Fitr chat ----
+        _ANNIVERSARY_MILESTONES = {90: "3 months", 180: "6 months", 270: "9 months",
+                                    365: "1 year", 730: "2 years"}
+        first_log_by_name = {}
+        for rec in pr_records:
+            nm = str(rec.get("Athlete Name", "")).strip()
+            d_str = str(rec.get("Date", "")).strip()
+            if nm and d_str:
+                try:
+                    import datetime as _dt
+                    d = _dt.datetime.strptime(d_str, "%Y-%m-%d").date()
+                except ValueError:
                     continue
-                _m_sessions.setdefault(_nm, set()).add(_ds)
-                _b = str(_rec.get("Benchmark Name", "")).strip()
-                _v = str(_rec.get("Value", "")).strip()
-                if _b and _v:
-                    _m_prs.setdefault(_nm, []).append((_b, _v))
-            _month_review = {
-                "label": _prev_month_end.strftime("%B"),
-                "by_name": {
-                    _nm: (len(_dates), _m_prs.get(_nm, []))
-                    for _nm, _dates in _m_sessions.items()
-                },
-            }
-
-        emails_sent = notifier.send_all_athlete_progress_emails(
-            _weekly_pr_rows, consistency_wins, competition_rows, non_bespoke_email_by_name,
-            archetype_by_name=archetype_by_name, month_review=_month_review,
-        )
-        if emails_sent:
-            _kind = "month in review" if _month_review else "weekly progress"
-            print(f"Athlete {_kind} emails sent: {emails_sent}")
-
-        # All Monday sends done — mark the week so any later run today skips them.
-        sheets.mark_weekly_send_done(_this_monday.isoformat())
-
-    # ---- monthly Fitr check-in (fires on the 1st of each month) ----
-    # The monthly REPORT EMAIL used to fire here too. It moved into the Monday
-    # block above (first Monday of the month) for two reasons: it was the only
-    # athlete-facing send with no double-send guard, so a second run on the 1st
-    # mailed everyone twice; and landing on the 1st meant it arrived on
-    # whatever weekday that was, unhooked from the Monday moment.
-    if TODAY.day == 1:
-        # Monthly Fitr progress message — short personal check-in for every athlete with a room
-        _last_month_end   = TODAY.replace(day=1) - dt.timedelta(days=1)
-        _last_month_start = _last_month_end.replace(day=1)
-        _month_label      = _last_month_end.strftime("%B")
-        # Matches the note this block writes — "[2026-08-01 — monthly_fitr]" —
-        # for any day in the current month. The old guard looked for the
-        # substring "2026-08 — monthly_fitr", which never appears in that note
-        # because the date is written in full, so the once-a-month guard has
-        # never actually held. It only stayed hidden because the block runs on
-        # day 1 and the sync normally runs once a day; the moment a second run
-        # happened on the 1st it queued all 91 monthly messages again.
-        _month_guard_re = re.compile(
-            rf"\[{TODAY.strftime('%Y-%m')}-\d\d — monthly_fitr\]")
-
-        _month_sessions: dict = {}
-        _month_prs: dict = {}
-        for _rec in pr_records:
-            _nm    = str(_rec.get("Athlete Name", "")).strip()
-            _d_str = str(_rec.get("Date", "")).strip()
-            if _nm and _last_month_start.isoformat() <= _d_str <= _last_month_end.isoformat():
-                _month_sessions.setdefault(_nm, set()).add(_d_str)
-                _b = str(_rec.get("Benchmark Name", "")).strip()
-                _v = str(_rec.get("Value", "")).strip()
-                # Bodyweight, heart rate and macro logs are data, not results.
-                # Leading a monthly note with "saw you logged 78 kg on the
-                # bodyweight" would be worse than saying nothing.
-                if _b and _v and config.is_achievement_benchmark(_b):
-                    # Carry whether it beat their previous, so the message can
-                    # lead with a PB rather than whatever happened to be first.
-                    _prev = str(_rec.get("Previous Value", "")).strip()
-                    _improved = (
-                        bool(_prev) and _prev.lower() != "first entry"
-                        and analytics.compare_result(_b, _prev, _v) == "improved"
-                    )
-                    _month_prs.setdefault(_nm, []).append((_b, _v, _improved))
-
-        _data_names_norm = {analytics.normalise_client_name(n) for n in data_by_name_all}
-        _mfitr_notes: dict = {}
-        _mfitr_sent = 0
-        _skipped_not_ours = 0
-        for _nm, _sess_dates in _month_sessions.items():
-            if _nm in bespoke_names or _is_gone(_nm):
+                if nm not in first_log_by_name or d < first_log_by_name[nm]:
+                    first_log_by_name[nm] = d
+        anniversaries_sent = 0
+        summit_flag_names = []
+        for a in active_athletes:
+            nm = a["name"]
+            if nm in bespoke_names:
                 continue
-            # Must be a JST athlete, i.e. on _DATA. Fitr hands over every chat
-            # contact the account has ever had — 1,698 people, most of whom
-            # bought a one-off plan years ago — and 19 of the 90 monthly messages
-            # drafted this month went to people with no row on the sheet. Those
-            # are not ours to send a personal monthly note to, and the guard
-            # cannot work for them either: there is no row to record it against.
-            #
-            # Matched on the normalised name, not the exact one. Fitr spells
-            # people differently from the sheet ("Jake foster" against "Jake
-            # Foster"), and an exact check would have quietly dropped a real
-            # athlete while claiming to filter out strangers.
-            if analytics.normalise_client_name(_nm) not in _data_names_norm:
-                _skipped_not_ours += 1
+            first_log = first_log_by_name.get(nm)
+            if not first_log:
                 continue
-            _room = room_id_by_name.get(_nm)
-            if not _room:
+            days_training = (TODAY - first_log).days
+            milestone_label = _ANNIVERSARY_MILESTONES.get(days_training)
+            if not milestone_label:
                 continue
-            if _month_guard_re.search(str(data_by_name_all.get(_nm, {}).get("Coaching Notes", ""))):
+            room_id = room_id_by_name.get(nm)
+            if not room_id or config.DRY_RUN:
                 continue
-            _prs   = _month_prs.get(_nm, [])
-            _first = _nm.split()[0]
-            # Lead with one real result and the consistency story. No counts:
-            # "you hit 4 results, 3 sessions logged" advertises a thin month and
-            # makes the praise ring hollow, and the session figure was wrong
-            # anyway — those were days a benchmark got retested, not training
-            # sessions. No result worth citing means no message.
-            _streak = analytics.months_logging_streak(pr_records, _nm, today=TODAY)
-            _msg = analytics.monthly_message(_first, _prs, streak_months=_streak)
-            if not _msg:
-                continue
+            first = nm.split()[0]
+            # No booking link here any more: the 90-day message offers to send one
+            # if they want it rather than pushing a calendar at them.
+            _tshirt_url = getattr(config, "TSHIRT_FORM_URL", "")
+            if days_training == 90:
+                # Jak's copy. Note "your first result", not "you joined us": the
+                # milestone counts from their first logged result because Join Date
+                # in _DATA can't be trusted (for the median athlete it lands months
+                # AFTER their first log, which can't happen). First log is the only
+                # date here we can stand behind.
+                msg = (
+                    f"Hey {first}, that's 90 days since your first result with us. Worth a "
+                    f"proper catch up at this point. Not because anything's wrong, but because "
+                    f"three months in is when we can actually see what's working and what "
+                    f"isn't, and we want to make sure you are on the right track rather than "
+                    f"guessing from your numbers.\n\n"
+                    f"If you are keen, let us know and we can send you a booking link. If not, "
+                    f"that's all good as well.\n\n"
+                    f"One final thing is, what's felt like the biggest change since you started?"
+                )
+            elif days_training == 180:
+                msg = (
+                    f"Hey {first}, six months with us! The core of our community is down to "
+                    f"committed athletes like yourself.\n\n"
+                    f"We send a JST tee at this point, so drop your address and size here: "
+                    f"{_tshirt_url}\n\n"
+                    f"And if you know anyone who'd do really well joining JST, please send them "
+                    f"our way. If it's anyone within your gym or any friends, let us know and we "
+                    f"can also give you a code for them.\n\n"
+                    f"What are you chasing during your next 6 months?"
+                )
+            elif days_training == 270:
+                msg = (
+                    f"Hey {first}, that's nine months of results logged with us now. No ask "
+                    f"here, we just don't think that kind of consistency should go "
+                    f"unmentioned. You're three months out from your first full year, so if "
+                    f"there's anything in your training you want us to look at before then, "
+                    f"this is a good time to say. How's it all feeling compared to when you "
+                    f"started?"
+                )
+            elif days_training == 365:
+                # The athlete is still flagged for the summit list, but the message no
+                # longer promises it. "I'll send details when it's confirmed" is a
+                # promise the system can't keep: if nothing is booked when this fires,
+                # it sits unanswered at the biggest milestone we have. The invite goes
+                # out personally once dates exist.
+                summit_flag_names.append(nm)
+                msg = (
+                    f"Hey {first}, one year today since your first result with us. That's a "
+                    f"proper milestone and we don't say it lightly. We'd like to do a full "
+                    f"year-one review with you, sit down with your coach, go through the "
+                    f"whole year's numbers, and set year two up properly. If you're keen, let "
+                    f"us know and we'll send a booking link. And so we mark it right: what's "
+                    f"the one result from this year you're proudest of?"
+                )
+            elif days_training == 730:
+                msg = (
+                    f"Hey {first}, two years with us today. Very few athletes stay this "
+                    f"consistent with anything, and honestly, athletes like you are why JST "
+                    f"works. Thank you. Going into year three, is there anything about your "
+                    f"programming or how we work with you that you'd change? We'd rather hear "
+                    f"it from you than guess."
+                )
+            else:
+                # Safety net: only fires if a milestone is added to the table above
+                # without copy of its own. Same shape as the rest so a forgotten
+                # milestone still sounds like us.
+                msg = (
+                    f"Hey {first}, that's {milestone_label} of training logged with us. Worth "
+                    f"marking. How's it feeling compared to when you started?"
+                )
             try:
-                _deliver(fitr, _room, _msg, _nm, "monthly_fitr")
-                _mfitr_notes[_nm] = f"[{TODAY.isoformat()} — monthly_fitr]"
-                _mfitr_sent += 1
-                messages_sent_log.append({
-                    "Date": TODAY.isoformat(), "Athlete Name": _nm,
-                    "Message Type": "monthly_fitr", "Room ID": _room,
-                })
+                _deliver(fitr, room_id, msg, nm, "anniversary")
+                anniversaries_sent += 1
+                messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
+                        "Message Type": "anniversary", "Room ID": room_id})
                 import time as _time; _time.sleep(0.5)
-            except FitrError as _exc:
-                print(f"  ! Monthly Fitr message failed for {_nm}: {_exc}")
-        if _mfitr_notes:
-            append_coaching_notes(sheets, _mfitr_notes)
-        if _skipped_not_ours:
-            print(f"  Monthly message skipped for {_skipped_not_ours} Fitr contact(s) "
-                  f"who are not on the athlete sheet")
-        if _mfitr_sent:
-            print(f"Monthly Fitr progress messages: {_sent_or_drafted(_mfitr_sent)}")
-
-        # Monthly gym owner credit statements
-        try:
-            _gym_directory = sheets.load_gym_directory()
-            _gym_referrals = sheets.load_gym_referrals()
-            if _gym_directory or _gym_referrals:
-                _gym_summaries = analytics.gym_credit_summary(
-                    _gym_referrals, _gym_directory
-                )
-                _month_label_gym = _last_month_end.strftime("%B %Y")
-                _gym_emails_sent = notifier.send_gym_owner_credits(
-                    _gym_summaries, _month_label_gym
-                )
-                if _gym_emails_sent:
-                    print(f"Gym owner credit emails sent: {_gym_emails_sent}")
-        except Exception as _gym_err:
-            print(f"  ! Gym credit emails failed: {_gym_err}")
-
-    # ---- log automated messages + check for replies ----
-    # _DELIVERED, not messages_sent_log: only what actually reached an athlete
-    # belongs in the Message Log. With automatic sending off that is nothing,
-    # and the drafts are on the Pending Messages tab waiting for a coach.
-    if _DELIVERED:
-        sheets.log_messages(_DELIVERED)
-        print(f"Automated messages logged: {len(_DELIVERED)}")
-    elif messages_sent_log:
-        print(f"Messages composed: {len(messages_sent_log)} — none sent "
-              f"(automatic sending is off), so none logged as sent")
-
-    pending_msgs = sheets.load_pending_messages()
-    if pending_msgs and not config.DRY_RUN:
-        replies_found = 0
-        for pending in pending_msgs:
-            pnm = str(pending.get("Athlete Name", "")).strip()
-            room_id = room_id_by_name.get(pnm)
-            if not room_id:
-                continue
-            sent_date = str(pending.get("Date", "")).strip()
-            msg_type = str(pending.get("Message Type", "")).strip()
-            sent_on = _parse_date(sent_date)
+            except FitrError as exc:
+                print(f"  ! Anniversary message failed for {nm}: {exc}")
+        if anniversaries_sent:
+            print(f"Anniversary messages: {_sent_or_drafted(anniversaries_sent)}")
+        if summit_flag_names:
             try:
-                recent = fitr.chat_messages(room_id, max_messages=10)
-                for cmsg in recent:
-                    if not message_is_from(cmsg, pnm):
-                        continue
-                    if not str(cmsg.get("text", "")).strip():
-                        continue
-                    msg_on = message_date(cmsg)
-                    if msg_on and sent_on and msg_on >= sent_on:
-                        sheets.mark_message_replied(
-                            pnm, msg_type, sent_date, msg_on.isoformat())
-                        replies_found += 1
-                        break
-            except FitrError:
+                _lines = "\n".join(f"  • {nm}" for nm in summit_flag_names)
+                notifier.send_slack(
+                    f"🏔️ *Summit ticket — action needed*\n"
+                    f"The following athlete(s) just hit 12 months and have been promised a free summit ticket:\n"
+                    f"{_lines}\n"
+                    f"Send them the event details and access code when the next summit is confirmed."
+                )
+                print(f"Summit flag sent to Slack for: {', '.join(summit_flag_names)}")
+            except Exception as exc:
+                print(f"  ! Summit flag Slack alert failed: {exc}")
+
+    with stage("new athlete onboarding"):
+        # ---- new athlete onboarding (first log == today) ----
+        onboarding_sent = 0
+        for a in active_athletes:
+            nm = a["name"]
+            if nm in bespoke_names:
+                continue
+            first_log = first_log_by_name.get(nm)
+            if not first_log or first_log != TODAY:
+                continue
+            room_id = room_id_by_name.get(nm)
+            if not room_id or config.DRY_RUN:
+                continue
+            first = nm.split()[0]
+            msg = (
+                f"{first}, first log's in. Nice one. Two things to help me coach you well from day one:\n\n"
+                f"1. Log every session as soon as you finish, even a quick note. Makes a big difference.\n"
+                f"2. Weekly recovery check-in: https://jstcompete.typeform.com/to/Q1tL7MmR. "
+                f"2 minutes, helps me manage your load week to week.\n\n"
+                f"Message me here anytime."
+            )
+            try:
+                _deliver(fitr, room_id, msg, nm, "onboarding")
+                onboarding_sent += 1
+                messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
+                        "Message Type": "onboarding", "Room ID": room_id})
+                import time as _time; _time.sleep(0.5)
+            except FitrError as exc:
+                print(f"  ! Onboarding message failed for {nm}: {exc}")
+        if onboarding_sent:
+            print(f"New athlete onboarding messages: {_sent_or_drafted(onboarding_sent)}")
+
+    with stage("pre-competition messages"):
+        # ---- pre-competition automated messages ----
+        # A comp milestones: send once on exact day (sync runs daily)
+        _COMP_MSG_DAYS = {
+            70: ("10 weeks out",
+                 "Hey {first}, 10 weeks to {comp} starts {today}. "
+                 "Everything from here is pointed at that day. "
+                 "Before I lock in your programme, what does a successful performance look like to you at {comp}?"),
+            21: ("3 weeks out",
+                 "Hey {first}, three weeks to {comp}. "
+                 "The preparation is in. This is the sharpening phase now. "
+                 "What's your headspace going into the final stretch?"),
+            7:  ("race week",
+                 "Hey {first}, {comp} is seven days away. "
+                 "The work is done. "
+                 "How are you feeling going into race week?"),
+            1:  ("day before",
+                 "Hey {first}, {comp} is tomorrow. "
+                 "I've watched what you've put into this prep and you've done the work. "
+                 "How are you feeling going into the day?"),
+        }
+        competition_rows = sheets.load_competitions()
+        comp_msgs_sent = 0
+        for row in competition_rows:
+            nm = str(row.get("Athlete Name", "")).strip()
+            if not nm or nm in bespoke_names or _is_gone(nm):
+                continue
+            comp_nm = str(row.get("Competition Name", "")).strip() or "your competition"
+            comp_type = str(row.get("Type", "A")).strip().upper()
+            raw_date = str(row.get("Date", "")).strip()
+            if not raw_date:
+                continue
+            import datetime as _dt2
+            comp_date = None
+            for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%b-%Y", "%d %b %Y"):
+                try:
+                    comp_date = _dt2.datetime.strptime(raw_date, fmt).date()
+                    break
+                except ValueError:
+                    continue
+            if not comp_date:
+                continue
+            days_out = (comp_date - TODAY).days
+            template = _COMP_MSG_DAYS.get(days_out)
+            if not template:
+                continue
+            # Only auto-message for A comps; 21d applies to A+B
+            if comp_type == "C":
+                continue
+            if days_out in (70, 1) and comp_type != "A":
+                continue
+            room_id = room_id_by_name.get(nm)
+            if not room_id or config.DRY_RUN:
+                continue
+            first = nm.split()[0]
+            _, msg_tpl = template
+            msg = msg_tpl.format(first=first, comp=comp_nm, today=TODAY.strftime("%d %b %Y"))
+            try:
+                _deliver(fitr, room_id, msg, nm, f"pre_comp_{days_out}d")
+                comp_msgs_sent += 1
+                messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
+                        "Message Type": f"pre_comp_{days_out}d", "Room ID": room_id})
+                import time as _time; _time.sleep(0.5)
+            except FitrError as exc:
+                print(f"  ! Pre-comp message failed for {nm}: {exc}")
+        if comp_msgs_sent:
+            print(f"Pre-competition messages: {_sent_or_drafted(comp_msgs_sent)}")
+
+    with stage("comp message dedup"):
+        # ---- comp message dedup set (covers post_comp_ and comp_result_ prefixes) ----
+        sent_comp_keys = set()
+        if not config.DRY_RUN:
+            try:
+                _msg_log_rows = sheets.sh.worksheet(config.TAB_MESSAGE_LOG).get_all_records()
+                sent_comp_keys = {
+                    (str(r.get("Athlete Name", "")).strip(), str(r.get("Message Type", "")).strip())
+                    for r in _msg_log_rows
+                    if str(r.get("Message Type", "")).startswith(("post_comp_", "comp_result_"))
+                }
+            except Exception:
                 pass
-        if replies_found:
-            print(f"Athlete replies recorded: {replies_found}")
 
-    # ---- sync log ----
-    unknown = sorted({n for n in chat_notes} - valid_names)
-    # ensure_headers, not get_or_create: get_or_create only writes the header when
-    # it creates the tab, so when this row grew from 6 values to 10 the header kept
-    # the old names and every reader mislabelled the columns.
-    try:
-        _repaired = sheets.ensure_headers(
-            config.TAB_SYNC_LOG,
-            ["Run Date", "Total Athletes", "New PR Log rows", "Challenge scores added",
-             "Conversations summarised", "Recovery merged", "Notes updated",
-             "Athletes auto-onboarded", "Athlete Emails Sent", "Notes"],
-        )
-        if _repaired:
-            print(f"Repaired stale '{config.TAB_SYNC_LOG}' header (was: {_repaired})")
-    except Exception as exc:
-        # Tidying the header must never cost us the run's log row.
-        print(f"  ! Could not check the Sync Log header: {exc}")
-    sheets.append_rows(config.TAB_SYNC_LOG, [[
-        TODAY.isoformat(), len(athletes), len(bench_rows), len(chal_rows), len(chat_notes),
-        len(rec_notes), notes_written, onboarded, emails_sent,
-        ("Unknown athletes seen: " + ", ".join(unknown)) if unknown else "ok",
-    ]])
+    with stage("post-competition messages"):
+        # ---- post-competition messages (fires the day after each competition) ----
+        post_comp_msgs_sent = 0
+        for row in competition_rows:
+            nm = str(row.get("Athlete Name", "")).strip()
+            if not nm or nm in bespoke_names or _is_gone(nm):
+                continue
+            comp_nm = str(row.get("Competition Name", "")).strip() or "your competition"
+            comp_type = str(row.get("Type", "A")).strip().upper()
+            raw_date = str(row.get("Date", "")).strip()
+            if not raw_date:
+                continue
+            import datetime as _dt4
+            comp_date = None
+            for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%b-%Y", "%d %b %Y"):
+                try:
+                    comp_date = _dt4.datetime.strptime(raw_date, fmt).date()
+                    break
+                except ValueError:
+                    continue
+            if not comp_date:
+                continue
+            days_out = (comp_date - TODAY).days
+            if days_out != -1:
+                continue
+            msg_type_key = f"post_comp_{comp_nm[:25].replace(' ', '_')}"
+            if (nm, msg_type_key) in sent_comp_keys:
+                continue
+            room_id = room_id_by_name.get(nm)
+            if not room_id or config.DRY_RUN:
+                continue
+            first = nm.split()[0]
+            if comp_type in ("A", "B"):
+                msg = (
+                    f"{first}, how did {comp_nm} go? When you get a chance:\n\n"
+                    f"1. Result / placing\n"
+                    f"2. What went well\n"
+                    f"3. One thing you'd do differently\n"
+                    f"4. How your body's feeling right now"
+                )
+            else:
+                msg = f"{first}, how did {comp_nm} go? What's the result and what are you taking from it?"
+            try:
+                _deliver(fitr, room_id, msg, nm, msg_type_key)
+                post_comp_msgs_sent += 1
+                messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
+                        "Message Type": msg_type_key, "Room ID": room_id})
+                import time as _time; _time.sleep(0.5)
+            except FitrError as exc:
+                print(f"  ! Post-comp message failed for {nm}: {exc}")
+        if post_comp_msgs_sent:
+            print(f"Post-competition messages: {_sent_or_drafted(post_comp_msgs_sent)}")
 
-    _queued = flush_pending_messages(sheets)
-    if _queued:
-        print(f"Messages queued as drafts for a coach to send: {_queued} "
-              f"(automatic sending is off)")
+    with stage("competition result congratulations"):
+        # ---- competition result congratulations ----
+        # Send once when a result is entered for a recent comp, deduped via sent_comp_keys.
+        comp_result_msgs_sent = 0
+        for row in competition_rows:
+            nm = str(row.get("Athlete Name", "")).strip()
+            if not nm or nm in bespoke_names or _is_gone(nm):
+                continue
+            result = str(row.get("Result", "")).strip()
+            comp_nm = str(row.get("Competition Name", "")).strip()
+            if not result or not comp_nm:
+                continue
+            raw_date = str(row.get("Date", "")).strip()
+            comp_date = None
+            import datetime as _dt3
+            for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%b-%Y", "%d %b %Y"):
+                try:
+                    comp_date = _dt3.datetime.strptime(raw_date, fmt).date()
+                    break
+                except ValueError:
+                    continue
+            if not comp_date or (TODAY - comp_date).days > 14 or comp_date > TODAY:
+                continue
+            msg_type_key = f"comp_result_{comp_nm[:25].replace(' ', '_')}"
+            if (nm, msg_type_key) in sent_comp_keys:
+                continue
+            room_id = room_id_by_name.get(nm)
+            if not room_id or config.DRY_RUN:
+                continue
+            first = nm.split()[0]
+            msg = f"{first}, {result} at {comp_nm}. Nice one. What stood out from the day?"
+            try:
+                _deliver(fitr, room_id, msg, nm, msg_type_key)
+                comp_result_msgs_sent += 1
+                messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
+                        "Message Type": msg_type_key, "Room ID": room_id})
+                import time as _time; _time.sleep(0.5)
+            except FitrError as exc:
+                print(f"  ! Comp result message failed for {nm}: {exc}")
+        if comp_result_msgs_sent:
+            print(f"Competition result messages: {_sent_or_drafted(comp_result_msgs_sent)}")
 
-    print("== Done ==")
+    with stage("capture post-comp replies"):
+        # ---- capture athlete replies to post-comp messages ----
+        post_comp_replies = capture_postcomp_responses(fitr, sheets, TODAY)
+        if post_comp_replies:
+            print(f"Post-competition responses captured: {post_comp_replies}")
+
+    with stage("weekly progress emails"):
+        # ---- weekly athlete progress emails (Mondays only) ----
+        # The sync runs daily, but this email fired every run — and because
+        # "has an upcoming competition" stays true for weeks at a time, athletes
+        # with a comp booked were getting the "weekly snapshot" every single day.
+        # Gate to Mondays, and widen the PR window to the past 7 days so the
+        # snapshot covers the whole week rather than just Monday morning's rows.
+        emails_sent = 0  # referenced unconditionally by the Sync Log row below
+        if _do_weekly:  # Monday, once per week (see weekly-send guard)
+            archetype_rows = sheets.load_archetype_assessments()
+            archetype_by_name = {
+                str(r.get("Athlete Name", "")).strip(): r
+                for r in archetype_rows
+                if str(r.get("Athlete Name", "")).strip()
+            }
+            _week_cutoff = TODAY - dt.timedelta(days=7)
+            _weekly_pr_rows = []
+            for _rec in pr_records:
+                _d = _parse_date(str(_rec.get("Date", "")))
+                if not _d or _d < _week_cutoff:
+                    continue
+                _nm = str(_rec.get("Athlete Name", "")).strip()
+                _b  = str(_rec.get("Benchmark Name", "")).strip()
+                _v  = str(_rec.get("Value", "")).strip()
+                if _nm and _b:
+                    # same positional shape as bench_rows: [date, name, email, bench, value]
+                    _weekly_pr_rows.append([str(_rec.get("Date", "")), _nm, "", _b, _v])
+            # Start from the PR Log emails, then backfill from _DATA for anyone we
+            # don't have a valid address for. email_by_name comes from PR Log only,
+            # and _DATA often holds a real address where PR Log holds none or held
+            # a redacted "Hidden by client" that has now been filtered out. Without
+            # this backfill those athletes are silently skipped despite us having
+            # their email one tab over.
+            _email_map = dict(email_by_name)
+            for _rec in data_recs:
+                _nm = str(_rec.get("Full Name", "")).strip()
+                _em = str(_rec.get("Email", "")).strip()
+                if _nm and _nm not in _email_map and _looks_like_email(_em):
+                    _email_map[_nm] = _em
+            non_bespoke_email_by_name = {
+                k: v for k, v in _email_map.items()
+                if k not in bespoke_names and not _is_gone(k)
+            }
+            # On the first Monday of the month, the email carries the month in
+            # review instead of the week. Athlete emails now only ever leave on a
+            # Monday, alongside the Fitr batch, so there's one moment we speak to
+            # them rather than a monthly report landing on whatever weekday the
+            # 1st happened to be.
+            _month_review = None
+            if TODAY.day <= 7:
+                _prev_month_end   = TODAY.replace(day=1) - dt.timedelta(days=1)
+                _prev_month_start = _prev_month_end.replace(day=1)
+                _m_sessions, _m_prs = {}, {}
+                for _rec in pr_records:
+                    _nm = str(_rec.get("Athlete Name", "")).strip()
+                    _ds = str(_rec.get("Date", "")).strip()
+                    if not _nm or not (_prev_month_start.isoformat() <= _ds <= _prev_month_end.isoformat()):
+                        continue
+                    _m_sessions.setdefault(_nm, set()).add(_ds)
+                    _b = str(_rec.get("Benchmark Name", "")).strip()
+                    _v = str(_rec.get("Value", "")).strip()
+                    if _b and _v:
+                        _m_prs.setdefault(_nm, []).append((_b, _v))
+                _month_review = {
+                    "label": _prev_month_end.strftime("%B"),
+                    "by_name": {
+                        _nm: (len(_dates), _m_prs.get(_nm, []))
+                        for _nm, _dates in _m_sessions.items()
+                    },
+                }
+
+            emails_sent = notifier.send_all_athlete_progress_emails(
+                _weekly_pr_rows, consistency_wins, competition_rows, non_bespoke_email_by_name,
+                archetype_by_name=archetype_by_name, month_review=_month_review,
+            )
+            if emails_sent:
+                _kind = "month in review" if _month_review else "weekly progress"
+                print(f"Athlete {_kind} emails sent: {emails_sent}")
+
+            # All Monday sends done — mark the week so any later run today skips them.
+            sheets.mark_weekly_send_done(_this_monday.isoformat())
+
+    with stage("monthly Fitr check-in"):
+        # ---- monthly Fitr check-in (fires on the 1st of each month) ----
+        # The monthly REPORT EMAIL used to fire here too. It moved into the Monday
+        # block above (first Monday of the month) for two reasons: it was the only
+        # athlete-facing send with no double-send guard, so a second run on the 1st
+        # mailed everyone twice; and landing on the 1st meant it arrived on
+        # whatever weekday that was, unhooked from the Monday moment.
+        if TODAY.day == 1:
+            # Monthly Fitr progress message — short personal check-in for every athlete with a room
+            _last_month_end   = TODAY.replace(day=1) - dt.timedelta(days=1)
+            _last_month_start = _last_month_end.replace(day=1)
+            _month_label      = _last_month_end.strftime("%B")
+            # Matches the note this block writes — "[2026-08-01 — monthly_fitr]" —
+            # for any day in the current month. The old guard looked for the
+            # substring "2026-08 — monthly_fitr", which never appears in that note
+            # because the date is written in full, so the once-a-month guard has
+            # never actually held. It only stayed hidden because the block runs on
+            # day 1 and the sync normally runs once a day; the moment a second run
+            # happened on the 1st it queued all 91 monthly messages again.
+            _month_guard_re = re.compile(
+                rf"\[{TODAY.strftime('%Y-%m')}-\d\d — monthly_fitr\]")
+
+            _month_sessions: dict = {}
+            _month_prs: dict = {}
+            for _rec in pr_records:
+                _nm    = str(_rec.get("Athlete Name", "")).strip()
+                _d_str = str(_rec.get("Date", "")).strip()
+                if _nm and _last_month_start.isoformat() <= _d_str <= _last_month_end.isoformat():
+                    _month_sessions.setdefault(_nm, set()).add(_d_str)
+                    _b = str(_rec.get("Benchmark Name", "")).strip()
+                    _v = str(_rec.get("Value", "")).strip()
+                    # Bodyweight, heart rate and macro logs are data, not results.
+                    # Leading a monthly note with "saw you logged 78 kg on the
+                    # bodyweight" would be worse than saying nothing.
+                    if _b and _v and config.is_achievement_benchmark(_b):
+                        # Carry whether it beat their previous, so the message can
+                        # lead with a PB rather than whatever happened to be first.
+                        _prev = str(_rec.get("Previous Value", "")).strip()
+                        _improved = (
+                            bool(_prev) and _prev.lower() != "first entry"
+                            and analytics.compare_result(_b, _prev, _v) == "improved"
+                        )
+                        _month_prs.setdefault(_nm, []).append((_b, _v, _improved))
+
+            _data_names_norm = {analytics.normalise_client_name(n) for n in data_by_name_all}
+            _mfitr_notes: dict = {}
+            _mfitr_sent = 0
+            _skipped_not_ours = 0
+            for _nm, _sess_dates in _month_sessions.items():
+                if _nm in bespoke_names or _is_gone(_nm):
+                    continue
+                # Must be a JST athlete, i.e. on _DATA. Fitr hands over every chat
+                # contact the account has ever had — 1,698 people, most of whom
+                # bought a one-off plan years ago — and 19 of the 90 monthly messages
+                # drafted this month went to people with no row on the sheet. Those
+                # are not ours to send a personal monthly note to, and the guard
+                # cannot work for them either: there is no row to record it against.
+                #
+                # Matched on the normalised name, not the exact one. Fitr spells
+                # people differently from the sheet ("Jake foster" against "Jake
+                # Foster"), and an exact check would have quietly dropped a real
+                # athlete while claiming to filter out strangers.
+                if analytics.normalise_client_name(_nm) not in _data_names_norm:
+                    _skipped_not_ours += 1
+                    continue
+                _room = room_id_by_name.get(_nm)
+                if not _room:
+                    continue
+                if _month_guard_re.search(str(data_by_name_all.get(_nm, {}).get("Coaching Notes", ""))):
+                    continue
+                _prs   = _month_prs.get(_nm, [])
+                _first = _nm.split()[0]
+                # Lead with one real result and the consistency story. No counts:
+                # "you hit 4 results, 3 sessions logged" advertises a thin month and
+                # makes the praise ring hollow, and the session figure was wrong
+                # anyway — those were days a benchmark got retested, not training
+                # sessions. No result worth citing means no message.
+                _streak = analytics.months_logging_streak(pr_records, _nm, today=TODAY)
+                _msg = analytics.monthly_message(_first, _prs, streak_months=_streak)
+                if not _msg:
+                    continue
+                try:
+                    _deliver(fitr, _room, _msg, _nm, "monthly_fitr")
+                    _mfitr_notes[_nm] = f"[{TODAY.isoformat()} — monthly_fitr]"
+                    _mfitr_sent += 1
+                    messages_sent_log.append({
+                        "Date": TODAY.isoformat(), "Athlete Name": _nm,
+                        "Message Type": "monthly_fitr", "Room ID": _room,
+                    })
+                    import time as _time; _time.sleep(0.5)
+                except FitrError as _exc:
+                    print(f"  ! Monthly Fitr message failed for {_nm}: {_exc}")
+            if _mfitr_notes:
+                append_coaching_notes(sheets, _mfitr_notes)
+            if _skipped_not_ours:
+                print(f"  Monthly message skipped for {_skipped_not_ours} Fitr contact(s) "
+                      f"who are not on the athlete sheet")
+            if _mfitr_sent:
+                print(f"Monthly Fitr progress messages: {_sent_or_drafted(_mfitr_sent)}")
+
+            # Monthly gym owner credit statements
+            try:
+                _gym_directory = sheets.load_gym_directory()
+                _gym_referrals = sheets.load_gym_referrals()
+                if _gym_directory or _gym_referrals:
+                    _gym_summaries = analytics.gym_credit_summary(
+                        _gym_referrals, _gym_directory
+                    )
+                    _month_label_gym = _last_month_end.strftime("%B %Y")
+                    _gym_emails_sent = notifier.send_gym_owner_credits(
+                        _gym_summaries, _month_label_gym
+                    )
+                    if _gym_emails_sent:
+                        print(f"Gym owner credit emails sent: {_gym_emails_sent}")
+            except Exception as _gym_err:
+                print(f"  ! Gym credit emails failed: {_gym_err}")
+
+    with stage("message log and replies"):
+        # ---- log automated messages + check for replies ----
+        # _DELIVERED, not messages_sent_log: only what actually reached an athlete
+        # belongs in the Message Log. With automatic sending off that is nothing,
+        # and the drafts are on the Pending Messages tab waiting for a coach.
+        if _DELIVERED:
+            sheets.log_messages(_DELIVERED)
+            print(f"Automated messages logged: {len(_DELIVERED)}")
+        elif messages_sent_log:
+            print(f"Messages composed: {len(messages_sent_log)} — none sent "
+                  f"(automatic sending is off), so none logged as sent")
+
+        pending_msgs = sheets.load_pending_messages()
+        if pending_msgs and not config.DRY_RUN:
+            replies_found = 0
+            for pending in pending_msgs:
+                pnm = str(pending.get("Athlete Name", "")).strip()
+                room_id = room_id_by_name.get(pnm)
+                if not room_id:
+                    continue
+                sent_date = str(pending.get("Date", "")).strip()
+                msg_type = str(pending.get("Message Type", "")).strip()
+                sent_on = _parse_date(sent_date)
+                try:
+                    recent = fitr.chat_messages(room_id, max_messages=10)
+                    for cmsg in recent:
+                        if not message_is_from(cmsg, pnm):
+                            continue
+                        if not str(cmsg.get("text", "")).strip():
+                            continue
+                        msg_on = message_date(cmsg)
+                        if msg_on and sent_on and msg_on >= sent_on:
+                            sheets.mark_message_replied(
+                                pnm, msg_type, sent_date, msg_on.isoformat())
+                            replies_found += 1
+                            break
+                except FitrError:
+                    pass
+            if replies_found:
+                print(f"Athlete replies recorded: {replies_found}")
+
+    with stage("sync log"):
+        # ---- sync log ----
+        unknown = sorted({n for n in chat_notes} - valid_names)
+        # ensure_headers, not get_or_create: get_or_create only writes the header when
+        # it creates the tab, so when this row grew from 6 values to 10 the header kept
+        # the old names and every reader mislabelled the columns.
+        try:
+            _repaired = sheets.ensure_headers(
+                config.TAB_SYNC_LOG,
+                ["Run Date", "Total Athletes", "New PR Log rows", "Challenge scores added",
+                 "Conversations summarised", "Recovery merged", "Notes updated",
+                 "Athletes auto-onboarded", "Athlete Emails Sent", "Notes"],
+            )
+            if _repaired:
+                print(f"Repaired stale '{config.TAB_SYNC_LOG}' header (was: {_repaired})")
+        except Exception as exc:
+            # Tidying the header must never cost us the run's log row.
+            print(f"  ! Could not check the Sync Log header: {exc}")
+        sheets.append_rows(config.TAB_SYNC_LOG, [[
+            TODAY.isoformat(), len(athletes), len(bench_rows), len(chal_rows), len(chat_notes),
+            len(rec_notes), notes_written, onboarded, emails_sent,
+            ("Unknown athletes seen: " + ", ".join(unknown)) if unknown else "ok",
+        ]])
+
+    # ---- queue the drafts a coach will send ----
+    # Its own stage: a failed Sync Log write must not cost a day of drafts.
+    with stage("flush pending drafts"):
+        _queued = flush_pending_messages(sheets)
+        if _queued:
+            print(f"Messages queued as drafts for a coach to send: {_queued} "
+                  f"(automatic sending is off)")
+
+    _throttled = sheets_client.throttle_summary()
+    if _throttled:
+        print(_throttled)
+
+    if STAGE_FAILURES:
+        report_stage_failures(sheets)
+        print(f"== Done, with {len(STAGE_FAILURES)} failed stage(s) ==")
+    else:
+        print("== Done ==")
 
 
 if __name__ == "__main__":
@@ -2857,4 +2950,10 @@ if __name__ == "__main__":
         main()
     except (FitrError, RuntimeError) as e:
         print(f"FATAL: {e}", file=sys.stderr)
+        sys.exit(1)
+    # A stage that failed is still a failed run: the workflow goes red so the
+    # failure is not only visible to whoever opens Slack.
+    if STAGE_FAILURES:
+        print(f"FATAL: {len(STAGE_FAILURES)} stage(s) failed: "
+              f"{', '.join(n for n, _ in STAGE_FAILURES)}", file=sys.stderr)
         sys.exit(1)
