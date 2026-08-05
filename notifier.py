@@ -303,13 +303,13 @@ def send_email(subject, plain_text):
     msg["To"] = ", ".join(recipients)
     # utf-8 explicitly: the digest is full of £, em dashes and emoji.
     msg.set_content(plain_text, charset="utf-8")
+    login_user, login_password = _smtp_credentials(config.SMTP_FROM, config.SMTP_PASSWORD)
     with smtplib.SMTP("smtp.gmail.com", 587) as s:
         s.ehlo()
         s.starttls()
-        s.login(_smtp_login_user(config.SMTP_FROM), config.SMTP_PASSWORD)
-        # Recipients passed explicitly rather than let smtplib parse the header:
-        # it encodes them as ascii, and one invisible character pasted into the
-        # SMTP_TO secret stopped the digest for three days running.
+        s.login(login_user, login_password)
+        # Recipients passed explicitly rather than let smtplib parse the header,
+        # since it encodes them as ascii too.
         s.send_message(msg, to_addrs=recipients)
 
 
@@ -379,6 +379,49 @@ def _smtp_login_user(smtp_from):
     return str(getattr(config, "SMTP_USER", "") or "").strip() or smtp_from
 
 
+def _clean_secret(raw):
+    """Strip whitespace, visible and invisible, out of an SMTP credential.
+
+    Safe for both fields this is used on. An email address never contains a
+    space. A Gmail app password is sixteen letters that Google displays in
+    four-character groups purely for readability, and Google ignores the
+    separators on submission, so removing them restores the password to what
+    it always was.
+    """
+    text = str(raw or "")
+    for bad, good in _INVISIBLE.items():
+        text = text.replace(bad, good)
+    return "".join(text.split())
+
+
+def _smtp_credentials(smtp_from, smtp_password):
+    """The login pair, cleaned, with any remaining fault named by field.
+
+    smtplib's AUTH PLAIN sends "\\0user\\0password" as one ascii-encoded
+    string, so a single non-breaking space anywhere in either field fails the
+    login with "'ascii' codec can't encode character '\\xa0' in position N" and
+    no indication of which field it came from. That killed the digest email for
+    four days running while Slack went out fine. Two earlier fixes of mine
+    aimed at the message body and then the recipient list, because the error
+    named neither; it was the login all along.
+
+    The offset is reported, never the value, because one of these is a
+    password.
+    """
+    user = _clean_secret(_smtp_login_user(smtp_from))
+    password = _clean_secret(smtp_password)
+    for field, value in (("SMTP_USER/SMTP_FROM", user), ("SMTP_PASSWORD", password)):
+        try:
+            value.encode("ascii")
+        except UnicodeEncodeError as exc:
+            raise ValueError(
+                f"{field} still holds a non-ascii character after cleaning "
+                f"(offset {exc.start} of {len(value)}). Re-type that secret by "
+                f"hand rather than pasting it."
+            ) from None
+    return user, password
+
+
 def _send_email_to(smtp_from, smtp_password, to_addr, subject, body):
     to_clean = clean_address_list(to_addr)
     if not to_clean:
@@ -393,29 +436,34 @@ def _send_email_to(smtp_from, smtp_password, to_addr, subject, body):
     # single non-breaking space in a coach's name took down the entire email
     # digest while Slack went out fine, so nobody noticed the email was gone.
     msg.set_content(body, charset="utf-8")
+    login_user, login_password = _smtp_credentials(smtp_from, smtp_password)
     with smtplib.SMTP("smtp.gmail.com", 587) as s:
         s.ehlo()
         s.starttls()
-        s.login(_smtp_login_user(smtp_from), smtp_password)
-        s.send_message(msg)
+        s.login(login_user, login_password)
+        s.send_message(msg, to_addrs=[to_addr])
 
 
 def _send_html_email_to(smtp_from, smtp_password, to_addr, subject, plain_body, html_body):
     """Send a multipart email with plain-text fallback and HTML version."""
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
+    to_clean = clean_address_list(to_addr)
+    if not to_clean:
+        raise ValueError(f"no usable email address in {to_addr!r}")
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = _from_header(smtp_from)
-    msg["To"] = to_addr
+    msg["To"] = to_clean[0]
     # utf-8: athlete names and £ figures are not ascii.
     msg.attach(MIMEText(plain_body, "plain", "utf-8"))
     msg.attach(MIMEText(html_body, "html", "utf-8"))
+    login_user, login_password = _smtp_credentials(smtp_from, smtp_password)
     with smtplib.SMTP("smtp.gmail.com", 587) as s:
         s.ehlo()
         s.starttls()
-        s.login(_smtp_login_user(smtp_from), smtp_password)
-        s.send_message(msg)
+        s.login(login_user, login_password)
+        s.send_message(msg, to_addrs=to_clean[:1])
 
 
 def _parse_date_email(s):
