@@ -1521,6 +1521,11 @@ def report_stage_failures(sheets):
     except Exception as exc:
         print(f"  ! Could not record the stage failures: {exc}")
     body = "\n".join(f"  • *{name}* — {detail}" for name, detail in STAGE_FAILURES)
+    if config.DRY_RUN:
+        # send_slack has no dry-run guard of its own, and a rehearsal must not
+        # post to the channel coaches actually read.
+        print(f"[DRY_RUN] would post {len(STAGE_FAILURES)} stage failure(s) to Slack:\n{body}")
+        return
     try:
         notifier.send_slack(
             f"🛑 *The daily sync finished with {len(STAGE_FAILURES)} failed stage(s).*\n"

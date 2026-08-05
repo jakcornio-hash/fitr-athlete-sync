@@ -186,3 +186,14 @@ def test_a_slack_outage_does_not_stop_the_health_log(monkeypatch):
         raise RuntimeError("nope")
     sync.report_stage_failures(sheets)   # must not raise
     assert any("sync log" in str(r) for r in sheets.rows)
+
+
+def test_a_dry_run_never_posts_to_the_coach_channel(monkeypatch):
+    """send_slack has no dry-run guard of its own."""
+    posted = []
+    monkeypatch.setattr(sync.notifier, "send_slack", lambda t: posted.append(t))
+    monkeypatch.setattr(sync.config, "DRY_RUN", True)
+    with sync.stage("weekly progress emails"):
+        raise RuntimeError("nope")
+    sync.report_stage_failures(FakeSheets())
+    assert posted == []
