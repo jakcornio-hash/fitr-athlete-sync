@@ -26,16 +26,81 @@ _RETRY_STATUSES = (429, 500, 502, 503, 504)
 _MAX_RETRIES = 6
 _BASE_BACKOFF = 2.0
 
+# Reacting to a 429 is not enough on its own. On 5 August the daily sync built
+# a burst big enough that the quota stayed exhausted for longer than the whole
+# retry ladder, the read raised, and the run died at the auto-onboard stage
+# with two thirds of the pipeline still to go. Backing off after the fact
+# cannot fix a burst that large; the burst has to not happen.
+#
+# So every request is booked into a rolling one-minute window first, and a
+# request that would breach the limit waits for the oldest one to age out.
+# Reads and writes have separate 60-per-minute quotas and are counted
+# separately. The ceiling is deliberately below 60: the retry ladder is the
+# safety net for whatever else shares the quota (a coach with the dashboard
+# open, a second workflow), not the primary defence.
+_QUOTA_PER_MINUTE = 50
+_QUOTA_WINDOW = 60.0
+_request_times = {"read": [], "write": []}
+# Kept for diagnostics: a run that waits a lot is a run to look at.
+_throttle_stats = {"waited_s": 0.0, "waits": 0, "reads": 0, "writes": 0}
+
+
+def _kind(method):
+    return "read" if str(method).lower() == "get" else "write"
+
+
+def _await_quota_slot(kind, now=None, sleep=None):
+    """Block until this request fits inside the rolling one-minute window."""
+    now = now or time.time
+    sleep = sleep or time.sleep
+    stamps = _request_times[kind]
+    t = now()
+    cutoff = t - _QUOTA_WINDOW
+    while stamps and stamps[0] <= cutoff:
+        stamps.pop(0)
+    if len(stamps) >= _QUOTA_PER_MINUTE:
+        wait = stamps[0] + _QUOTA_WINDOW - t
+        if wait > 0:
+            _throttle_stats["waited_s"] += wait
+            _throttle_stats["waits"] += 1
+            sleep(wait)
+            t = now()
+            cutoff = t - _QUOTA_WINDOW
+            while stamps and stamps[0] <= cutoff:
+                stamps.pop(0)
+    stamps.append(t)
+    _throttle_stats[kind + "s"] += 1
+    return t
+
+
+def throttle_summary():
+    """One line on how close this run ran to the quota, or "" if it was clear."""
+    s = _throttle_stats
+    if not s["waits"]:
+        return ""
+    return (f"Sheets throttle: waited {s['waited_s']:.0f}s across {s['waits']} "
+            f"pause(s) to stay under quota ({s['reads']} reads, {s['writes']} writes)")
+
+
+def reset_throttle_state():
+    """Test helper. Never called in normal operation."""
+    _request_times["read"].clear()
+    _request_times["write"].clear()
+    _throttle_stats.update({"waited_s": 0.0, "waits": 0, "reads": 0, "writes": 0})
+
 
 def _install_retries(client):
-    """Wrap a gspread HTTP client so throttled requests wait and retry."""
+    """Wrap a gspread HTTP client so requests stay under quota, then retry."""
     inner = client.request
     if getattr(inner, "_jst_retrying", False):
         return
 
     def request_with_retry(*args, **kwargs):
+        method = args[0] if args else kwargs.get("method", "get")
+        kind = _kind(method)
         last = None
         for attempt in range(_MAX_RETRIES):
+            _await_quota_slot(kind)
             try:
                 return inner(*args, **kwargs)
             except gspread.exceptions.APIError as exc:
