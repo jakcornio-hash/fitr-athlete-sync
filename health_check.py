@@ -444,6 +444,52 @@ def check_disabled_integrations():
         + " — these stages run and process nothing rather than failing")]
 
 
+def check_exit_conversations_owed(sheets, analytics_mod):
+    """Cancelled athletes the exit conversation never reached.
+
+    The sync drafts these only for recent cancellations, because a note four
+    months after someone left is worse than silence. That leaves an older
+    backlog which is real but is a decision rather than a queue, so it is
+    reported here instead of being messaged.
+
+    Across the CRM's history the pattern is: the opening message lands and
+    around 42% of people reply, but only a handful are ever offered an
+    alternative. The second number is the one worth moving.
+    """
+    if not getattr(config, "CRM_SHEET_ID", ""):
+        return []
+    try:
+        # The raw columns. load_exit_autopsy() returns a three-field projection
+        # that has none of the ones this needs.
+        rows = sheets.read_external_records_positional(config.CRM_SHEET_ID, "Exit Autopsy")
+    except Exception:
+        return []
+    if not rows:
+        return []
+    try:
+        never, no_offer = analytics_mod.stale_exit_conversations(
+            rows, recent_days=getattr(config, "EXIT_CONVERSATION_DAYS", 30))
+    except Exception as exc:
+        return [Finding(WARN, "exits", "Could not assess exit conversations", str(exc)[:140])]
+
+    out = []
+    if no_offer:
+        out.append(Finding(
+            WARN, "exits",
+            f"{len(no_offer)} former athlete(s) replied to us and were never "
+            f"offered an alternative",
+            "too long ago for the sync to draft, so this is a judgement call "
+            "rather than a queue: " + ", ".join(no_offer[:6])
+            + ("…" if len(no_offer) > 6 else "")))
+    if never:
+        out.append(Finding(
+            WARN, "exits",
+            f"{len(never)} former athlete(s) cancelled and were never messaged at all",
+            "beyond the window where getting in touch still reads as genuine: "
+            + ", ".join(never[:6]) + ("…" if len(never) > 6 else "")))
+    return out
+
+
 def check_last_sync_completed(sheets):
     """Did the previous run reach the end, or die somewhere in the middle?
 
@@ -643,6 +689,7 @@ def run_health_check(sheets, analytics_mod, *, data_records=None, bespoke_names=
         ("roster agreement", lambda: check_roster_agrees_with_dashboard(
             sheets, analytics_mod, gone_norm)),
         ("last sync completed", lambda: check_last_sync_completed(sheets)),
+        ("exit conversations", lambda: check_exit_conversations_owed(sheets, analytics_mod)),
         ("pending queue", lambda: check_pending_message_queue(sheets)),
         ("message log replies", lambda: check_message_log_replies(sheets)),
         ("crm rejoins", lambda: check_crm_says_gone_but_training(sheets, analytics_mod)),

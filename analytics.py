@@ -2510,3 +2510,206 @@ def cancelled_athletes(exit_rows, pr_records):
             continue
         cancelled.add(nm_lower)
     return cancelled, sorted(set(rejoined))
+
+
+# ──────────────────── Exit conversations (drafted, never sent) ────────────────
+#
+# Nothing used to be drafted when an athlete cancelled. Cancelling did the
+# opposite: a name landing in Exit Autopsy removed that person from every
+# engagement flag and every athlete-facing message, so the system went quiet on
+# exactly the people worth a conversation.
+#
+# What the CRM shows about the manual process, over 119 cancellations:
+#
+#   initial message sent    108 / 119        replied            45 / 119
+#   pivot offered             8 / 119        outcome recorded   25 / 119
+#
+# So the opening lands and 42% of people reply, which is a better rate than
+# anything automated here achieves. The manual version is not the problem, and
+# these drafts deliberately do not try to improve on it. The gaps are at the
+# two ends: 17 people who cancelled and were never messaged at all, and 17 who
+# replied and were never offered an alternative.
+#
+# Every offer below is one the coaches have actually made, taken from the
+# Pivot Offered column, not invented here. Where the recorded reason is one
+# with no established offer, the draft asks a question instead of guessing at
+# a product, because a wrong offer reads worse than no offer.
+
+EXIT_CHECKIN = "exit_checkin"     # cancelled, never contacted
+EXIT_PIVOT = "exit_pivot"         # replied, never offered an alternative
+
+# Buckets to the offer the coaches use for them. Keyed lowercase; anything not
+# here falls through to a question with no pitch in it.
+_EXIT_OFFERS = {
+    "injury": (
+        "Playing it safe is the right call and pushing through it never ends "
+        "well. If you want to keep moving while it settles, JST OS is built "
+        "for exactly this: programming written around the two or three things "
+        "you're working through, so the load works around the injury instead "
+        "of ignoring it."
+    ),
+    "money": (
+        "That's a fair reason and we'd rather know it than guess at it. JST "
+        "Dense is the lighter option we run for this, the same coaching with "
+        "less volume around it."
+    ),
+    "competitor": (
+        "That's the part that matters, so it's worth saying what we can do "
+        "differently. Either a fixed-length block pointed at one competition, "
+        "or one to one inside JST so the programming is yours rather than "
+        "shared."
+    ),
+    "time": (
+        "It's the most common reason and the most fixable one. A fixed-length "
+        "block is easier to commit to than an open-ended subscription, and "
+        "JST OS can be written around the days you've actually got."
+    ),
+}
+
+_EXIT_CLOSERS = {
+    "injury": "Would that help, or would you rather park it until you're clear?",
+    "money": "Want me to send you what's in it, or is now just not the time?",
+    "competitor": "Which of those is closer to what you felt was missing?",
+    "time": "Would either of those have made the difference?",
+}
+
+# Naming the reason back to them, so the opener reads like someone who read the
+# notes rather than a template with a slot in it.
+_EXIT_REASON_PHRASE = {
+    "injury": "about the injury",
+    "money": "that it came down to cost",
+    "competitor": "that it wasn't getting you where you wanted to compete",
+    "time": "that it came down to time",
+}
+
+
+def _require_raw_exit_rows(exit_rows):
+    """Reject the wrong shape loudly instead of drafting nothing.
+
+    There are two readers for Exit Autopsy. sheets_client.load_exit_autopsy()
+    returns a three-field projection keyed "name"/"cancel_date"/"outcome", and
+    read_external_records_positional() returns the raw CRM columns. These
+    functions need the raw columns.
+
+    Handed the projection, every row silently missed "Athlete Name" and the
+    stage queued nothing while reporting no error, which is exactly the failure
+    mode the health check exists to catch. Better to raise: the stage is
+    isolated, so a raise is reported on Slack and in the Health Log.
+    """
+    for rec in exit_rows or []:
+        if not isinstance(rec, dict):
+            raise TypeError(f"Exit Autopsy rows must be dicts, got {type(rec).__name__}")
+        if "Athlete Name" not in rec:
+            raise KeyError(
+                "Exit Autopsy rows are missing 'Athlete Name'. These need the raw "
+                "CRM columns from read_external_records_positional(), not the "
+                f"projection from load_exit_autopsy(). Got keys: {sorted(rec)[:6]}"
+            )
+        return      # one row is enough to know the shape
+
+
+def exit_conversation_drafts(exit_rows, today=None, recent_days=30, known_first_names=None):
+    """Draft one exit conversation per athlete who is owed one.
+
+    exit_rows: Exit Autopsy records (CRM sheet).
+    recent_days: how recent a cancellation has to be. A "sorry to see you go"
+        four months late is worse than silence, and the historical backlog is a
+        report to read rather than a queue to send, so it is excluded here.
+
+    Returns a list of dicts: name, kind, reason, message, cancel_date,
+    days_since_cancel. Sorted most recent cancellation first, because that is
+    the order the conversations are worth having in.
+    """
+    today = today or dt.date.today()
+    _require_raw_exit_rows(exit_rows)
+    out = []
+    for rec in exit_rows or []:
+        name = str(rec.get("Athlete Name", "")).strip()
+        if not name:
+            continue
+        first = name.split()[0]
+        if not first:
+            continue
+        cancel_date = _parse_date(rec.get("Cancel Date (dd-mm-yyyy)", ""))
+        if not cancel_date:
+            continue
+        days = (today - cancel_date).days
+        if days < 0 or days > recent_days:
+            continue
+
+        contacted = str(rec.get("Initial Message (Y/N)", "")).strip().upper().startswith("Y")
+        replied = str(rec.get("Replied (Y/N)", "")).strip().upper().startswith("Y")
+        offered = bool(str(rec.get("Pivot Offered", "")).strip())
+        reason = str(rec.get("Bucket (Reason)", "")).strip()
+        key = reason.lower()
+
+        offer = _EXIT_OFFERS.get(key)
+
+        if not contacted and not offer:
+            kind = EXIT_CHECKIN
+            # No offer and no pitch. The manual version of this gets a 42%
+            # reply rate by asking one question, so this asks one question.
+            message = (
+                f"Hey {first}, saw you've cancelled and wanted to check in "
+                f"properly rather than let it pass. No pitch here. What was "
+                f"the thing that stopped it working for you?"
+            )
+        elif (not contacted and offer) or (replied and not offered):
+            # A recorded reason with an offer behind it goes straight to the
+            # offer, whether or not anyone has written yet. Asking "what
+            # stopped it working" when the CRM already says "injury" reads
+            # like nobody read their own notes.
+            kind = EXIT_PIVOT
+            if offer:
+                message = (
+                    f"Hey {first}, thanks for being straight with us "
+                    f"{_EXIT_REASON_PHRASE[key]}. {offer} {_EXIT_CLOSERS[key]}"
+                )
+            else:
+                # An unrecognised reason gets a question, not a guess at a
+                # product. A wrong offer reads worse than no offer.
+                message = (
+                    f"Hey {first}, thanks for replying, that's more than most "
+                    f"people do. We'd rather fix the thing than lose you over "
+                    f"it. What would have had to be different for it to work?"
+                )
+        else:
+            continue
+
+        out.append({
+            "name": name,
+            "kind": kind,
+            "reason": reason,
+            "message": message,
+            "cancel_date": cancel_date,
+            "days_since_cancel": days,
+        })
+
+    out.sort(key=lambda d: d["days_since_cancel"])
+    return out
+
+
+def stale_exit_conversations(exit_rows, today=None, recent_days=30):
+    """Cancellations too old to message but still owed something, as a count.
+
+    These are for a report, not a queue: contacting someone four months after
+    they left is worse than leaving it. Returns (never_contacted, replied_no_offer).
+    """
+    today = today or dt.date.today()
+    _require_raw_exit_rows(exit_rows)
+    never, no_offer = [], []
+    for rec in exit_rows or []:
+        name = str(rec.get("Athlete Name", "")).strip()
+        cancel_date = _parse_date(rec.get("Cancel Date (dd-mm-yyyy)", ""))
+        if not name or not cancel_date:
+            continue
+        if (today - cancel_date).days <= recent_days:
+            continue
+        contacted = str(rec.get("Initial Message (Y/N)", "")).strip().upper().startswith("Y")
+        replied = str(rec.get("Replied (Y/N)", "")).strip().upper().startswith("Y")
+        offered = bool(str(rec.get("Pivot Offered", "")).strip())
+        if not contacted:
+            never.append(name)
+        elif replied and not offered:
+            no_offer.append(name)
+    return never, no_offer

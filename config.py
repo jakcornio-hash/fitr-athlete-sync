@@ -376,3 +376,10 @@ TRAINING_WINDOW_DAYS = 14
 # Where the daily health check records what it found, so the dashboard can show
 # the same findings the digest reported without re-running every check.
 TAB_HEALTH_LOG = "Health Log"
+
+
+# How recently someone must have cancelled for the sync to draft an exit
+# conversation. A "sorry to see you go" four months after they left is worse
+# than saying nothing, so the older backlog is reported by the health check
+# rather than queued as drafts.
+EXIT_CONVERSATION_DAYS = int(_get("EXIT_CONVERSATION_DAYS", "30"))

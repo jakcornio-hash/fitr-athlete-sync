@@ -433,6 +433,28 @@ class SheetsClient:
         sh = self.gc.open_by_key(sheet_id)
         return sh.worksheet(tab_title).get_all_records()
 
+    def read_external_records_positional(self, sheet_id, tab_title):
+        """Same, but survives duplicate and blank headers.
+
+        get_all_records() refuses a header row with a repeated name, and the
+        CRM's Exit Autopsy tab has one. Built by position instead: blank header
+        columns are skipped and the first occurrence of a repeated header wins,
+        matching read_records() on the main sheet.
+        """
+        sh = self.gc.open_by_key(sheet_id)
+        values = sh.worksheet(tab_title).get_all_values()
+        if not values:
+            return []
+        cols, seen = [], set()
+        for i, h in enumerate(values[0]):
+            name = str(h).strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            cols.append((i, name))
+        return [{name: (row[i] if i < len(row) else "") for i, name in cols}
+                for row in values[1:]]
+
     def update_cells_by_rowmap(self, title, col_letter, rowmap):
         """Set many single cells in one column. rowmap = {row_number: value}."""
         if config.DRY_RUN:

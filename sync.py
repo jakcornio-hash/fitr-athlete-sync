@@ -2848,6 +2848,72 @@ def main():
             except Exception as _gym_err:
                 print(f"  ! Gym credit emails failed: {_gym_err}")
 
+    # ---- exit conversations: cancelled athletes owed a reply ----
+    # Cancelling used to switch messaging off and nothing else. A name in Exit
+    # Autopsy is excluded from every engagement flag and every athlete-facing
+    # message, which is right for the automated ones and wrong for this: the
+    # conversation worth having is the one at the point they leave.
+    #
+    # Deliberately narrow. Only cancellations inside EXIT_CONVERSATION_DAYS,
+    # because a "sorry to see you go" four months late is worse than silence.
+    # The older backlog is reported by the health check instead.
+    with stage("exit conversations"):
+        # The raw CRM columns, not sheets.load_exit_autopsy(), which returns a
+        # three-field projection keyed "name"/"cancel_date"/"outcome". Handed
+        # that, the first version of this stage silently drafted nothing.
+        _exit_raw = sheets.read_external_records_positional(
+            config.CRM_SHEET_ID, "Exit Autopsy") if config.CRM_SHEET_ID else []
+        _exit_drafts = analytics.exit_conversation_drafts(
+            _exit_raw, today=TODAY,
+            recent_days=getattr(config, "EXIT_CONVERSATION_DAYS", 30),
+        )
+        # One of each kind per athlete, ever. Reading the log rather than
+        # trusting a date window: a coach may have already sent one by hand.
+        _exit_already = set()
+        try:
+            for r in sheets.read_records(config.TAB_MESSAGE_LOG):
+                _t = str(r.get("Message Type", "")).strip()
+                if _t in (analytics.EXIT_CHECKIN, analytics.EXIT_PIVOT):
+                    _exit_already.add((str(r.get("Athlete Name", "")).strip(), _t))
+        except Exception as exc:
+            print(f"  ! Could not read the Message Log for exit dedup: {exc}")
+        # Pending Messages too, and at any status: a draft a coach deliberately
+        # skipped must not come back tomorrow.
+        try:
+            for r in sheets.read_records(config.TAB_PENDING_MESSAGES):
+                _t = str(r.get("Message Type", "")).strip()
+                if _t in (analytics.EXIT_CHECKIN, analytics.EXIT_PIVOT):
+                    _exit_already.add((str(r.get("Athlete Name", "")).strip(), _t))
+        except Exception:
+            pass    # tab appears on the first sync that queues anything
+
+        _exit_queued = 0
+        _exit_no_room = []
+        for d in _exit_drafts:
+            nm = d["name"]
+            if nm in bespoke_names:
+                continue
+            if (nm, d["kind"]) in _exit_already:
+                continue
+            room_id = room_id_by_name.get(nm)
+            if not room_id:
+                # They may have left Fitr entirely. Nothing to draft into, so
+                # name them rather than dropping them silently.
+                _exit_no_room.append(nm)
+                continue
+            try:
+                _deliver(fitr, room_id, d["message"], nm, d["kind"])
+                _exit_queued += 1
+                messages_sent_log.append({"Date": TODAY.isoformat(), "Athlete Name": nm,
+                        "Message Type": d["kind"], "Room ID": room_id})
+            except FitrError as exc:
+                print(f"  ! Exit conversation draft failed for {nm}: {exc}")
+        if _exit_queued:
+            print(f"Exit conversations: {_sent_or_drafted(_exit_queued)}")
+        if _exit_no_room:
+            print(f"  ! No Fitr chat room, so no exit draft possible for "
+                  f"{len(_exit_no_room)} athlete(s): {', '.join(_exit_no_room[:6])}")
+
     with stage("message log and replies"):
         # ---- log automated messages + check for replies ----
         # _DELIVERED, not messages_sent_log: only what actually reached an athlete

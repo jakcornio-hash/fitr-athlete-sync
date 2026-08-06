@@ -705,6 +705,10 @@ def _render_pending_messages():
     _labels = {"congrats": "🏆 Congrats", "anniversary": "🎉 Milestone",
                "onboarding": "👋 First log", "onboarding_welcome": "👋 Welcome",
                "offboarding": "👋 Offboarding",
+               # Cancelled athletes. Flagged distinctly because these are the
+               # highest-stakes drafts in the queue and want reading twice.
+               "exit_checkin": "🚪 Cancelled, no reply yet",
+               "exit_pivot": "🚪 Cancelled, offer them something",
                "referral": "🤝 Referral", "monthly_fitr": "📅 Monthly"}
     for i, r in enumerate(pending):
         nm = str(r.get("Athlete Name", "")).strip()
@@ -2291,6 +2295,7 @@ Show up and compete, but treat it like a hard training session. No taper, no dis
                 "congrats": "🏆 Congrats", "onboarding": "👋 Onboarding",
                 "anniversary": "🎉 Anniversary", "onboard_checklist": "👋 Onboarding",
                 "onboarding_welcome": "👋 Welcome",
+                "exit_checkin": "🚪 Exit check-in", "exit_pivot": "🚪 Exit offer",
             }
             with st.expander(f"📨 Message History ({len(athlete_msgs)} automated messages)", expanded=False):
                 msg_display = []
