@@ -444,6 +444,84 @@ def check_disabled_integrations():
         + " — these stages run and process nothing rather than failing")]
 
 
+def check_join_date_is_not_trusted(sheets, analytics_mod):
+    """Two things: the roster paste discarding columns, and Join Date being wrong.
+
+    Join Date reads like a join date and is not one. Measured across the live
+    sheet: of the athletes who have both a join date and a logged result, about
+    two thirds logged their first result BEFORE the recorded join date, a median
+    of four months before. Anything built on it, cohort retention especially,
+    would be confidently wrong. First Seen exists as the defensible floor, and
+    this check watches its coverage.
+
+    The Active Roster half is the cheap fix: the Fitr client list pasted in
+    monthly carries the plan, membership status and start day, and the tab keeps
+    only the name. That paste is the only hand-taken snapshot of who was a
+    client, so the columns are worth keeping.
+    """
+    out = []
+    try:
+        roster_records = sheets.read_records("Active Roster")
+    except Exception:
+        roster_records = []
+    if roster_records:
+        present = analytics_mod.roster_columns_present(roster_records)
+        missing = [label for key, label in (
+            ("start_day", "plan start day"), ("status", "membership status"),
+            ("plan", "plan name")) if not present[key]]
+        if missing:
+            out.append(Finding(
+                WARN, "roster",
+                "The Active Roster paste is keeping names only",
+                f"the Fitr client list also has {', '.join(missing)}, and that "
+                "paste is the only monthly snapshot of who was a client. "
+                "Keeping the columns costs nothing and they are used the moment "
+                "they appear"))
+
+    try:
+        data = sheets.read_records(config.TAB_DATA)
+    except Exception:
+        return out
+    if not data:
+        return out
+
+    roster_names = [r["name"] for r in analytics_mod.roster_rows(roster_records)]
+    on_roster = {analytics_mod.normalise_client_name(n) for n in roster_names}
+    if not on_roster:
+        return out
+
+    # Current clients with no _DATA row at all. Found while checking why First
+    # Seen resolved for more athletes than it could write: _DATA is what the
+    # squad views, the action list and the billing check all read, so an athlete
+    # missing from it is invisible across most of the dashboard while paying.
+    in_data = {analytics_mod.normalise_client_name(r.get("Full Name", "")) for r in data}
+    absent = [n for n in roster_names
+              if analytics_mod.normalise_client_name(n) not in in_data]
+    if absent:
+        out.append(Finding(
+            FAIL, "roster",
+            f"{len(absent)} athlete(s) on the Active Roster have no _DATA row",
+            "so they are missing from the squad views, the action list and the "
+            "billing check, and cannot be given a First Seen date: "
+            + ", ".join(absent[:6]) + ("…" if len(absent) > 6 else "")))
+    seen = sum(1 for r in data
+               if analytics_mod.normalise_client_name(r.get("Full Name", "")) in on_roster
+               and str(r.get("First Seen", "")).strip())
+    if seen == 0:
+        out.append(Finding(
+            WARN, "roster",
+            "No athlete has a First Seen date yet",
+            "the sync writes it from the earlier of first logged result and a "
+            "clamped Fitr plan start day. Until it is populated there is no "
+            "anchor any cohort or retention figure can hang off"))
+    elif seen < len(on_roster) * 0.9:
+        out.append(Finding(
+            WARN, "roster",
+            f"Only {seen} of {len(on_roster)} current athletes have a First Seen date",
+            "the rest would drop silently out of any cohort figure"))
+    return out
+
+
 def check_exit_conversations_owed(sheets, analytics_mod):
     """Cancelled athletes the exit conversation never reached.
 
@@ -690,6 +768,7 @@ def run_health_check(sheets, analytics_mod, *, data_records=None, bespoke_names=
             sheets, analytics_mod, gone_norm)),
         ("last sync completed", lambda: check_last_sync_completed(sheets)),
         ("exit conversations", lambda: check_exit_conversations_owed(sheets, analytics_mod)),
+        ("join date trust", lambda: check_join_date_is_not_trusted(sheets, analytics_mod)),
         ("pending queue", lambda: check_pending_message_queue(sheets)),
         ("message log replies", lambda: check_message_log_replies(sheets)),
         ("crm rejoins", lambda: check_crm_says_gone_but_training(sheets, analytics_mod)),

@@ -17,6 +17,7 @@ What it does each run:
 Run:  python sync.py            (live)
       DRY_RUN=1 python sync.py  (pull + print, write nothing)
 """
+import collections
 import contextlib
 import datetime as dt
 import json
@@ -1030,6 +1031,43 @@ def write_training_activity(sheets, activity_by_name, known_names=None):
         return 0
 
 
+def write_first_seen(sheets, first_seen, known_names=None):
+    """Write the earliest date each athlete was demonstrably here, onto _DATA.
+
+    A new column rather than a correction to Join Date. Join Date is edited by
+    hand and is wrong in a specific, measurable way: of 253 athletes who have
+    both a join date and a logged result, 165 logged their first result before
+    the recorded join date, a median of 125 days before. Overwriting a coach's
+    column on the strength of that is not mine to do, and the two answer
+    different questions anyway.
+
+    "First Seen" is deliberately not called a join date. It is a floor: the
+    earliest date we can prove the athlete was present, from the earlier of
+    their first logged result and their Fitr plan start day. On the live roster
+    it resolves for 247 of 252 athletes against Join Date's 163.
+    """
+    keep = ({analytics.normalise_client_name(n) for n in known_names}
+            if known_names else None)
+    updates = {}
+    for name, info in (first_seen or {}).items():
+        if keep is not None and analytics.normalise_client_name(name) not in keep:
+            continue
+        updates[name] = {
+            "First Seen": info["first_seen"].isoformat(),
+            # Kept alongside the date because they are not equally trustworthy:
+            # "both agree" is corroborated, "plan start" resets on renewal.
+            "First Seen Source": info["source"],
+        }
+    if not updates:
+        return 0
+    try:
+        sheets.ensure_headers_present(config.TAB_DATA, ["First Seen", "First Seen Source"])
+        return sheets.batch_update_by_name(config.TAB_DATA, "Full Name", updates) or len(updates)
+    except Exception as exc:
+        print(f"  ! Could not write First Seen to _DATA: {exc}")
+        return 0
+
+
 def _sent_or_drafted(n):
     """Wording for the run log: these only leave the building if sending is on."""
     return (f"{n} sent" if config.AUTO_SEND_ATHLETE_MESSAGES
@@ -1748,12 +1786,15 @@ def main():
     # Active Roster so a still-active "Cancelled by client" being saved (Jimmy,
     # Gavin) keeps getting messaged. Same helper the dashboard uses, so they
     # can't drift.
+    # Records, not just names: the tab is one column today, but the Fitr client
+    # list it is pasted from also carries the plan, the membership status and the
+    # plan start day. Read the rows once and let analytics.roster_rows pick up
+    # whichever of those survived the paste.
     try:
-        _active_roster = [str(r.get("Full Name", "")).strip()
-                          for r in sheets.read_records("Active Roster")
-                          if str(r.get("Full Name", "")).strip()]
+        _active_roster_records = sheets.read_records("Active Roster")
     except Exception:
-        _active_roster = []
+        _active_roster_records = []
+    _active_roster = [r["name"] for r in analytics.roster_rows(_active_roster_records)]
     # Coach overrides set in the dashboard beat both the roster and the CRM, so
     # marking someone cancelled there actually stops their automated messages.
     try:
@@ -1788,6 +1829,7 @@ def main():
     # itself shows: per day, whether they ticked off a full session, part of
     # one, or nothing.
     activity_by_name = {}
+    _activity_items = []
     try:
         _activity_items = fitr.client_activity(period=TRAINING_WINDOW)
         activity_by_name = analytics.training_activity(_activity_items)
@@ -1803,6 +1845,48 @@ def main():
         _written = write_training_activity(
             sheets, activity_by_name, known_names=data_by_name_all.keys())
         print(f"Training summary written to _DATA: {_written} athletes")
+
+    # ---- First Seen: the anchor date any cohort work has to hang off ----
+    # There is no trustworthy join date here. Join Date has 165 of 253 athletes
+    # logging a result before they supposedly joined, and Fitr's plan.start_day
+    # is the CURRENT plan's start so it resets on renewal, with 13 values in the
+    # future including 2044. Neither can carry a retention chart.
+    #
+    # This writes a floor instead: the earlier of first logged result and a
+    # clamped plan start day, which is a date the athlete was demonstrably here
+    # by. Reuses the activity pull above, so it costs no extra Fitr calls, and
+    # the roster scopes it because Fitr returns 1,675 clients to the roster's 252.
+    _roster_rows = analytics.roster_rows(_active_roster_records)
+    _roster_names = [r["name"] for r in _roster_rows]
+    _start_days = {}
+    for _c in _activity_items:
+        _nm = str(_c.get("full_name", "")).strip()
+        _sd = ((_c.get("plan") or {}).get("start_day"))
+        if _nm and _sd:
+            _start_days[_nm] = _sd
+    # A start day pasted into the roster beats the live one: the live value moves
+    # when a plan is renewed, a pasted one is a snapshot from when it was taken.
+    for _r in _roster_rows:
+        if _r["start_day"]:
+            _start_days[_r["name"]] = _r["start_day"]
+    _first_seen = analytics.first_seen_dates(
+        pr_records, _start_days, today=TODAY,
+        roster_names=_roster_names or None,
+    )
+    if _first_seen:
+        _fs_written = write_first_seen(
+            sheets, _first_seen, known_names=data_by_name_all.keys())
+        _sources = collections.Counter(v["source"] for v in _first_seen.values())
+        # Resolved and written are different numbers, and conflating them hides
+        # a real gap: the write can only touch athletes who have a _DATA row.
+        print(f"First Seen resolved for {len(_first_seen)} athlete(s) "
+              f"({dict(_sources)}), written to {_fs_written} _DATA row(s)")
+        _fs_norm = {analytics.normalise_client_name(k) for k in _first_seen}
+        _no_anchor = [n for n in _roster_names
+                      if analytics.normalise_client_name(n) not in _fs_norm]
+        if _no_anchor:
+            print(f"  ! No First Seen anchor for {len(_no_anchor)} roster athlete(s): "
+                  f"{', '.join(_no_anchor[:6])}")
 
     engagement_results = analytics.engagement_check(
         pr_records, active_athletes,

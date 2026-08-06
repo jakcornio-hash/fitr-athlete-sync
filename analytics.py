@@ -2713,3 +2713,211 @@ def stale_exit_conversations(exit_rows, today=None, recent_days=30):
         elif replied and not offered:
             no_offer.append(name)
     return never, no_offer
+
+
+# ───────────────────────── When an athlete actually started ──────────────────
+#
+# There is no trustworthy join date in this system, which is worth stating
+# plainly because two columns look like one.
+#
+#   _DATA!Join Date        281/360 filled. Of 253 athletes who have both this
+#                          and a logged result, 165 (65%) logged their first
+#                          result BEFORE the recorded join date, which cannot
+#                          happen. Median gap: 125 days. Nothing recorded after
+#                          2026-05-25 despite new athletes since.
+#
+#   Fitr plan.start_day    1675/1707 present, and broken differently: 55% of
+#                          athletes logged more than a week before it, median
+#                          32 days. It is the CURRENT plan's start day, so it
+#                          resets on renewal or a plan switch. Values run to
+#                          2044-07-23.
+#
+# They are not independent either: of 181 athletes with both, 107 are
+# identical, so the sheet was largely copied from Fitr and inherits its flaw.
+#
+# What can be defended is a floor. An athlete cannot have logged a result
+# before they arrived, so the earliest of (first logged result, plan start day)
+# is a date they were demonstrably here by. That is what these functions
+# produce, and it is deliberately called "first seen" rather than "join date"
+# so nobody mistakes it for something it is not.
+
+# Fitr's own records begin in 2019; anything earlier is a typo, and anything
+# after today is one of the 2044s.
+_EARLIEST_PLAUSIBLE_START = dt.date(2015, 1, 1)
+
+
+def parse_fitr_start_day(value, today=None):
+    """Parse Fitr's plan.start_day, rejecting the impossible values in it.
+
+    Fitr sends dd/mm/yyyy. The live data also contains dates in 2029, 2030 and
+    2044, which are not start days, so a future date is discarded rather than
+    clamped to today: clamping would invent a cohort, and a missing value is
+    honest about not knowing.
+    """
+    today = today or dt.date.today()
+    s = str(value or "").strip()
+    if not s:
+        return None
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d-%b-%Y"):
+        try:
+            d = dt.datetime.strptime(s, fmt).date()
+            break
+        except (ValueError, TypeError):
+            continue
+    else:
+        return None
+    if d > today or d < _EARLIEST_PLAUSIBLE_START:
+        return None
+    return d
+
+
+def restrict_to_roster(names, roster_names):
+    """Keep only the names on the Active Roster, matched on normalised form.
+
+    Fitr returns 1707 clients across every coach and plan on the account. The
+    JST roster is 252. Any cohort or retention figure computed over the former
+    is measuring other people's athletes, so this is not optional politeness,
+    it decides whether a percentage means anything.
+
+    An empty roster returns nothing rather than everything: a failed roster
+    read must not silently widen the population to all of Fitr.
+    """
+    keep = {normalise_client_name(n) for n in (roster_names or ()) if str(n).strip()}
+    if not keep:
+        return []
+    return [n for n in names if normalise_client_name(n) in keep]
+
+
+def first_seen_dates(pr_records, start_day_by_name=None, today=None, roster_names=None):
+    """The earliest date each athlete was demonstrably present.
+
+    Returns {athlete name: {"first_seen": date, "source": str}} where source is
+    "logged result", "plan start" or "both agree", so the dashboard can say how
+    much weight the date carries rather than presenting all of them alike.
+
+    roster_names, when given, scopes the result to current clients.
+    """
+    today = today or dt.date.today()
+    first_log = {}
+    display = {}
+    for rec in pr_records or []:
+        nm = str(rec.get("Athlete Name", "")).strip()
+        d = _parse_date(rec.get("Date", ""))
+        if not nm or not d or d > today:
+            continue
+        key = normalise_client_name(nm)
+        display.setdefault(key, nm)
+        if key not in first_log or d < first_log[key]:
+            first_log[key] = d
+
+    starts = {}
+    for nm, raw in (start_day_by_name or {}).items():
+        d = raw if isinstance(raw, dt.date) else parse_fitr_start_day(raw, today=today)
+        if not d:
+            continue
+        key = normalise_client_name(nm)
+        display.setdefault(key, str(nm).strip())
+        starts[key] = d
+
+    out = {}
+    for key in set(first_log) | set(starts):
+        log_d, start_d = first_log.get(key), starts.get(key)
+        if log_d and start_d:
+            source = "both agree" if log_d == start_d else (
+                "logged result" if log_d < start_d else "plan start")
+            first = min(log_d, start_d)
+        elif log_d:
+            source, first = "logged result", log_d
+        else:
+            source, first = "plan start", start_d
+        out[display[key]] = {"first_seen": first, "source": source}
+
+    if roster_names is not None:
+        allowed = set(restrict_to_roster(list(out), roster_names))
+        out = {k: v for k, v in out.items() if k in allowed}
+    return out
+
+
+# ─────────────────────── The Active Roster, and what it throws away ──────────
+#
+# The tab is one column of 252 names. The Fitr client list it is pasted from
+# carries the plan, the membership status and the plan start day per athlete,
+# and all of that is discarded on the way in. It is the only monthly snapshot of
+# who was a client, taken by hand from the system of record, so the columns are
+# worth keeping the moment someone pastes them.
+#
+# Header names are matched by keyword rather than exact string, because the
+# export's headings are not under our control and a rename should degrade to
+# "column absent" rather than break the roster read that keeps cancelled
+# athletes off every list.
+
+_ROSTER_NAME_KEYS = ("full name", "athlete name", "name", "client", "athlete")
+_ROSTER_START_KEYS = ("start", "join", "member since", "since")
+_ROSTER_STATUS_KEYS = ("status", "state", "membership")
+_ROSTER_PLAN_KEYS = ("plan", "programme", "program", "subscription")
+
+
+def _match_header(headers, keys, exclude=()):
+    """First header containing one of `keys`, longest key first for specificity."""
+    for key in sorted(keys, key=len, reverse=True):
+        for h in headers:
+            low = str(h).strip().lower()
+            if not low or any(x in low for x in exclude):
+                continue
+            if key in low:
+                return h
+    return None
+
+
+def roster_rows(records, today=None):
+    """Active Roster rows, using the export's extra columns when they survive.
+
+    Returns [{"name", "start_day": date|None, "status": str, "plan": str}].
+    Only "name" is ever guaranteed; the rest are "" or None when the paste was
+    name-only, which is the current state of the tab.
+    """
+    records = list(records or [])
+    if not records:
+        return []
+    headers = list(records[0])
+    name_h = _match_header(headers, _ROSTER_NAME_KEYS)
+    if not name_h:
+        return []
+    # Exclude the name column from the others, or "Athlete Name" matches the
+    # plan keys via "athlete" and the status column becomes the name column.
+    others = [h for h in headers if h != name_h]
+    start_h = _match_header(others, _ROSTER_START_KEYS)
+    status_h = _match_header(others, _ROSTER_STATUS_KEYS)
+    plan_h = _match_header(others, _ROSTER_PLAN_KEYS)
+
+    out = []
+    for r in records:
+        name = str(r.get(name_h, "")).strip()
+        if not name:
+            continue
+        out.append({
+            "name": name,
+            "start_day": parse_fitr_start_day(r.get(start_h, ""), today=today) if start_h else None,
+            "status": str(r.get(status_h, "")).strip() if status_h else "",
+            "plan": str(r.get(plan_h, "")).strip() if plan_h else "",
+        })
+    return out
+
+
+def roster_columns_present(records):
+    """Which of the export's optional columns survived the paste.
+
+    Returns {"start_day": bool, "status": bool, "plan": bool} so the health
+    check can name what is being discarded rather than saying "add columns".
+    """
+    records = list(records or [])
+    if not records:
+        return {"start_day": False, "status": False, "plan": False}
+    headers = list(records[0])
+    name_h = _match_header(headers, _ROSTER_NAME_KEYS)
+    others = [h for h in headers if h != name_h]
+    return {
+        "start_day": _match_header(others, _ROSTER_START_KEYS) is not None,
+        "status": _match_header(others, _ROSTER_STATUS_KEYS) is not None,
+        "plan": _match_header(others, _ROSTER_PLAN_KEYS) is not None,
+    }
