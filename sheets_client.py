@@ -246,6 +246,56 @@ class SheetsClient:
         return [{name: (row[i] if i < len(row) else "") for i, name in cols}
                 for row in values[1:]]
 
+    def read_many(self, titles, spreadsheet_id=None):
+        """Fetch several tabs in ONE API call. Returns {title: [record dicts]}.
+
+        Every separate Sheets read costs roughly a second of round-trip latency
+        whatever its size (PR Log is 26k rows and reads in 2.5s; a 20-row tab
+        still costs a second). The dashboard was making about twenty of them
+        back to back on a cold load, which is why coaches found it slow. Batching
+        the tabs that live in the same spreadsheet turns that into one request.
+
+        Values are numericised exactly as get_all_records does, so callers see
+        the same types they always did. A tab that is missing or unreadable comes
+        back as an empty list rather than taking the whole batch down.
+        """
+        from gspread.utils import numericise
+        titles = list(titles)
+        if not titles:
+            return {}
+        out = {t: [] for t in titles}
+        try:
+            sh = (self.gc.open_by_key(spreadsheet_id) if spreadsheet_id
+                  else self.gc.open_by_key(config.SHEET_ID))
+            resp = sh.values_batch_get([f"'{t}'" for t in titles])
+        except Exception as exc:
+            print(f"  ! batched read failed ({exc}); falling back to one at a time")
+            for t in titles:
+                try:
+                    out[t] = self.read_records(t)
+                except Exception:
+                    pass
+            return out
+
+        for rng in resp.get("valueRanges", []):
+            title = str(rng.get("range", "")).split("!")[0].strip("'").replace("''", "'")
+            values = rng.get("values") or []
+            if title not in out or not values:
+                continue
+            cols, seen = [], set()
+            for i, h in enumerate(values[0]):
+                name = str(h).strip()
+                if not name or name in seen:
+                    continue
+                seen.add(name)
+                cols.append((i, name))
+            out[title] = [
+                {name: numericise(row[i]) if i < len(row) else ""
+                 for i, name in cols}
+                for row in values[1:]
+            ]
+        return out
+
     def read_values(self, title):
         return self.worksheet(title).get_all_values()
 

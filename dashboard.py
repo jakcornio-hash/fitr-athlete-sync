@@ -179,33 +179,48 @@ def load_all():
         _cvoice.refresh_from_sheet(sheets)
     _optional("Tone of voice", _load_voice, None)
 
-    pr_records = sheets.read_records(config.TAB_PR_LOG)
-    bm_values = sheets.read_values(config.TAB_BENCHMARKS)
+    # One batched request instead of five sequential ones. Each separate Sheets
+    # read costs about a second of latency whatever its size, and also burns a
+    # slot in the client's per-minute quota, so this is most of the difference
+    # between a cold load taking twenty seconds and taking five.
+    _batch = _optional(
+        "Core tabs",
+        lambda: sheets.read_many([
+            config.TAB_PR_LOG, config.TAB_BENCHMARKS, config.TAB_DATA,
+            "Active Roster", _STATUS_TAB,
+            "Archetype Assessments", config.TAB_COMPETITIONS,
+        ]),
+        {})
 
-    # Build athlete list same way sync.py does
-    header = bm_values[0] if bm_values else []
+    pr_records = _batch.get(config.TAB_PR_LOG) or []
+
+    # Build athlete list same way sync.py does. Row numbers are the sheet's own
+    # (header is row 1, so the first record is row 2).
     athletes = []
-    for i, r in enumerate(bm_values[1:], start=2):
-        rec = dict(zip(header, r))
-        name = (rec.get("Name") or "").strip()
-        fitr_id = (rec.get("Fitr ID") or "").strip()
+    for i, rec in enumerate(_batch.get(config.TAB_BENCHMARKS) or [], start=2):
+        name = str(rec.get("Name") or "").strip()
+        fitr_id = str(rec.get("Fitr ID") or "").strip()
         if name and fitr_id:
             athletes.append({
                 "name": name,
-                "jst_id": (rec.get("JST ID") or "").strip(),
+                "jst_id": str(rec.get("JST ID") or "").strip(),
                 "fitr_id": fitr_id,
                 "row": i,
             })
 
-    data_records = _optional("Athlete profiles (_DATA)",
-                             lambda: sheets.read_records(config.TAB_DATA), [])
+    data_records = _batch.get(config.TAB_DATA) or []
+    _roster_names = [str(r.get("Full Name", "")).strip()
+                     for r in (_batch.get("Active Roster") or [])
+                     if str(r.get("Full Name", "")).strip()]
+    _overrides = {str(r.get("Name", "")).strip(): str(r.get("Status", "")).strip().lower()
+                  for r in (_batch.get(_STATUS_TAB) or [])
+                  if str(r.get("Name", "")).strip() and str(r.get("Status", "")).strip()}
     rec_latest = _optional(
         "Recovery survey",
         lambda: rec_mod.latest_by_email(sheets) if config.RECOVERY_SHEET_ID else {},
         {})
-    archetype_rows = _optional("Archetype assessments",
-                               sheets.load_archetype_assessments, [])
-    competition_rows = _optional("Competitions", sheets.load_competitions, [])
+    archetype_rows = _batch.get("Archetype Assessments") or []
+    competition_rows = _batch.get(config.TAB_COMPETITIONS) or []
 
     # Cancelled athletes come off the working roster so they don't appear in
     # at-risk lists, engagement flags, or athlete tables. data_records stay
@@ -228,8 +243,7 @@ def load_all():
         exit_rows = sheets.load_exit_autopsy()
         cancelled_names, _rejoined = analytics.cancelled_athletes(exit_rows, pr_records)
         gone_norm = analytics.not_current_client_names(
-            cancelled_names, data_records, _active_roster_names(),
-            overrides=_status_overrides())
+            cancelled_names, data_records, _roster_names, overrides=_overrides)
         if gone_norm:
             athletes = [a for a in athletes
                         if analytics.normalise_client_name(a["name"]) not in gone_norm]
