@@ -778,6 +778,56 @@ def send_progress_page_email(smtp_from, smtp_password, to_addr, athlete_name, js
     _send_html_email_to(smtp_from, smtp_password, to_addr, subject, plain, html)
 
 
+def send_reply_for_review(entries, programme_by_name=None, coach_channel_map=None,
+                          webhook_url=None):
+    """Post each waiting athlete's question and a proposed answer to Slack.
+
+    entries: list of dicts with keys athlete, question, draft, reason, waiting.
+
+    The older alert posted a list of names and told the coach to go and find the
+    drafts in the dashboard. That is a second trip to a slow page for something
+    the coach only needs to read and judge, so this puts the actual question and
+    the actual proposed answer in front of them instead. Nothing is sent to the
+    athlete from here: a coach copies it into Fitr, edits it, or ignores it.
+    """
+    if not entries:
+        return 0
+
+    def _one(e):
+        nm = e.get("athlete", "someone")
+        waiting = e.get("waiting")
+        when = (f"waiting {waiting} day{'s' if waiting != 1 else ''}"
+                if waiting else "messaged today")
+        out = [f"📨 *{nm}* — {when}", "", "*They asked:*",
+               f"> {str(e.get('question','')).strip()[:600] or '(no text)'}", ""]
+        draft = str(e.get("draft", "")).strip()
+        if draft:
+            out += ["*Proposed reply:*", "```", draft[:1800], "```"]
+        else:
+            out += ["_No draft could be written for this one. Needs a coach._"]
+        reason = str(e.get("reason", "")).strip()
+        if reason:
+            out += ["", f"_Why: {reason[:300]}_"]
+        out += ["", "Read it, change what you want, send it in Fitr. "
+                    "Nothing goes to the athlete until you do."]
+        return "\n".join(out)
+
+    sent = 0
+    for e in entries:
+        channel = (coach_channel_map or {}).get(
+            (programme_by_name or {}).get(e.get("athlete", ""), ""))
+        body = _one(e)
+        try:
+            if channel and config.SLACK_BOT_TOKEN:
+                send_slack_message(channel, body)
+            else:
+                send_slack(body)
+            sent += 1
+        except Exception as exc:
+            print(f"  ! reply review post failed for {e.get('athlete')}: {exc}")
+    return sent
+
+
 def send_draft_reply_alerts(pending, programme_by_name=None, coach_channel_map=None,
                             webhook_url=None):
     """Nag the right coach about athletes waiting on a reply.

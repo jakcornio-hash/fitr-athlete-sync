@@ -129,6 +129,12 @@ def summarise_conversation(athlete_name, messages_text, activity_date=None):
         text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
         if not text or text.upper().startswith("SKIP"):
             return None
+        reason = ""
+        if with_reason and "WHY:" in text:
+            text, _, reason = text.rpartition("WHY:")
+            text, reason = text.strip(), reason.strip()
+        if with_reason:
+            return _kill_em_dashes(text), _kill_em_dashes(reason)
         return text
     except Exception as e:  # never let summarisation kill the run
         print(f"  ! summariser error for {athlete_name}: {e}")
@@ -372,6 +378,12 @@ def weekly_athlete_insight(athlete_name, pr_lines, rec_lines, goal, programme):
         text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
         if not text or text.upper().startswith("SKIP"):
             return None
+        reason = ""
+        if with_reason and "WHY:" in text:
+            text, _, reason = text.rpartition("WHY:")
+            text, reason = text.strip(), reason.strip()
+        if with_reason:
+            return _kill_em_dashes(text), _kill_em_dashes(reason)
         return text
     except Exception as e:
         print(f"  ! weekly_insight error for {athlete_name}: {e}")
@@ -472,7 +484,8 @@ def annual_athlete_review(athlete_name, months_training, pr_summary, comp_summar
         return None
 
 
-def draft_reply(athlete_name, thread_text, profile_data=None, playbook=""):
+def draft_reply(athlete_name, thread_text, profile_data=None, playbook="",
+                knowledge="", with_reason=False):
     """Draft a coaching reply to an athlete's most recent message.
 
     thread_text: plain-text transcript built by format_thread() — chronological,
@@ -484,18 +497,45 @@ def draft_reply(athlete_name, thread_text, profile_data=None, playbook=""):
               athlete raised, so there's no scenario to look up: this gets the
               standing principles rather than situation-specific plays.
 
-    Returns a draft reply string, or None if no reply is warranted.
+    knowledge: the JST coaching knowledge base (coach_knowledge.load()) — the
+               same material as the Coaching Q&A project. This is what lets a
+               reply answer "why is there so much Zone 2 in this block?" from
+               JST's actual methodology instead of generic fitness knowledge.
+    with_reason: also return a one-line note on what the answer draws on, so a
+               coach can sanity-check the reasoning without reading the sources.
+
+    Returns a draft reply string (or (draft, reason) when with_reason), or None
+    if no reply is warranted.
     """
     if profile_data is None:
         profile_data = {}
     client = _client()
     if client is None:
         return None
+    # Replies answer real coaching questions, so they get the strongest model
+    # available rather than the one used for templated congratulations.
+    _model = getattr(config, "ANTHROPIC_REPLY_MODEL", "") or config.ANTHROPIC_MODEL
+    _system = coaching_voice.voice_prompt() + _REPLY_SUFFIX + (playbook or "")
+    if knowledge:
+        _system += (
+            "\n\n===== JST COACHING KNOWLEDGE =====\n"
+            "Answer from this material. It is JST's own methodology, service "
+            "detail and coaching standards. Where it covers the question, follow "
+            "it rather than general fitness knowledge. Where it does not, say so "
+            "plainly rather than inventing an answer, and leave it for the coach.\n\n"
+            + knowledge)
+    if with_reason:
+        _system += (
+            "\n\nAfter the reply, on a final separate line, write "
+            "'WHY: ' followed by one short sentence naming what the answer draws "
+            "on (a JST principle, a service fact, or the athlete's own history). "
+            "The coach reads this to sanity-check you quickly. It is never sent "
+            "to the athlete.")
     try:
         resp = client.messages.create(
-            model=config.ANTHROPIC_MODEL,
-            max_tokens=200,
-            system=coaching_voice.voice_prompt() + _REPLY_SUFFIX + (playbook or ""),
+            model=_model,
+            max_tokens=700 if knowledge else 200,
+            system=_system,
             messages=[{
                 "role": "user",
                 "content": (
@@ -511,10 +551,16 @@ def draft_reply(athlete_name, thread_text, profile_data=None, playbook=""):
         text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
         if not text or text.upper().startswith("SKIP"):
             return None
+        reason = ""
+        if with_reason and "WHY:" in text:
+            text, _, reason = text.rpartition("WHY:")
+            text, reason = text.strip(), reason.strip()
+        if with_reason:
+            return _kill_em_dashes(text), _kill_em_dashes(reason)
         # Same belt-and-braces as athlete_message. Without it the em dash rule
         # was prompt-only here and the model ignored it in 9 of 16 live drafts,
         # which is the single clearest AI tell we have.
         return _kill_em_dashes(text)
     except Exception as e:
         print(f"  ! draft_reply error for {athlete_name}: {e}")
-        return None
+        return (None, "") if with_reason else None

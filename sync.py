@@ -1733,21 +1733,46 @@ def main():
     coach_channel_map = sheets.load_coaches()
     if pending_reply_candidates and not config.DRY_RUN:
         drafted = []  # (name, waiting_since_date)
+        # The coaching knowledge base, so a reply can answer from JST's own
+        # methodology rather than general fitness knowledge. Loaded once.
+        try:
+            import coach_knowledge
+            _knowledge = coach_knowledge.load()
+            print(f"  {coach_knowledge.summary()}")
+        except Exception as exc:
+            _knowledge = ""
+            print(f"  ! coaching knowledge unavailable: {exc}")
+
+        _review = []
         for nm, (room_id, thread_text, msg_date) in pending_reply_candidates.items():
             profile = data_by_name_all.get(nm, {})
-            draft = summariser.draft_reply(
+            draft, why = summariser.draft_reply(
                 nm, thread_text, profile_data=profile,
                 playbook=coaching_voice.playbook_prompt(sheets),
+                knowledge=_knowledge, with_reason=True,
             )
             if draft:
                 sheets.write_draft_reply(nm, room_id, draft)
                 drafted.append((nm, msg_date))
+                # The athlete's own last message, which is what the coach needs
+                # to see next to the proposed answer.
+                _last = [ln for ln in str(thread_text).strip().splitlines() if ln.strip()]
+                _review.append({
+                    "athlete": nm,
+                    "question": "\n".join(_last[-6:]),
+                    "draft": draft,
+                    "reason": why,
+                    "waiting": (TODAY - msg_date).days if msg_date else None,
+                })
         if drafted:
             print(f"Reply drafts generated: {len(drafted)}")
-            notifier.send_draft_reply_alerts(
-                drafted, programme_by_name=programme_by_name,
+            # Question + proposed answer straight into Slack, rather than a
+            # list of names pointing at the dashboard.
+            _posted = notifier.send_reply_for_review(
+                _review, programme_by_name=programme_by_name,
                 coach_channel_map=coach_channel_map,
             )
+            print(f"Reply drafts posted to Slack for review: {_posted}")
 
     # ---- per-coach Slack notifications ----
     if coach_channel_map and (bench_rows or chal_rows):
