@@ -15,6 +15,47 @@ import traceback
 import config
 
 
+def _api_checks():
+    """The AI drafting silently degrades to generic copy when this breaks."""
+    problems = []
+    key = str(getattr(config, "ANTHROPIC_API_KEY", "") or "").strip()
+    if not key:
+        return ["No Anthropic API key — every drafted message falls back to generic copy"]
+    try:
+        import anthropic
+        anthropic.Anthropic(api_key=key).messages.create(
+            model=config.ANTHROPIC_MODEL, max_tokens=4,
+            messages=[{"role": "user", "content": "ok"}])
+    except Exception as exc:
+        detail = str(exc)
+        if "credit balance" in detail.lower():
+            problems.append(
+                "ANTHROPIC API OUT OF CREDIT — no message can be drafted. Every "
+                "congratulation, reply draft and story ask is falling back to "
+                "generic copy or failing. Top up at console.anthropic.com")
+        else:
+            problems.append(f"Anthropic API not working: {type(exc).__name__}: {detail[:140]}")
+    return problems
+
+
+def _knowledge_checks():
+    """The coaching knowledge base behind athlete replies."""
+    try:
+        import coach_knowledge
+    except Exception:
+        return []
+    if not str(getattr(config, "KNOWLEDGE_FOLDER_ID", "") or "").strip():
+        return []
+    text = coach_knowledge.load(force=True)
+    if not text:
+        return ["Coaching knowledge folder is empty or unreadable — athlete replies "
+                "would be drafted without any JST coaching material behind them"]
+    if len(text) < 20000:
+        return [f"Coaching knowledge looks thin ({len(text):,} chars from "
+                f"{len(coach_knowledge.files_loaded())} files) — check the upload finished"]
+    return []
+
+
 def _data_checks(sheets):
     """Data-shape problems that produce a working page showing wrong or no data."""
     problems = []
@@ -137,6 +178,11 @@ def _page_checks():
 def run_health_check(sheets):
     """Returns (ok, [problem strings]). Safe to call from the sync."""
     problems = []
+    for label, fn in (("API", _api_checks), ("Knowledge", _knowledge_checks)):
+        try:
+            problems += fn()
+        except Exception as exc:
+            problems.append(f"{label} checks crashed: {type(exc).__name__}: {exc}")
     try:
         problems += _data_checks(sheets)
     except Exception as exc:

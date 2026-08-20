@@ -383,3 +383,12 @@ TAB_HEALTH_LOG = "Health Log"
 # than saying nothing, so the older backlog is reported by the health check
 # rather than queued as drafts.
 EXIT_CONVERSATION_DAYS = int(_get("EXIT_CONVERSATION_DAYS", "30"))
+
+# The coaching knowledge base (Drive folder shared with the service account).
+# Read at runtime by coach_knowledge.py so athlete replies are drafted from the
+# real coaching material rather than the model's general knowledge.
+KNOWLEDGE_FOLDER_ID = _get("KNOWLEDGE_FOLDER_ID", "1Oc45ZPeK05b7mq3mGxNlYVSWJq9lENUE")
+
+# Replies to athletes are answering real coaching questions, so they get the
+# strongest model. The templated congratulations and milestones stay on Haiku.
+ANTHROPIC_REPLY_MODEL = _get("ANTHROPIC_REPLY_MODEL", "claude-opus-4-5")
