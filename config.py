@@ -392,3 +392,9 @@ KNOWLEDGE_FOLDER_ID = _get("KNOWLEDGE_FOLDER_ID", "1Oc45ZPeK05b7mq3mGxNlYVSWJq9l
 # Replies to athletes are answering real coaching questions, so they get the
 # strongest model. The templated congratulations and milestones stay on Haiku.
 ANTHROPIC_REPLY_MODEL = _get("ANTHROPIC_REPLY_MODEL", "claude-opus-4-5")
+
+# Athlete reply drafts go to their own Slack channel rather than the daily
+# digest channel. These need a coach to act on them, and mixing them into a
+# feed that also carries stats is how they get skimmed past. Falls back to the
+# main webhook if this isn't set, so nothing is ever silently dropped.
+SLACK_REPLIES_WEBHOOK_URL = _get("SLACK_REPLIES_WEBHOOK_URL", "")

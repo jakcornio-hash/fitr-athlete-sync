@@ -169,6 +169,24 @@ def build_digest(date, engagement_results, trend_results,
     return plain, slack
 
 
+def send_slack_via(url, slack_text):
+    """Post to a specific incoming webhook. Same delivery check as send_slack."""
+    if not url:
+        return send_slack(slack_text)
+    payload = json.dumps({"text": slack_text}).encode()
+    req = urllib.request.Request(
+        url, data=payload, headers={"Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=10, context=_SSL_CONTEXT) as resp:
+        status = resp.status
+        body = (resp.read() or b"").decode("utf-8", "replace").strip()
+    if status != 200 or body.lower() != "ok":
+        raise RuntimeError(
+            f"Slack accepted the request but did not confirm delivery "
+            f"(HTTP {status}, body {body[:120]!r})."
+        )
+
+
 def send_slack(slack_text):
     """Post to the incoming webhook, and check Slack actually accepted it.
 
@@ -821,7 +839,9 @@ def send_reply_for_review(entries, programme_by_name=None, coach_channel_map=Non
             if channel and config.SLACK_BOT_TOKEN:
                 send_slack_message(channel, body)
             else:
-                send_slack(body)
+                # The athlete-replies channel, or the main webhook if that
+                # hasn't been set up yet.
+                send_slack_via(getattr(config, "SLACK_REPLIES_WEBHOOK_URL", ""), body)
             sent += 1
         except Exception as exc:
             print(f"  ! reply review post failed for {e.get('athlete')}: {exc}")

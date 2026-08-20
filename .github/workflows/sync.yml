@@ -60,6 +60,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_MODEL: claude-haiku-4-5-20251001
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_REPLIES_WEBHOOK_URL: ${{ secrets.SLACK_REPLIES_WEBHOOK_URL }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           RECOVERY_SHEET_ID: ${{ secrets.RECOVERY_SHEET_ID }}
           COMP_FORM_SHEET_ID: ${{ secrets.COMP_FORM_SHEET_ID }}
