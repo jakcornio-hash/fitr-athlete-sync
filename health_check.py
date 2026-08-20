@@ -1,875 +1,159 @@
-"""Daily health check — catches the bugs that used to live here for months.
+"""Smoke test for the coaching dashboard and its data.
 
-Every check in this file exists because the failure it looks for actually
-happened and nobody noticed, in some cases for weeks:
+Every bug that has taken a dashboard tab down this year was silent: the page
+raised, or a column read came back empty, and nobody knew until a coach happened
+to look. This calls every page with real data and checks the data itself for the
+specific shapes those failures took, so the system reports its own breakage
+instead of waiting to be noticed.
 
-- the Sync Log header drifted from what sync.py writes, so the dashboard's
-  Sync tab raised a KeyError and took the Help tab down with it
-- bespoke suppression was keyed off a column whose value is never "Bespoke",
-  so it matched zero athletes and every individually-coached athlete kept
-  getting automated messages
-- the dashboard filtered its roster on a broader "cancelled" rule than the
-  sync, so 20 current athletes were invisible on every tab
-- Coach Alerts section headings were written as formulas and rendered #ERROR!
-
-The checks are deliberately read-only. Findings go out on the Slack and email
-digest a coach already reads, because a log nobody opens is where these bugs
-hid in the first place.
-
-Run standalone for an ad-hoc look:
-
-    python health_check.py            # data checks
-    python health_check.py --pages    # also render every dashboard tab
+Run standalone (`python health_check.py`) or from the daily sync via
+run_health_check(), which returns (ok, [problems]).
 """
-import datetime as dt
+import inspect
+import traceback
 
 import config
 
-TODAY = dt.date.today()
 
-# Severity levels, worst first.
-FAIL = "fail"
-WARN = "warn"
+def _data_checks(sheets):
+    """Data-shape problems that produce a working page showing wrong or no data."""
+    problems = []
 
-
-class Finding:
-    __slots__ = ("severity", "area", "title", "detail")
-
-    def __init__(self, severity, area, title, detail=""):
-        self.severity = severity
-        self.area = area
-        self.title = title
-        self.detail = detail
-
-    def __repr__(self):
-        return f"<{self.severity.upper()} {self.area}: {self.title}>"
-
-    def line(self):
-        return f"{self.title}{(' — ' + self.detail) if self.detail else ''}"
-
-
-# ── the schema contract ───────────────────────────────────────────────────────
-# Columns the code reads by name. A missing one is a crash or a silently empty
-# feature, so it is a failure rather than a warning.
-#
-# "always_populated" lists columns where a completely empty column means a
-# feature is dead rather than merely unused — the bespoke-suppression failure
-# mode. Columns that are legitimately sparse are not listed.
-
-EXPECTED_COLUMNS = {
-    config.TAB_DATA: {
-        "required": ["Full Name", "Email", "Programming Tier", "Subscription Plan",
-                     "Fitr Status", "Coaching Notes", "Join Date", "North Star Goal"],
-        "always_populated": ["Full Name", "Programming Tier", "Fitr Status"],
-    },
-    config.TAB_BENCHMARKS: {
-        "required": ["JST ID", "Name", "Fitr ID", "Last Scraped"],
-        "always_populated": ["Name", "Fitr ID"],
-    },
-    config.TAB_PR_LOG: {
-        # "Athlete Note" is the athlete's own comment on the result. Optional
-        # per row, so not always_populated, but it must keep its header — while
-        # it was blank, 396 athlete comments were unreadable by name.
-        "required": ["Date", "Athlete Name", "Benchmark Name", "Value",
-                     "Athlete Note"],
-        "always_populated": ["Date", "Athlete Name", "Benchmark Name", "Value"],
-    },
-    config.TAB_SYNC_LOG: {
-        "required": ["Run Date", "Total Athletes", "New PR Log rows",
-                     "Challenge scores added", "Conversations summarised",
-                     "Recovery merged", "Notes updated", "Athletes auto-onboarded",
-                     "Athlete Emails Sent", "Notes"],
-        "always_populated": ["Run Date", "Total Athletes"],
-    },
-    config.TAB_MESSAGE_LOG: {
-        # Replied / Reply Date are written later by mark_message_replied, which
-        # looks them up by name and gives up silently if they are absent.
-        "required": ["Date", "Athlete Name", "Message Type", "Room ID",
-                     "Replied", "Reply Date"],
-        "always_populated": ["Date", "Athlete Name", "Message Type"],
-    },
-    config.TAB_COMPETITIONS: {
-        "required": ["Athlete Name", "Competition Name", "Date", "Type"],
-        "always_populated": ["Athlete Name", "Competition Name", "Date"],
-    },
-    "Active Roster": {
-        "required": ["Full Name"],
-        "always_populated": ["Full Name"],
-    },
-    config.TAB_COACHES: {
-        "required": ["Programme", "Slack Channel", "Active"],
-        "always_populated": ["Programme", "Slack Channel"],
-    },
-}
-
-# Tabs written only by this system, where a drifted header is a bug rather than
-# a coach's edit. Checked even when the tab has no rows yet.
-MACHINE_OWNED_TABS = (config.TAB_SYNC_LOG, config.TAB_MESSAGE_LOG,
-                      config.TAB_PENDING_MESSAGES)
-
-# Days without a logged session before a billed athlete needs a human look.
-# One definition in config, shared with the dashboard's Finance tab.
-REVENUE_DORMANT_DAYS = int(getattr(config, "REVENUE_DORMANT_DAYS", 90))
-
-# A pending draft older than this has plainly not been worked.
-PENDING_STALE_DAYS = 3
-# More than this queued at once means the list is being generated, not worked.
-PENDING_BACKLOG_LIMIT = 25
-
-
-def _parse_date(s):
-    s = str(s or "").strip()
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d/%m/%Y %H:%M:%S"):
+    def _rows(tab):
         try:
-            return dt.datetime.strptime(s[:len(fmt) + 4], fmt).date()
-        except ValueError:
-            continue
-    return None
-
-
-# ── checks ────────────────────────────────────────────────────────────────────
-
-def check_sheet_schemas(sheets):
-    """Missing, duplicate or blank headers, and columns that are entirely empty."""
-    out = []
-    for tab, spec in EXPECTED_COLUMNS.items():
-        try:
-            values = sheets.read_values(tab)
+            return sheets.read_records(tab)
         except Exception as exc:
-            out.append(Finding(FAIL, "sheets", f"Cannot read the '{tab}' tab", str(exc)[:160]))
-            continue
-        if not values:
-            out.append(Finding(FAIL, "sheets", f"The '{tab}' tab is empty",
-                               "expected a header row"))
-            continue
+            problems.append(f"Tab '{tab}' unreadable: {type(exc).__name__}: {exc}")
+            return []
 
-        header = [str(h).strip() for h in values[0]]
-        rows = values[1:]
-
-        missing = [c for c in spec["required"] if c not in header]
-        if missing:
-            out.append(Finding(
-                FAIL, "sheets", f"'{tab}' is missing {len(missing)} expected column(s)",
-                ", ".join(missing)))
-
-        named = [h for h in header if h]
-        dupes = sorted({h for h in named if named.count(h) > 1})
-        if dupes:
-            out.append(Finding(
-                FAIL, "sheets", f"'{tab}' has duplicate header(s)",
-                ", ".join(dupes) + " — readers keep the first and silently drop the rest"))
-
-        blank_with_data = [
-            i for i, h in enumerate(header)
-            if not h and any(len(r) > i and str(r[i]).strip() for r in rows)
-        ]
-        if blank_with_data:
-            out.append(Finding(
-                WARN, "sheets", f"'{tab}' has {len(blank_with_data)} blank header(s) with data under them",
-                f"column index {blank_with_data} — that data is unreadable by name"))
-
-        if rows:
-            for col in spec.get("always_populated", ()):
-                if col not in header:
-                    continue   # already reported as missing
-                i = header.index(col)
-                filled = sum(1 for r in rows if len(r) > i and str(r[i]).strip())
-                if filled == 0:
-                    out.append(Finding(
-                        FAIL, "sheets", f"'{tab}'.'{col}' is completely empty",
-                        f"{len(rows)} rows, none populated — anything reading this "
-                        "column is silently doing nothing"))
-    return out
-
-
-def check_machine_tab_headers(sheets):
-    """Machine-owned tabs whose header no longer matches the writer."""
-    out = []
-    for tab in MACHINE_OWNED_TABS:
-        spec = EXPECTED_COLUMNS.get(tab)
-        if not spec:
-            continue
-        try:
-            values = sheets.read_values(tab)
-        except Exception:
-            continue    # absent tabs are covered by check_sheet_schemas
-        if not values:
-            continue
-        header = [str(h).strip() for h in values[0]]
-        while header and not header[-1]:
-            header.pop()
-        expected = spec["required"]
-        if header != expected:
-            out.append(Finding(
-                WARN, "sheets", f"'{tab}' header does not match what the sync writes",
-                f"sheet has {header}, writer expects {expected}"))
-    return out
-
-
-def check_suppression_rules_match_someone(data_records, bespoke_names, gone_norm):
-    """A suppression rule matching nobody is how bespoke silently broke.
-
-    Bespoke lives in Programming Tier. Keying it off Subscription Plan matched
-    zero athletes for months while looking perfectly healthy in the logs.
-    """
-    out = []
-    if not data_records:
-        return out
-
-    tiers = {str(r.get("Programming Tier", "")).strip().lower() for r in data_records}
-    if "bespoke" not in tiers:
-        out.append(Finding(
-            FAIL, "suppression",
-            "No athlete has Programming Tier 'Bespoke'",
-            "bespoke suppression is matching nobody, so individually-coached "
-            "athletes will receive automated messages"))
-    elif not bespoke_names:
-        out.append(Finding(
-            FAIL, "suppression",
-            "Bespoke athletes exist in _DATA but the sync matched none of them",
-            "check the column the suppression set is built from"))
-
-    if not gone_norm:
-        out.append(Finding(
-            WARN, "suppression", "The genuinely-gone list is empty",
-            "no athlete is being excluded from messages; expected the CRM Exit "
-            "Autopsy minus the Active Roster to leave some"))
-    return out
-
-
-def check_cancelled_not_on_lists(engagement_results, gone_norm, analytics_mod):
-    """Athletes who have gone must not resurface on a coaching list."""
-    out = []
-    if not gone_norm or not engagement_results:
-        return out
-    leaked = sorted({
-        e.get("name") for e in engagement_results
-        if analytics_mod.normalise_client_name(e.get("name", "")) in gone_norm
-    })
-    if leaked:
-        out.append(Finding(
-            FAIL, "roster",
-            f"{len(leaked)} cancelled athlete(s) are back on the engagement list",
-            ", ".join(leaked[:8]) + ("…" if len(leaked) > 8 else "")))
-    return out
-
-
-def status_overrides(sheets):
-    """{athlete: 'cancelled'|'active'} — a coach's explicit call on who is still
-    a client. Outranks the Active Roster and the CRM, so any recomputation of
-    gone-ness that leaves it out will disagree with the sync by exactly the
-    number of overrides and report it as a fault."""
-    try:
-        rows = sheets.read_records("Athlete Status Overrides")
-    except Exception:
-        return {}
-    return {str(r.get("Name", "")).strip(): str(r.get("Status", "")).strip().lower()
-            for r in rows
-            if str(r.get("Name", "")).strip() and str(r.get("Status", "")).strip()}
-
-
-def check_roster_agrees_with_dashboard(sheets, analytics_mod, gone_norm):
-    """The dashboard and the sync must exclude the same people.
-
-    They drifted once already: the dashboard filtered on the raw Exit Autopsy
-    set and hid 20 athletes who were on the current Active Roster.
-    """
-    out = []
-    try:
-        pr_records = sheets.read_records(config.TAB_PR_LOG)
-        data_records = sheets.read_records(config.TAB_DATA)
-        exit_rows = sheets.load_exit_autopsy()
-        roster = [str(r.get("Full Name", "")).strip()
-                  for r in sheets.read_records("Active Roster")
-                  if str(r.get("Full Name", "")).strip()]
-    except Exception as exc:
-        return [Finding(WARN, "roster", "Could not cross-check the roster", str(exc)[:140])]
-
-    cancelled_lower, _ = analytics_mod.cancelled_athletes(exit_rows, pr_records)
-    shared = analytics_mod.not_current_client_names(
-        cancelled_lower, data_records, roster, overrides=status_overrides(sheets))
-
-    raw_only = {analytics_mod.normalise_client_name(n) for n in cancelled_lower} - shared
-    if raw_only:
-        names = sorted({
-            str(r.get("Full Name", "")).strip() for r in data_records
-            if analytics_mod.normalise_client_name(r.get("Full Name", "")) in raw_only
-        })
-        out.append(Finding(
-            WARN, "roster",
-            f"{len(raw_only)} athlete(s) gave notice but are still current",
-            "they stay on every list and in MRR by design (on the Active Roster): "
-            + ", ".join(names[:6]) + ("…" if len(names) > 6 else "")))
-
-    if gone_norm is not None and set(gone_norm) != set(shared):
-        only_sync = len(set(gone_norm) - set(shared))
-        only_shared = len(set(shared) - set(gone_norm))
-        out.append(Finding(
-            FAIL, "roster",
-            "The sync and the shared roster rule disagree on who has gone",
-            f"{only_sync} excluded only by the sync, {only_shared} only by the shared rule"))
-    return out
-
-
-def check_crm_says_gone_but_training(sheets, analytics_mod):
-    """Athletes the CRM has as cancelled who are demonstrably still training.
-
-    The code already handles this safely — they are treated as rejoined and
-    kept in — so nothing breaks. But the CRM is wrong, and it stays wrong,
-    because the only place this was ever mentioned was a line in the sync log
-    that nobody reads.
-    """
-    try:
-        exit_rows = sheets.load_exit_autopsy()
-        pr_records = sheets.read_records(config.TAB_PR_LOG)
-    except Exception:
-        return []
-    _, rejoined = analytics_mod.cancelled_athletes(exit_rows, pr_records)
-    if not rejoined:
-        return []
-    names = ", ".join(sorted(rejoined)[:8])
-    if len(rejoined) > 8:
-        names += f" and {len(rejoined) - 8} more"
-    return [Finding(
-        WARN, "crm",
-        f"{len(rejoined)} athlete(s) are marked cancelled in the CRM but are training again",
-        f"They are correctly kept on the lists; the CRM Exit Autopsy is what needs "
-        f"correcting: {names}")]
-
-
-def check_duplicate_athlete_rows(sheets):
-    """Two rows for one athlete means two half-profiles and split history."""
-    try:
-        rows = sheets.read_records(config.TAB_DATA)
-    except Exception:
-        return []
-    seen = {}
-    for r in rows:
-        nm = str(r.get("Full Name", "")).strip()
-        if nm:
-            seen[nm] = seen.get(nm, 0) + 1
-    dupes = sorted(nm for nm, n in seen.items() if n > 1)
-    if not dupes:
-        return []
-    return [Finding(
-        WARN, "sheets", f"{len(dupes)} athlete(s) have more than one row in _DATA",
-        "profile edits and coaching notes will land on one row and not the "
-        "other: " + ", ".join(dupes[:8]))]
-
-
-def check_programming_tier_values(sheets):
-    """Programming Tier drives message suppression, so junk in it is a risk."""
-    try:
-        rows = sheets.read_records(config.TAB_DATA)
-    except Exception:
-        return []
-    allowed = {"", "standard", "bespoke", "semi-bespoke"}
-    odd = {}
-    for r in rows:
-        v = str(r.get("Programming Tier", "")).strip()
-        if v.lower() not in allowed:
-            odd.setdefault(v, []).append(str(r.get("Full Name", "")).strip())
-    if not odd:
-        return []
-    detail = "; ".join(f"{v[:45]!r} ({len(names)})" for v, names in list(odd.items())[:3])
-    return [Finding(
-        WARN, "sheets",
-        f"{sum(len(n) for n in odd.values())} athlete(s) have an unrecognised Programming Tier",
-        "this column decides who is exempt from automated messages, so anything "
-        f"unexpected in it is worth correcting: {detail}")]
-
-
-def check_training_signal(sheets):
-    """The training-adherence columns must keep filling.
-
-    This signal is pulled from an undocumented Fitr endpoint. If Fitr renames a
-    field or changes how it paginates, the pull returns nothing and engagement
-    quietly falls back to judging people on benchmark retests — which is the
-    bug this replaced. That regression would be invisible: the dashboard would
-    look fine and simply start flagging the wrong 87 athletes again.
-    """
-    out = []
-    try:
-        rows = sheets.read_records(config.TAB_DATA)
-    except Exception:
-        return out
-    if not rows:
-        return out
-    if "Last Trained" not in (rows[0] or {}):
-        return [Finding(
-            WARN, "training", "The Last Trained column is missing from _DATA",
-            "the Fitr training-adherence pull has not run yet, so engagement is "
-            "still being judged on benchmark retests alone")]
-
-    filled = sum(1 for r in rows if str(r.get("Last Trained", "")).strip())
-    if filled == 0:
-        out.append(Finding(
-            FAIL, "training", "No athlete has a Last Trained date",
-            "the Fitr adherence pull is returning nothing, so engagement flags "
-            "have silently reverted to benchmark retests — expect a large jump "
-            "in false 'inactive' flags"))
-    elif filled < len(rows) * 0.25:
-        out.append(Finding(
-            WARN, "training",
-            f"Only {filled} of {len(rows)} athletes have a Last Trained date",
-            "coverage was around 78% of the roster when this was built; a sharp "
-            "drop usually means Fitr changed its pagination"))
-    return out
-
-
-def check_disabled_integrations():
-    """Stages whose config is unset, so they run and quietly do nothing.
-
-    Every one of these reads a sheet ID that defaults to an empty string. With
-    it unset the stage still "succeeds" — it just processes zero rows and logs
-    nothing unusual, which is indistinguishable from there being no new data.
-    Two of these had been off in production for the life of the workflow.
-    """
-    wired = [
-        ("INTAKE_FORM_SHEET_ID", "new athlete intake form"),
-        ("TSHIRT_FORM_SHEET_ID", "180-day t-shirt reward"),
-        ("RECOVERY_SHEET_ID", "weekly recovery survey"),
-        ("COMP_FORM_SHEET_ID", "competition planner form"),
-        ("SLACK_WEBHOOK_URL", "Slack digest"),
-        ("SMTP_PASSWORD", "email digest and athlete emails"),
-    ]
-    missing = [(name, what) for name, what in wired
-               if not str(getattr(config, name, "") or "").strip()]
-    if not missing:
-        return []
-    return [Finding(
-        WARN, "config",
-        f"{len(missing)} integration(s) are switched off because their config is unset",
-        "; ".join(f"{what} ({name})" for name, what in missing)
-        + " — these stages run and process nothing rather than failing")]
-
-
-def check_join_date_is_not_trusted(sheets, analytics_mod):
-    """Two things: the roster paste discarding columns, and Join Date being wrong.
-
-    Join Date reads like a join date and is not one. Measured across the live
-    sheet: of the athletes who have both a join date and a logged result, about
-    two thirds logged their first result BEFORE the recorded join date, a median
-    of four months before. Anything built on it, cohort retention especially,
-    would be confidently wrong. First Seen exists as the defensible floor, and
-    this check watches its coverage.
-
-    The Active Roster half is the cheap fix: the Fitr client list pasted in
-    monthly carries the plan, membership status and start day, and the tab keeps
-    only the name. That paste is the only hand-taken snapshot of who was a
-    client, so the columns are worth keeping.
-    """
-    out = []
-    try:
-        roster_records = sheets.read_records("Active Roster")
-    except Exception:
-        roster_records = []
-    if roster_records:
-        present = analytics_mod.roster_columns_present(roster_records)
-        missing = [label for key, label in (
-            ("start_day", "plan start day"), ("status", "membership status"),
-            ("plan", "plan name")) if not present[key]]
-        if missing:
-            out.append(Finding(
-                WARN, "roster",
-                "The Active Roster paste is keeping names only",
-                f"the Fitr client list also has {', '.join(missing)}, and that "
-                "paste is the only monthly snapshot of who was a client. "
-                "Keeping the columns costs nothing and they are used the moment "
-                "they appear"))
-
-    try:
-        data = sheets.read_records(config.TAB_DATA)
-    except Exception:
-        return out
+    data = _rows(config.TAB_DATA)
     if not data:
-        return out
+        problems.append("_DATA is empty — the dashboard would show no athletes at all")
+        return problems
 
-    roster_names = [r["name"] for r in analytics_mod.roster_rows(roster_records)]
-    on_roster = {analytics_mod.normalise_client_name(n) for n in roster_names}
-    if not on_roster:
-        return out
+    # A column the code reads that is empty for everyone is how bespoke
+    # suppression matched zero athletes for months while looking fine.
+    for col, why in (("Programming Tier", "bespoke suppression"),
+                     ("Full Name", "every name lookup"),
+                     ("Fitr Status", "cancellation detection")):
+        if col not in data[0]:
+            problems.append(f"_DATA has no '{col}' column — {why} is broken")
+        elif not any(str(r.get(col, "")).strip() for r in data):
+            problems.append(f"_DATA column '{col}' is empty for every athlete — {why} silently does nothing")
 
-    # Current clients with no _DATA row at all. Found while checking why First
-    # Seen resolved for more athletes than it could write: _DATA is what the
-    # squad views, the action list and the billing check all read, so an athlete
-    # missing from it is invisible across most of the dashboard while paying.
-    in_data = {analytics_mod.normalise_client_name(r.get("Full Name", "")) for r in data}
-    absent = [n for n in roster_names
-              if analytics_mod.normalise_client_name(n) not in in_data]
-    if absent:
-        out.append(Finding(
-            FAIL, "roster",
-            f"{len(absent)} athlete(s) on the Active Roster have no _DATA row",
-            "so they are missing from the squad views, the action list and the "
-            "billing check, and cannot be given a First Seen date: "
-            + ", ".join(absent[:6]) + ("…" if len(absent) > 6 else "")))
-    seen = sum(1 for r in data
-               if analytics_mod.normalise_client_name(r.get("Full Name", "")) in on_roster
-               and str(r.get("First Seen", "")).strip())
-    if seen == 0:
-        out.append(Finding(
-            WARN, "roster",
-            "No athlete has a First Seen date yet",
-            "the sync writes it from the earlier of first logged result and a "
-            "clamped Fitr plan start day. Until it is populated there is no "
-            "anchor any cohort or retention figure can hang off"))
-    elif seen < len(on_roster) * 0.9:
-        out.append(Finding(
-            WARN, "roster",
-            f"Only {seen} of {len(on_roster)} current athletes have a First Seen date",
-            "the rest would drop silently out of any cohort figure"))
-    return out
+    # Tabs the dashboard needs. Blank/duplicate headers used to kill a whole tab.
+    for tab in (config.TAB_PR_LOG, config.TAB_SYNC_LOG, "Coaching Playbook",
+                "Challenge Measures", "Active Roster"):
+        if not _rows(tab):
+            problems.append(f"Tab '{tab}' is empty or unreadable")
 
-
-def check_exit_conversations_owed(sheets, analytics_mod):
-    """Cancelled athletes the exit conversation never reached.
-
-    The sync drafts these only for recent cancellations, because a note four
-    months after someone left is worse than silence. That leaves an older
-    backlog which is real but is a decision rather than a queue, so it is
-    reported here instead of being messaged.
-
-    Across the CRM's history the pattern is: the opening message lands and
-    around 42% of people reply, but only a handful are ever offered an
-    alternative. The second number is the one worth moving.
-    """
-    if not getattr(config, "CRM_SHEET_ID", ""):
-        return []
+    # Cancelled athletes must not still be on the working roster.
     try:
-        # The raw columns. load_exit_autopsy() returns a three-field projection
-        # that has none of the ones this needs.
-        rows = sheets.read_external_records_positional(config.CRM_SHEET_ID, "Exit Autopsy")
-    except Exception:
-        return []
-    if not rows:
-        return []
-    try:
-        never, no_offer = analytics_mod.stale_exit_conversations(
-            rows, recent_days=getattr(config, "EXIT_CONVERSATION_DAYS", 30))
+        import analytics
+        pr = _rows(config.TAB_PR_LOG)
+        cancelled, _ = analytics.cancelled_athletes(sheets.load_exit_autopsy(), pr)
+        roster = [str(r.get("Full Name", "")).strip()
+                  for r in _rows("Active Roster") if str(r.get("Full Name", "")).strip()]
+        gone = analytics.not_current_client_names(cancelled, data, roster)
+        if len(gone) > len(data) * 0.6:
+            problems.append(
+                f"{len(gone)} of {len(data)} athletes counted as gone — that is too many, "
+                "check the Active Roster was pasted in")
     except Exception as exc:
-        return [Finding(WARN, "exits", "Could not assess exit conversations", str(exc)[:140])]
+        problems.append(f"Cancellation check failed: {type(exc).__name__}: {exc}")
 
-    out = []
-    if no_offer:
-        out.append(Finding(
-            WARN, "exits",
-            f"{len(no_offer)} former athlete(s) replied to us and were never "
-            f"offered an alternative",
-            "too long ago for the sync to draft, so this is a judgement call "
-            "rather than a queue: " + ", ".join(no_offer[:6])
-            + ("…" if len(no_offer) > 6 else "")))
-    if never:
-        out.append(Finding(
-            WARN, "exits",
-            f"{len(never)} former athlete(s) cancelled and were never messaged at all",
-            "beyond the window where getting in touch still reads as genuine: "
-            + ", ".join(never[:6]) + ("…" if len(never) > 6 else "")))
-    return out
-
-
-def check_last_sync_completed(sheets):
-    """Did the previous run reach the end, or die somewhere in the middle?
-
-    On 5 August the sync hit the Sheets read quota two thirds of the way
-    through main() and the process ended there. Every later stage was skipped,
-    including the Sync Log row itself, so the only evidence was a traceback in
-    a workflow log. From the dashboard the day simply looked quiet.
-
-    A gap in the Sync Log is that evidence, and it survives whatever took the
-    run down. This check runs before today's row is written, so the newest row
-    it can legitimately see is yesterday's.
-    """
+    # Drafts nobody is sending. Automatic sending is off, so an unworked queue
+    # means athletes are hearing nothing at all.
     try:
-        rows = sheets.read_records(config.TAB_SYNC_LOG)
+        pending = [r for r in sheets.read_records(config.TAB_PENDING_MESSAGES)
+                   if str(r.get("Status", "")).strip().lower() == "pending"]
+        if len(pending) > 40:
+            problems.append(
+                f"{len(pending)} drafted messages are waiting to be sent. Nothing reaches "
+                "an athlete until a coach sends them")
     except Exception:
-        return []
-    dates = sorted(d for d in (_parse_date(r.get("Run Date", "")) for r in rows) if d)
-    if not dates:
-        return [Finding(WARN, "sync", "The Sync Log has no dated runs in it",
-                        "nothing can be said about whether the sync is running")]
-    last = dates[-1]
-    days = (TODAY - last).days
-    if days <= 1:
-        return []
-    return [Finding(
-        FAIL, "sync",
-        f"The last sync to finish was {days} days ago ({last})",
-        "a run that starts but never writes its Sync Log row died part way "
-        "through, so the stages after the failure did nothing that day")]
+        pass  # tab may not exist yet
+    return problems
 
 
-def check_pending_message_queue(sheets):
-    """Drafts nobody is sending. This is now the only route to an athlete."""
-    out = []
+def _page_checks():
+    """Call every dashboard page with real data and catch anything that raises."""
+    problems = []
     try:
-        rows = sheets.read_records(config.TAB_PENDING_MESSAGES)
-    except Exception:
-        # Tab appears on the first sync that queues anything. Not a problem.
-        return out
-
-    pending = [r for r in rows if str(r.get("Status", "")).strip().lower() == "pending"]
-    if not pending:
-        return out
-
-    stale = []
-    for r in pending:
-        d = _parse_date(r.get("Date", ""))
-        if d and (TODAY - d).days >= PENDING_STALE_DAYS:
-            stale.append((r.get("Athlete Name", ""), (TODAY - d).days))
-
-    if stale:
-        oldest = max(days for _, days in stale)
-        out.append(Finding(
-            FAIL, "messages",
-            f"{len(stale)} drafted message(s) have been waiting {PENDING_STALE_DAYS}+ days",
-            f"oldest is {oldest} days old. Automatic sending is off, so these "
-            "athletes have heard nothing: "
-            + ", ".join(n for n, _ in stale[:6]) + ("…" if len(stale) > 6 else "")))
-    elif len(pending) > PENDING_BACKLOG_LIMIT:
-        out.append(Finding(
-            WARN, "messages",
-            f"{len(pending)} drafted messages are queued",
-            "the list is growing faster than it is being worked"))
-    return out
-
-
-def check_message_log_replies(sheets):
-    """The reply scanner writes back here. A column that never fills is dead code."""
-    out = []
-    try:
-        rows = sheets.read_records(config.TAB_MESSAGE_LOG)
-    except Exception:
-        return out
-    if len(rows) < 20:
-        return out
-    if "Replied" not in (rows[0] or {}):
-        return out
-    if not any(str(r.get("Replied", "")).strip() for r in rows):
-        out.append(Finding(
-            WARN, "messages",
-            f"No reply has ever been recorded against {len(rows)} logged messages",
-            "the Fitr reply scanner has never matched anything — reply rate "
-            "reporting is meaningless until that is confirmed working"))
-    return out
-
-
-def check_revenue_anomalies(sheets, analytics_mod, data_records, gone_norm,
-                            monthly_value_fn=None):
-    """Athletes being billed while not training.
-
-    Split by reason rather than lumped into one count, because the three mean
-    different things: a failed payment is a billing job, a never-logged
-    athlete is an onboarding failure, and a long silence is a coaching one.
-    """
-    out = []
-    if not data_records:
-        return out
-    try:
-        pr_records = sheets.read_records(config.TAB_PR_LOG)
+        import dashboard as dash
     except Exception as exc:
-        return [Finding(WARN, "revenue", "Could not check billing against training",
-                        str(exc)[:140])]
+        return [f"dashboard.py will not even import: {type(exc).__name__}: {exc}"]
 
-    rows = analytics_mod.revenue_anomalies(
-        data_records, pr_records, gone_norm=gone_norm,
-        dormant_days=REVENUE_DORMANT_DAYS, monthly_value_fn=monthly_value_fn,
-        activity_by_name=analytics_mod.activity_from_data_records(data_records))
-    if not rows:
-        return out
-
-    groups = {}
-    for r in rows:
-        key = "Missed payment" if r["reason"] == "Missed payment" else (
-            "No training on record" if r["reason"].startswith("No training")
-            else f"No session in {REVENUE_DORMANT_DAYS}+ days")
-        groups.setdefault(key, []).append(r)
-
-    for label, items in groups.items():
-        value = sum(i["monthly_value"] for i in items)
-        names = ", ".join(i["name"] for i in items[:6])
-        if len(items) > 6:
-            names += f" and {len(items) - 6} more"
-        severity = FAIL if label == "Missed payment" else WARN
-        out.append(Finding(
-            severity, "revenue",
-            f"{len(items)} current athlete(s) — {label.lower()}",
-            f"£{value:,.0f}/month of billing with no training behind it: {names}"))
-    return out
-
-
-def check_dashboard_pages(timeout=600):
-    """Render every dashboard tab headlessly and report any that raise.
-
-    Uses Streamlit's own AppTest so this is the real script against real data,
-    not a mock. Each tab is wrapped by dashboard._render_tab, so one broken tab
-    is recorded rather than aborting the run.
-    """
     try:
-        from streamlit.testing.v1 import AppTest
+        (pr_records, athletes, rec_latest, data_records, archetype_rows,
+         competition_rows, cancelled_names, gone_norm, warns) = dash.load_all()
     except Exception as exc:
-        return [Finding(WARN, "dashboard", "Could not import Streamlit AppTest", str(exc)[:140])]
+        return [f"load_all() failed, so every page is down: {type(exc).__name__}: {exc}"]
+    for w in (warns or []):
+        problems.append(f"Data load warning: {w}")
 
     try:
-        at = AppTest.from_file("dashboard.py", default_timeout=timeout)
-        at.run()
+        trends, engagement, wins, rec_alerts, rec_by_name, comps = dash.run_analytics(
+            pr_records, athletes, rec_latest, data_records,
+            competition_rows=competition_rows)
     except Exception as exc:
-        return [Finding(FAIL, "dashboard", "The dashboard failed to start at all",
-                        f"{type(exc).__name__}: {exc}"[:300])]
+        return problems + [f"run_analytics() failed: {type(exc).__name__}: {exc}"]
 
-    out = []
-    try:
-        failures = at.session_state["_tab_render_failures"]
-    except Exception:
-        failures = {}
-    for tab, err in (failures or {}).items():
-        out.append(Finding(FAIL, "dashboard", f"The {tab} tab failed to load", str(err)[:200]))
-
-    # A data load that failed is quieter than a tab that crashed: every tab
-    # still renders, just with less behind it.
-    try:
-        warnings = at.session_state["_load_warnings"]
-    except Exception:
-        warnings = []
-    for w in (warnings or []):
-        out.append(Finding(FAIL, "dashboard", "Dashboard data failed to load", str(w)[:200]))
-
-    for exc in at.exception:
-        out.append(Finding(FAIL, "dashboard", "Unhandled dashboard exception",
-                           str(exc.value)[:200]))
-    return out
-
-
-# ── runner ────────────────────────────────────────────────────────────────────
-
-def run_health_check(sheets, analytics_mod, *, data_records=None, bespoke_names=None,
-                     gone_norm=None, engagement_results=None, check_pages=False):
-    """Run every check. Never raises — a broken check must not break the sync."""
-
-    def monthly_value(rec):
-        return analytics_mod.monthly_value(
-            rec.get("Subscription Plan", ""),
-            rec.get("Programming Tier", ""),
-            fallbacks=getattr(config, "SUBSCRIPTION_FALLBACK_PRICES", {}),
-            bespoke_value=getattr(config, "BESPOKE_MONTHLY_TO_JST", 40),
-        )
-
-    findings = []
-    checks = [
-        ("revenue anomalies", lambda: check_revenue_anomalies(
-            sheets, analytics_mod, data_records, gone_norm, monthly_value)),
-        ("sheet schemas", lambda: check_sheet_schemas(sheets)),
-        ("machine tab headers", lambda: check_machine_tab_headers(sheets)),
-        ("suppression rules", lambda: check_suppression_rules_match_someone(
-            data_records, bespoke_names, gone_norm)),
-        ("cancelled on lists", lambda: check_cancelled_not_on_lists(
-            engagement_results, gone_norm, analytics_mod)),
-        ("roster agreement", lambda: check_roster_agrees_with_dashboard(
-            sheets, analytics_mod, gone_norm)),
-        ("last sync completed", lambda: check_last_sync_completed(sheets)),
-        ("exit conversations", lambda: check_exit_conversations_owed(sheets, analytics_mod)),
-        ("join date trust", lambda: check_join_date_is_not_trusted(sheets, analytics_mod)),
-        ("pending queue", lambda: check_pending_message_queue(sheets)),
-        ("message log replies", lambda: check_message_log_replies(sheets)),
-        ("crm rejoins", lambda: check_crm_says_gone_but_training(sheets, analytics_mod)),
-        ("duplicate athlete rows", lambda: check_duplicate_athlete_rows(sheets)),
-        ("programming tier values", lambda: check_programming_tier_values(sheets)),
-        ("training signal", lambda: check_training_signal(sheets)),
-        ("disabled integrations", check_disabled_integrations),
-    ]
-    if check_pages:
-        checks.append(("dashboard pages", lambda: check_dashboard_pages()))
-
-    for name, fn in checks:
+    available = {
+        "pr_records": pr_records, "athletes": athletes, "data_records": data_records,
+        "trend_results": trends, "engagement_results": engagement,
+        "consistency_wins": wins, "rec_alert_rows": rec_alerts,
+        "rec_by_name": rec_by_name, "comp_results": comps,
+        "competition_rows": competition_rows, "milestones": [],
+        "grandslam_results": [], "cancelled_names": cancelled_names,
+    }
+    for name in sorted(n for n in dir(dash) if n.startswith("page_")):
+        fn = getattr(dash, name)
+        if not callable(fn):
+            continue
         try:
-            findings.extend(fn() or [])
-        except Exception as exc:
-            findings.append(Finding(
-                WARN, "health-check", f"The '{name}' check itself failed",
-                f"{type(exc).__name__}: {exc}"[:200]))
-    return findings
+            sig = inspect.signature(fn)
+            kwargs, skip = {}, False
+            for pname, p in sig.parameters.items():
+                if pname in available:
+                    kwargs[pname] = available[pname]
+                elif p.default is inspect.Parameter.empty:
+                    skip = True  # needs something we can't supply
+            if skip:
+                continue
+            print(f"    checking {name}...", flush=True)
+            fn(**kwargs)
+        except BaseException as exc:
+            # BaseException on purpose: a page calling st.stop() raises something
+            # that isn't an Exception, and outside a Streamlit session that ended
+            # the entire check silently with a success code.
+            if exc.__class__.__name__ in ("StopException", "RerunException"):
+                continue
+            problems.append(f"{name}() raises {type(exc).__name__}: "
+                            f"{str(exc)[:160]} | {traceback.format_exc().strip().splitlines()[-2].strip()[:120]}")
+    return problems
 
 
-def write_health_log(sheets, findings, run_date=None):
-    """Record this run's findings so the dashboard can show them.
-
-    The digest was the only place these appeared, and on the first real run the
-    email leg failed outright. A second delivery channel that cannot fail
-    quietly is the point: the sheet is written once a day by the sync, and the
-    dashboard reads it rather than re-running every check, which would double
-    the Sheets traffic and take minutes.
-    """
-    run_date = str(run_date or TODAY.isoformat())
-    header = ["Run Date", "Severity", "Area", "Title", "Detail"]
-    rows = [[run_date, f.severity, f.area, f.title, f.detail] for f in (findings or [])]
-    if not rows:
-        rows = [[run_date, "ok", "health-check", "All checks passed", ""]]
+def run_health_check(sheets):
+    """Returns (ok, [problem strings]). Safe to call from the sync."""
+    problems = []
     try:
-        sheets.ensure_headers(config.TAB_HEALTH_LOG, header)
-        sheets.append_rows(config.TAB_HEALTH_LOG, rows)
-        return len(rows)
+        problems += _data_checks(sheets)
     except Exception as exc:
-        print(f"  ! Could not write the health log: {exc}")
-        return 0
-
-
-def latest_health_findings(sheets):
-    """The most recent run's findings, as written by write_health_log."""
+        problems.append(f"Data checks crashed: {type(exc).__name__}: {exc}")
     try:
-        rows = sheets.read_records(config.TAB_HEALTH_LOG)
-    except Exception:
-        return "", []
-    if not rows:
-        return "", []
-    last_date = str(rows[-1].get("Run Date", "")).strip()
-    return last_date, [r for r in rows if str(r.get("Run Date", "")).strip() == last_date]
-
-
-def format_findings(findings):
-    """(plain, slack) blocks for the digest, or ("", "") when all is well."""
-    if not findings:
-        return "", ""
-    fails = [f for f in findings if f.severity == FAIL]
-    warns = [f for f in findings if f.severity == WARN]
-
-    plain, slack = [], []
-    if fails:
-        plain.append(f"🛑 BROKEN — needs fixing ({len(fails)})")
-        slack.append(f"🛑 *BROKEN — needs fixing* ({len(fails)})")
-        for f in fails:
-            plain.append(f"  • {f.line()}")
-            slack.append(f"  • *{f.title}*{(' — ' + f.detail) if f.detail else ''}")
-    if warns:
-        plain.append(f"⚠️ WORTH A LOOK ({len(warns)})")
-        slack.append(f"⚠️ *WORTH A LOOK* ({len(warns)})")
-        for f in warns:
-            plain.append(f"  • {f.line()}")
-            slack.append(f"  • {f.title}{(' — ' + f.detail) if f.detail else ''}")
-    return "\n".join(plain), "\n".join(slack)
+        problems += _page_checks()
+    except Exception as exc:
+        problems.append(f"Page checks crashed: {type(exc).__name__}: {exc}")
+    return (not problems), problems
 
 
 if __name__ == "__main__":
-    import sys
-
-    import analytics
-    import sheets_client
-
-    want_pages = "--pages" in sys.argv
-    sh = sheets_client.SheetsClient()
-    data = sh.read_records(config.TAB_DATA)
-    bespoke = {str(r.get("Full Name", "")).strip() for r in data
-               if str(r.get("Programming Tier", "")).strip().lower() == "bespoke"}
-    pr = sh.read_records(config.TAB_PR_LOG)
-    exits = sh.load_exit_autopsy()
-    cancelled, _ = analytics.cancelled_athletes(exits, pr)
-    roster = [str(r.get("Full Name", "")).strip()
-              for r in sh.read_records("Active Roster")
-              if str(r.get("Full Name", "")).strip()]
-    gone = analytics.not_current_client_names(
-        cancelled, data, roster, overrides=status_overrides(sh))
-
-    results = run_health_check(sh, analytics, data_records=data, bespoke_names=bespoke,
-                               gone_norm=gone, check_pages=want_pages)
-    text, _ = format_findings(results)
-    print(text or "✅ All health checks passed.")
-    sys.exit(1 if any(f.severity == FAIL for f in results) else 0)
+    from sheets_client import SheetsClient
+    ok, probs = run_health_check(SheetsClient())
+    if ok:
+        print("Health check: all clear")
+    else:
+        print(f"Health check found {len(probs)} problem(s):")
+        for p in probs:
+            print(f"  - {p}")

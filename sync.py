@@ -3063,6 +3063,34 @@ def main():
             ("Unknown athletes seen: " + ", ".join(unknown)) if unknown else "ok",
         ]])
 
+    # ---- health check: make the system report its own breakage ----
+    # Every dashboard failure this year was silent: a page raised, or a column
+    # read came back empty, and it stayed broken until a coach happened to
+    # mention it. This calls every page with real data and checks the data
+    # shapes behind those failures, then says so where someone will see it.
+    with stage("health check"):
+        if not config.DRY_RUN:
+            import health_check
+            _ok, _problems = health_check.run_health_check(sheets)
+            if _ok:
+                print("Health check: all clear")
+            else:
+                print(f"Health check found {len(_problems)} problem(s):")
+                for _p in _problems:
+                    print(f"  - {_p}")
+                _body = ("The daily health check found problems with the coaching "
+                         "dashboard:\n\n" + "\n".join(f"- {p}" for p in _problems))
+                try:
+                    notifier.send_slack(
+                        f"*Dashboard health check: {len(_problems)} problem(s)*\n{_body}")
+                except Exception as exc:
+                    print(f"  ! health check Slack alert failed: {exc}")
+                try:
+                    notifier.send_email(
+                        f"Dashboard health check: {len(_problems)} problem(s)", _body)
+                except Exception as exc:
+                    print(f"  ! health check email failed: {exc}")
+
     # ---- queue the drafts a coach will send ----
     # Its own stage: a failed Sync Log write must not cost a day of drafts.
     with stage("flush pending drafts"):
