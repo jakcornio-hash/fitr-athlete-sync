@@ -6,7 +6,19 @@ load_dotenv()
 
 
 def _get(name, default=None, required=False):
-    val = os.getenv(name, default)
+    """Read an env var, treating an empty value as absent.
+
+    GitHub Actions substitutes an empty string for a secret that doesn't exist,
+    so `env: FOO: ${{ secrets.FOO }}` on an unset secret gives FOO="" rather
+    than leaving it unset. os.getenv then hands back that empty string and the
+    default here is skipped, which silently turns a working default into
+    nothing: the knowledge folder wouldn't load, a model name would be blank.
+    An empty value has never meant "deliberately empty" in this config, so it
+    falls through to the default.
+    """
+    val = os.getenv(name)
+    if val is None or (isinstance(val, str) and not val.strip()):
+        val = default
     if required and not val:
         raise RuntimeError(f"Missing required env var: {name} (see .env.example)")
     return val

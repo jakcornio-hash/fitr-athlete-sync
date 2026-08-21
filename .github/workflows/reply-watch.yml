@@ -1,0 +1,62 @@
+name: Athlete Reply Watch
+
+on:
+  schedule:
+    # Every 30 minutes. An athlete who asks a question mid-morning gets a
+    # drafted answer in front of a coach while it still feels like a
+    # conversation, rather than the next morning with the daily sync.
+    #
+    # GitHub's scheduler is not punctual — a run can land 5 to 20 minutes late,
+    # and later still on the hour and half-hour, which is why this uses :07 and
+    # :37 rather than :00 and :30.
+    #
+    # This deliberately does NOT do what the daily sync does. It only looks at
+    # who spoke last in each conversation and drafts for the ones where an
+    # athlete is waiting. No summaries, no benchmarks, no milestones.
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+
+# A slow run must never stack on top of the next one. Fitr and Sheets both have
+# rate limits, and two of these racing would double-post the same draft.
+concurrency:
+  group: reply-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5.6.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write service account key
+        run: echo '${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}' > service_account.json
+
+      - name: Watch for athletes waiting on a reply
+        env:
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_FILE: service_account.json
+          CRM_SHEET_ID: ${{ secrets.CRM_SHEET_ID }}
+          FITR_EMAIL: ${{ secrets.FITR_EMAIL }}
+          FITR_PASSWORD: ${{ secrets.FITR_PASSWORD }}
+          FITR_ACCESS_TOKEN: ${{ secrets.FITR_ACCESS_TOKEN }}
+          FITR_CLIENT_ID: ${{ secrets.FITR_CLIENT_ID }}
+          FITR_CLIENT_SECRET: ${{ secrets.FITR_CLIENT_SECRET }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: ${{ secrets.ANTHROPIC_MODEL }}
+          KNOWLEDGE_FOLDER_ID: ${{ secrets.KNOWLEDGE_FOLDER_ID }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_REPLIES_WEBHOOK_URL: ${{ secrets.SLACK_REPLIES_WEBHOOK_URL }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: python reply_watch.py

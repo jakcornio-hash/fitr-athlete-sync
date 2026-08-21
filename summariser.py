@@ -128,7 +128,7 @@ def summarise_conversation(athlete_name, messages_text, activity_date=None):
         )
         text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
         if not text or text.upper().startswith("SKIP"):
-            return None
+            return (None, "") if with_reason else None
         reason = ""
         if with_reason and "WHY:" in text:
             text, _, reason = text.rpartition("WHY:")
@@ -377,7 +377,7 @@ def weekly_athlete_insight(athlete_name, pr_lines, rec_lines, goal, programme):
         )
         text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
         if not text or text.upper().startswith("SKIP"):
-            return None
+            return (None, "") if with_reason else None
         reason = ""
         if with_reason and "WHY:" in text:
             text, _, reason = text.rpartition("WHY:")
@@ -481,7 +481,7 @@ def annual_athlete_review(athlete_name, months_training, pr_summary, comp_summar
         return text or None
     except Exception as e:
         print(f"  ! annual_review error for {athlete_name}: {e}")
-        return None
+        return (None, "") if with_reason else None
 
 
 def draft_reply(athlete_name, thread_text, profile_data=None, playbook="",
@@ -511,31 +511,56 @@ def draft_reply(athlete_name, thread_text, profile_data=None, playbook="",
         profile_data = {}
     client = _client()
     if client is None:
-        return None
+        return (None, "") if with_reason else None
     # Replies answer real coaching questions, so they get the strongest model
     # available rather than the one used for templated congratulations.
     _model = getattr(config, "ANTHROPIC_REPLY_MODEL", "") or config.ANTHROPIC_MODEL
     _system = coaching_voice.voice_prompt() + _REPLY_SUFFIX + (playbook or "")
+    _system_head = _system
+    _knowledge_block = ""
+    _system_tail = ""
     if knowledge:
-        _system += (
+        _knowledge_block = (
             "\n\n===== JST COACHING KNOWLEDGE =====\n"
             "Answer from this material. It is JST's own methodology, service "
             "detail and coaching standards. Where it covers the question, follow "
             "it rather than general fitness knowledge. Where it does not, say so "
-            "plainly rather than inventing an answer, and leave it for the coach.\n\n"
+            "plainly rather than inventing an answer, and leave it for the coach.\n"
+            "Never sign the message off with a name. You do not know which coach "
+            "will send it, and a reply signed by the wrong one is worse than no "
+            "sign-off at all. Whoever sends it adds their own name.\n"
+            "If the athlete's message is thin (a thanks, an emoji, a one-liner), "
+            "keep the reply short and warm. Do not manufacture coaching points "
+            "they didn't ask about.\n\n"
             + knowledge)
+        _system += _knowledge_block
     if with_reason:
-        _system += (
+        _tail = (
             "\n\nAfter the reply, on a final separate line, write "
             "'WHY: ' followed by one short sentence naming what the answer draws "
             "on (a JST principle, a service fact, or the athlete's own history). "
             "The coach reads this to sanity-check you quickly. It is never sent "
             "to the athlete.")
+        _system += _tail
+        _system_tail = _tail
+    # The knowledge block is ~55k tokens and identical on every call, so it is
+    # sent as its own cached block. Without this, a watcher running every half
+    # hour re-bills the entire coaching library for each athlete it answers,
+    # which is what exhausted the month's budget the first time it ran.
+    if knowledge:
+        _system_arg = [
+            {"type": "text", "text": _system_head},
+            {"type": "text", "text": _knowledge_block,
+             "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": _system_tail},
+        ]
+    else:
+        _system_arg = _system
     try:
         resp = client.messages.create(
             model=_model,
             max_tokens=700 if knowledge else 200,
-            system=_system,
+            system=_system_arg,
             messages=[{
                 "role": "user",
                 "content": (
@@ -550,7 +575,7 @@ def draft_reply(athlete_name, thread_text, profile_data=None, playbook="",
         )
         text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
         if not text or text.upper().startswith("SKIP"):
-            return None
+            return (None, "") if with_reason else None
         reason = ""
         if with_reason and "WHY:" in text:
             text, _, reason = text.rpartition("WHY:")
