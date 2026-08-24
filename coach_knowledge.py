@@ -17,6 +17,12 @@ _SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 _TEXT_TYPES = ("text/plain", "text/markdown", "application/json")
 _cache = {"text": None, "files": []}
 
+# Files worth loading for writing a primer, but dead weight when answering an
+# athlete's chat message. The primer standard is a 40k format spec, the single
+# biggest file in the folder, and it has nothing to say about how to reply to
+# "can you look at my bar muscle ups".
+_SKIP_FOR_REPLIES = ("daily-primer",)
+
 
 def _drive():
     from google.oauth2.service_account import Credentials
@@ -26,10 +32,14 @@ def _drive():
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
-def load(force=False):
-    """Return the whole knowledge base as one string. Cached per process."""
+def load(force=False, for_replies=False):
+    """Return the knowledge base as one string. Cached per process.
+
+    for_replies drops the material that only matters when writing primers,
+    which is most of the largest file in the folder.
+    """
     if _cache["text"] is not None and not force:
-        return _cache["text"]
+        return _for(_cache["text"], for_replies)
     folder = str(getattr(config, "KNOWLEDGE_FOLDER_ID", "") or "").strip()
     if not folder:
         _cache["text"] = ""
@@ -66,7 +76,15 @@ def load(force=False):
 
     _cache["text"] = "\n\n".join(parts)
     _cache["files"] = names
-    return _cache["text"]
+    return _for(_cache["text"], for_replies)
+
+
+def _for(text, for_replies):
+    if not for_replies or not text:
+        return text
+    keep = [block for block in text.split("\n\n===== ")
+            if not any(s in block.split("=====")[0].lower() for s in _SKIP_FOR_REPLIES)]
+    return "\n\n===== ".join(keep)
 
 
 def summary():

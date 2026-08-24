@@ -111,7 +111,7 @@ def main():
     knowledge = ""
     try:
         import coach_knowledge
-        knowledge = coach_knowledge.load()
+        knowledge = coach_knowledge.load(for_replies=True)
         print(f"  {coach_knowledge.summary()}")
     except Exception as exc:
         print(f"  ! coaching knowledge unavailable: {exc}")
@@ -124,6 +124,7 @@ def main():
         playbook = ""
 
     review, new_rows, checked = [], [], 0
+    tiers = {"deep": 0, "light": 0}
     for room_id, name, msg_date in candidates:
         if len(review) >= MAX_DRAFTS_PER_RUN:
             print(f"  reached the {MAX_DRAFTS_PER_RUN}-draft ceiling; the rest wait for the next run")
@@ -144,9 +145,14 @@ def main():
             continue  # already drafted for this exact message
 
         thread = format_thread(messages)
+        # Only the questions that need the coaching library get it.
+        last_text = str(last.get("text") or last.get("body") or "").strip() or thread[-500:]
+        deep = summariser.needs_deep_knowledge(last_text)
+        tiers[("deep" if deep else "light")] += 1
         draft, why = summariser.draft_reply(
             name, thread, profile_data=by_name.get(name, {}),
-            playbook=playbook, knowledge=knowledge, with_reason=True)
+            playbook=playbook, knowledge=(knowledge if deep else ""),
+            with_reason=True)
         if not draft:
             continue
         try:
@@ -159,7 +165,8 @@ def main():
             "draft": draft, "reason": why, "waiting": waiting})
         new_rows.append([name, key, dt.datetime.now().isoformat(timespec="seconds")])
 
-    print(f"  rooms checked: {checked} | new drafts: {len(review)}")
+    print(f"  rooms checked: {checked} | new drafts: {len(review)} "
+          f"(deep {tiers['deep']}, light {tiers['light']})")
     if config.DRY_RUN and review:
         # Show what would have been posted. A dry run that silently discards the
         # drafts tells you the plumbing works but nothing about whether the

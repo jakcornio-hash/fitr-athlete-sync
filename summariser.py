@@ -484,6 +484,53 @@ def annual_athlete_review(athlete_name, months_training, pr_summary, comp_summar
         return (None, "") if with_reason else None
 
 
+def needs_deep_knowledge(athlete_message):
+    """Does answering this actually require the coaching knowledge base?
+
+    Most athlete messages don't. "Thanks", "can you look at my bar muscle ups",
+    "stopped early, overheated" need tone, their profile and judgement. Sending
+    45k tokens of physiology and programming theory to answer those is most of
+    what this costs to run, for no gain in the answer.
+
+    A short, cheap classification first means the expensive path is only taken
+    by the questions that earn it: why the programming is as it is, which track
+    someone belongs on, what the service includes.
+
+    Errs deep on doubt. A slightly expensive good answer beats a cheap wrong one.
+    """
+    text = str(athlete_message or "").strip()
+    if not text:
+        return False
+    # Very short messages are never a programming question worth 45k tokens.
+    if len(text) < 25 and "?" not in text:
+        return False
+    client = _client()
+    if client is None:
+        return True
+    try:
+        resp = client.messages.create(
+            model=config.ANTHROPIC_MODEL,   # the cheap model, on purpose
+            max_tokens=5,
+            system=(
+                "You decide whether answering a message from a coached athlete "
+                "needs JST's programming and coaching reference material.\n"
+                "Answer DEEP if they are asking why the programme is built as it "
+                "is, about training theory or physiology, which track or "
+                "programme suits them, how testing or blocks work, or what their "
+                "membership includes.\n"
+                "Answer LIGHT for everything else: thanks, chat, logistics, "
+                "asking for a video review, reporting how a session went, "
+                "an injury they want their coach to look at.\n"
+                "Reply with one word, DEEP or LIGHT."),
+            messages=[{"role": "user", "content": text[:1500]}],
+        )
+        out = "".join(b.text for b in resp.content
+                      if getattr(b, "type", "") == "text").strip().upper()
+        return out.startswith("DEEP")
+    except Exception:
+        return True   # on any doubt, answer properly
+
+
 def draft_reply(athlete_name, thread_text, profile_data=None, playbook="",
                 knowledge="", with_reason=False):
     """Draft a coaching reply to an athlete's most recent message.
@@ -514,7 +561,12 @@ def draft_reply(athlete_name, thread_text, profile_data=None, playbook="",
         return (None, "") if with_reason else None
     # Replies answer real coaching questions, so they get the strongest model
     # available rather than the one used for templated congratulations.
-    _model = getattr(config, "ANTHROPIC_REPLY_MODEL", "") or config.ANTHROPIC_MODEL
+    # The strong model earns its cost on questions that need the coaching
+    # library. An ordinary message answered from tone and the athlete's profile
+    # does not, and paying Opus rates for "thanks, will do" is most of what this
+    # used to cost.
+    _model = ((getattr(config, "ANTHROPIC_REPLY_MODEL", "") or config.ANTHROPIC_MODEL)
+              if knowledge else config.ANTHROPIC_MODEL)
     _system = coaching_voice.voice_prompt() + _REPLY_SUFFIX + (playbook or "")
     _system_head = _system
     _knowledge_block = ""
