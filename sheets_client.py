@@ -371,6 +371,30 @@ class SheetsClient:
         if cells:
             ws.update_cells(cells, value_input_option="USER_ENTERED")
 
+    def set_column_for_rows(self, tab_title, col_name, row_indices, value):
+        """Write the same value into one column across many rows, in one call.
+
+        row_indices are real sheet row numbers (header is row 1). Used when a
+        coach settles a batch of queued drafts at once: fifty separate
+        update_cell calls is fifty round trips and about a minute of waiting,
+        where this is one. Returns how many cells were written.
+        """
+        rows = sorted({int(i) for i in (row_indices or []) if i})
+        if not rows:
+            return 0
+        if config.DRY_RUN:
+            print(f"[DRY_RUN] would set {col_name}={value} on {len(rows)} rows in '{tab_title}'")
+            return len(rows)
+        ws = self.worksheet(tab_title)
+        header = [h.strip() for h in ws.row_values(1)]
+        try:
+            col = header.index(col_name) + 1
+        except ValueError:
+            raise ValueError(f"'{tab_title}' has no '{col_name}' column")
+        ws.update_cells([gspread.Cell(row=r, col=col, value=str(value)) for r in rows],
+                        value_input_option="USER_ENTERED")
+        return len(rows)
+
     # ----------------------------------------------------------------- archetypes
     TAB_ARCHETYPES = "Archetype Assessments"
     _ARCHETYPE_HEADERS = [

@@ -457,13 +457,28 @@ def _action_log_cached():
     """
     out = {}
     try:
-        for r in get_sheets().read_records(_ACTION_LOG_TAB):
-            k = str(r.get("Key", "")).strip()
-            if k:
-                out[k] = {"first_seen": str(r.get("First Seen", "")).strip(),
-                          "done": str(r.get("Done Date", "")).strip()}
+        # Raw values, not read_records: that route numericises every cell, which
+        # is what silently destroyed the keys in the first place.
+        vals = get_sheets().worksheet(_ACTION_LOG_TAB).get_all_values()
     except Exception:
-        pass
+        return out
+    if not vals:
+        return out
+    head = [h.strip() for h in vals[0]]
+    try:
+        i_key, i_seen, i_done = (head.index("Key"), head.index("First Seen"),
+                                 head.index("Done Date"))
+    except ValueError:
+        return out
+    for row in vals[1:]:
+        if len(row) <= i_key:
+            continue
+        k = str(row[i_key]).strip()
+        if k:
+            out[k] = {
+                "first_seen": str(row[i_seen]).strip() if len(row) > i_seen else "",
+                "done": str(row[i_done]).strip() if len(row) > i_done else "",
+            }
     return out
 
 
@@ -495,6 +510,162 @@ def _mark_action_done(name, key, priority):
         sh.append_rows(_ACTION_LOG_TAB,
                        [[key, name, priority, TODAY.isoformat(), TODAY.isoformat(), "Ed"]])
     _action_log_cached.clear()
+
+
+def _mark_action_done_bulk(items):
+    """Mark many action items done in one pass. items = [(key, athlete, priority)].
+
+    Ed works through fifty of these in a sitting. One at a time this was a sheet
+    write and a full page reload each, thirty seconds to a minute per message by
+    his count, so the batch is two writes and one reload however many he ticks.
+    Returns how many were settled.
+    """
+    seen, todo = set(), []
+    for k, nm, pri in (items or []):
+        if k and k not in seen:
+            seen.add(k)
+            todo.append((k, nm, pri))
+    if not todo:
+        return 0
+    sh = get_sheets()
+    sh.get_or_create(_ACTION_LOG_TAB, _ACTION_LOG_HEADER)
+    log = _action_log_cached()
+    stamp = TODAY.isoformat()
+    known = {k: {"Done Date": stamp, "Done By": "Ed"} for k, _, _ in todo if k in log}
+    fresh = [[k, nm, pri, stamp, stamp, "Ed"] for k, nm, pri in todo if k not in log]
+    if known:
+        sh.batch_update_by_name(_ACTION_LOG_TAB, "Key", known)
+    if fresh:
+        sh.append_rows(_ACTION_LOG_TAB, fresh)
+    _action_log_cached.clear()
+    return len(todo)
+
+
+def _flash(msg):
+    """Queue a confirmation for the rerun that follows a write.
+
+    Anything written with st.success() immediately before st.rerun() is thrown
+    away with the rest of that render, so the coach never sees it.
+    """
+    st.session_state["_flash_msg"] = msg
+
+
+def _show_flash():
+    msg = st.session_state.pop("_flash_msg", None)
+    if msg:
+        st.success(msg)
+
+
+# How many cards to draw at once. Everything on this page is a Streamlit widget
+# and every widget costs render time on every single click, so drawing 155 action
+# cards and 120 drafts up front made each tick of a checkbox take seconds. Ed
+# works through ten or fifteen at a sitting; the rest are one button away.
+CARDS_PER_PAGE = 20
+
+
+def _sel_store(ns):
+    """The durable record of what is ticked, independent of what is on screen.
+
+    Streamlit throws away a widget's state as soon as that widget stops being
+    rendered, so with a paged list the ticks would vanish the moment a card fell
+    off the visible page — and "select all 50" has to mean all fifty, not the
+    twenty currently drawn. This set is the truth; the checkboxes only report
+    into it.
+    """
+    return st.session_state.setdefault(f"_sel_{ns}", set())
+
+
+def _sel_sync(ns, key, widget_key):
+    """Checkbox callback: mirror one tick into the durable set."""
+    store = _sel_store(ns)
+    if st.session_state.get(widget_key):
+        store.add(key)
+    else:
+        store.discard(key)
+
+
+def _sel_checkbox(ns, key, label):
+    """One tick box, wired to the durable set."""
+    wk = f"sel_{ns}_{key}"
+    st.checkbox(label, key=wk, value=key in _sel_store(ns),
+                label_visibility="collapsed",
+                on_change=_sel_sync, args=(ns, key, wk))
+
+
+def _set_selection(ns, keys, value):
+    """Tick or clear a whole set at once.
+
+    Streamlit ignores value= once a widget key holds state, so a select-all has
+    to write that state itself. Safe here because the bar sits above the cards,
+    so none of these widgets exist yet on the run that calls this.
+    """
+    store = _sel_store(ns)
+    for k in keys:
+        st.session_state[f"sel_{ns}_{k}"] = bool(value)
+        if value:
+            store.add(k)
+        else:
+            store.discard(k)
+
+
+def _clear_selection(ns, keys):
+    """Forget these entirely, so a settled item cannot come back ticked."""
+    store = _sel_store(ns)
+    for k in keys:
+        st.session_state.pop(f"sel_{ns}_{k}", None)
+        store.discard(k)
+
+
+def _bulk_select_bar(ns, keys, noun):
+    """Select all / clear controls. Returns the keys currently ticked."""
+    store = _sel_store(ns)
+    # Anything that has left the list stops counting, or the number lies.
+    store &= set(keys)
+    picked = [k for k in keys if k in store]
+    c1, c2, c3 = st.columns([1.1, 1, 4])
+    with c1:
+        if st.button(f"Select all {len(keys)}", key=f"{ns}_sel_all",
+                     use_container_width=True, disabled=not keys):
+            _set_selection(ns, keys, True)
+            st.rerun()
+    with c2:
+        if st.button("Clear", key=f"{ns}_sel_none", use_container_width=True,
+                     disabled=not picked):
+            _set_selection(ns, keys, False)
+            st.rerun()
+    with c3:
+        st.caption(f"**{len(picked)}** of {len(keys)} {noun} ticked."
+                   if picked else
+                   "Tick the boxes on the left as you send, then settle them in one go.")
+    return picked
+
+
+def _show_more(ns, total, step=CARDS_PER_PAGE):
+    """How many cards to draw, with a button to draw more. Returns the count."""
+    key = f"_shown_{ns}"
+    shown = min(st.session_state.get(key, step), total)
+    if shown < total:
+        st.caption(f"Showing {shown} of {total}.")
+    return shown
+
+
+def _show_more_button(ns, total, step=CARDS_PER_PAGE):
+    """Draw the 'show more' control. Call after the cards."""
+    key = f"_shown_{ns}"
+    shown = min(st.session_state.get(key, step), total)
+    if shown >= total:
+        return
+    c1, c2, _ = st.columns([1.2, 1, 4])
+    with c1:
+        if st.button(f"Show {min(step, total - shown)} more", key=f"{ns}_more",
+                     use_container_width=True):
+            st.session_state[key] = shown + step
+            st.rerun()
+    with c2:
+        if st.button(f"Show all {total}", key=f"{ns}_all",
+                     use_container_width=True):
+            st.session_state[key] = total
+            st.rerun()
 
 
 def _athlete_mrr(rec):
@@ -683,6 +854,42 @@ def _mark_pending_sent(row_idx, status="sent", record=None):
         st.error(f"Couldn't update that draft: {exc}")
 
 
+def _mark_pending_bulk(cards, status="sent"):
+    """Settle every queued row behind a set of cards in a single write.
+
+    A card can stand for several merged rows, so this flattens down to real
+    sheet rows first. Sent messages all go into the Message Log together for the
+    same reason the single button writes one: with automatic sending off, a
+    coach ticking these is the only moment a message becomes real, and the reply
+    scanner and the response rates both read that log.
+    Returns how many rows were settled.
+    """
+    recs = []
+    for c in (cards or []):
+        recs.extend(c.get("_records") or [c])
+    rows = [r.get("_row") for r in recs if r.get("_row")]
+    if not rows:
+        return 0
+    try:
+        sh = get_sheets()
+        n = sh.set_column_for_rows(config.TAB_PENDING_MESSAGES, "Status", rows, status)
+    except Exception as exc:
+        st.error(f"Couldn't update those drafts: {exc}")
+        return 0
+    if status == "sent":
+        try:
+            sh.log_messages([{
+                "Date": TODAY.isoformat(),
+                "Athlete Name": str(r.get("Athlete Name", "")).strip(),
+                "Message Type": str(r.get("Message Type", "")).strip(),
+                "Room ID": str(r.get("Room ID", "")).strip(),
+            } for r in recs])
+        except Exception as log_exc:
+            st.warning(f"Marked sent, but couldn't add them to the Message Log: {log_exc}")
+    _pending_messages_cached.clear()
+    return n
+
+
 def _pending_widget_key(record):
     """A widget key tied to the message itself, not to where it sits in a list.
 
@@ -724,7 +931,31 @@ def _render_pending_messages():
                "exit_checkin": "🚪 Cancelled, no reply yet",
                "exit_pivot": "🚪 Cancelled, offer them something",
                "referral": "🤝 Referral", "monthly_fitr": "📅 Monthly"}
-    for i, r in enumerate(pending):
+    # Tick as you send, settle the batch in one write. Ed sends these in Fitr and
+    # then marks them off, so the marking is the thing he does fifty times.
+    _by_wid = {_pending_widget_key(r): r for r in pending}
+    _wids = list(_by_wid)
+    _picked = _bulk_select_bar("pend", _wids, "drafts")
+    if _picked:
+        _s1, _s2, _ = st.columns([1.2, 1, 4])
+        with _s1:
+            if st.button(f"✅ Mark {len(_picked)} sent", key="pend_bulk_sent",
+                         type="primary", use_container_width=True):
+                n = _mark_pending_bulk([_by_wid[w] for w in _picked], "sent")
+                _clear_selection("pend", _wids)
+                _flash(f"{n} draft{'s' if n != 1 else ''} marked as sent.")
+                st.rerun()
+        with _s2:
+            if st.button(f"🗑️ Skip {len(_picked)}", key="pend_bulk_skip",
+                         use_container_width=True):
+                n = _mark_pending_bulk([_by_wid[w] for w in _picked], "skipped")
+                _clear_selection("pend", _wids)
+                _flash(f"{n} draft{'s' if n != 1 else ''} skipped.")
+                st.rerun()
+    _shown = _show_more("pend", len(pending))
+    st.write("")
+
+    for i, r in enumerate(pending[:_shown]):
         nm = str(r.get("Athlete Name", "")).strip()
         mt = str(r.get("Message Type", "")).strip()
         label = _labels.get(mt, mt.replace("_", " ").title())
@@ -742,7 +973,11 @@ def _render_pending_messages():
         header = f"{label} — **{nm}** · queued {r.get('Date', '')}"
         if n_merged > 1:
             header += f" · {n_merged} merged into one"
-        with st.expander(header, expanded=i < 3):
+        sel_col, card_col = st.columns([0.6, 12])
+        with sel_col:
+            st.write("")
+            _sel_checkbox("pend", wid, f"Select the draft for {nm}")
+        with card_col.expander(header, expanded=i < 3):
             msg = str(r.get("Message", ""))
             st.text_area("Message", value=msg, height=120 if n_merged == 1 else 200,
                          key=f"pend_msg_{wid}", label_visibility="collapsed")
@@ -758,6 +993,7 @@ def _render_pending_messages():
                     st.rerun()
             with b3:
                 _outreach_send_buttons(st.session_state.get(f"pend_msg_{wid}", msg))
+    _show_more_button("pend", len(pending))
     st.divider()
 
 
@@ -4083,6 +4319,7 @@ def page_action_list(engagement_results, trend_results, rec_alert_rows, mileston
     _rec_by_name_al = {str(r.get("Full Name", "")).strip(): r
                        for r in (data_records or [])}
 
+    _show_flash()
     _render_pending_messages()
 
     _render_archetype_deliveries({
@@ -4131,7 +4368,15 @@ def page_action_list(engagement_results, trend_results, rec_alert_rows, mileston
     def _item_key(r):
         reason = re.sub(r"\d+", "#", str(r.get("Reason", "")))
         raw = f"{r['Athlete']}|{r['Priority']}|{reason}"
-        return hashlib.md5(raw.encode()).hexdigest()[:10]
+        # The "k" matters. A bare hex digest is sometimes all digits, or reads
+        # as scientific notation, and Google Sheets hands those back as numbers:
+        # "36660e5985" came back as inf, "0640966322" as 640966322. About one
+        # key in sixty. Those items could never be found in the log again, so
+        # marking them done did nothing and they returned the next morning,
+        # while every render appended them afresh — 752 junk rows and a couple
+        # of seconds a click by the time it was found. A letter in front makes
+        # the key text, permanently.
+        return "k" + hashlib.md5(raw.encode()).hexdigest()[:10]
 
     # Log anything new so it has a first-seen date to age out from.
     _record_new_action_items([(_item_key(r), r["Athlete"], r["Priority"]) for r in ed_rows])
@@ -4221,8 +4466,28 @@ def page_action_list(engagement_results, trend_results, rec_alert_rows, mileston
         "📝 Remind to Log":    "#1e88e5",
     }
 
+    # ── Bulk actions ──────────────────────────────────────────────────────────
+    # Tick the boxes down the left as you work, then settle the lot in one write.
+    # Marking fifty items one at a time meant fifty sheet writes and fifty page
+    # reloads; this is one of each however many are ticked.
+    _active_keys = [_item_key(r) for r in active]
+    _key_meta = {_item_key(r): (r["Athlete"], r["Priority"]) for r in active}
+    _picked_al = _bulk_select_bar("al", _active_keys, "items")
+    if _picked_al:
+        _d1, _ = st.columns([1.2, 5])
+        with _d1:
+            if st.button(f"✅ Mark {len(_picked_al)} done", key="al_bulk_done",
+                         type="primary", use_container_width=True):
+                n = _mark_action_done_bulk(
+                    [(k, _key_meta[k][0], _key_meta[k][1]) for k in _picked_al])
+                _clear_selection("al", _active_keys)
+                _flash(f"{n} item{'s' if n != 1 else ''} marked done. Nice one.")
+                st.rerun()
+    _shown_al = _show_more("al", len(active))
+    st.write("")
+
     # ── Active items ──────────────────────────────────────────────────────────
-    for i, r in enumerate(active):
+    for i, r in enumerate(active[:_shown_al]):
         name = r["Athlete"]
         priority = r["Priority"]
         reason = r["Reason"]
@@ -4236,8 +4501,10 @@ def page_action_list(engagement_results, trend_results, rec_alert_rows, mileston
 
         # Card container
         with st.container(border=True):
-            # Header row: priority badge + athlete name + done button
-            hcol1, hcol2 = st.columns([5, 1])
+            # Header row: tick box + priority badge + athlete name + done button
+            hcol0, hcol1, hcol2 = st.columns([0.5, 5, 1])
+            with hcol0:
+                _sel_checkbox("al", item_key, f"Select {name}")
             with hcol1:
                 prog = r.get("_programme", "")
                 prog_str = f" · {prog}" if prog else ""
@@ -4250,7 +4517,13 @@ def page_action_list(engagement_results, trend_results, rec_alert_rows, mileston
 
             # Sort the athlete out without leaving the list: log what was said,
             # correct their programme, or mark them gone.
-            with st.expander("⚙️ Note · programme · cancelled", expanded=False):
+            #
+            # Behind a toggle rather than an expander: Streamlit builds an
+            # expander's contents whether it is open or shut, and these are nine
+            # widgets and three forms apiece. Across a full list that was most of
+            # the page's render time, paid on every click, for panels nobody had
+            # opened.
+            if st.toggle("⚙️ Note · programme · cancelled", key=f"al_qa_{item_key}"):
                 _render_athlete_quick_actions(
                     name, _rec_by_name_al.get(name, {}), f"al_{item_key}")
 
@@ -4285,6 +4558,8 @@ def page_action_list(engagement_results, trend_results, rec_alert_rows, mileston
                     _fitr_send_widget(name, msg, idx=i)
             else:
                 st.caption("No message template for this item — action manually.")
+
+    _show_more_button("al", len(active))
 
     # ── Completed section ─────────────────────────────────────────────────────
     if completed:
@@ -9662,6 +9937,9 @@ def _render_tab(label, fn, *args, **kwargs):
     """
     try:
         fn(*args, **kwargs)
+        # Only this page runs each time now, so a stale failure has to be
+        # cleared by the page that fixed itself rather than by a global reset.
+        st.session_state.setdefault(TAB_RENDER_FAILURES_KEY, {}).pop(label, None)
     except Exception as e:
         failures = st.session_state.setdefault(TAB_RENDER_FAILURES_KEY, {})
         failures[label] = f"{type(e).__name__}: {e}"
@@ -9775,13 +10053,48 @@ def main():
         load_results = analytics.load_analysis(pr_records, rec_by_name=rec_by_name, data_records=data_records)
         grandslam_results = analytics.grandslam_score(athletes, pr_records, data_records)
 
-    tabs = st.tabs([
-        "✅ Actions", "📋 Outreach List", "🚨 Alerts", "🃏 Squad", "👥 Athletes",
-        "🗓️ Week Plan", "🏁 Competitions", "🎥 Videos", "📊 Programmes", "🏋️ Load",
-        "📈 Trends", "🏆 Leaderboard", "💤 Recovery", "🌐 CRM",
-        "📚 Playbook", "💎 Grandslam", "📣 Marketing", "🏋️ Gym Referrals",
-        "💷 Finance", "⚙️ Sync", "❓ Help",
-    ])
+    # One page is rendered per run, not all twenty-one.
+    #
+    # st.tabs executes every tab's body on every interaction and simply hides
+    # the ones you aren't looking at. Ticking a single checkbox on the action
+    # list was therefore re-rendering the whole dashboard: Actions 9s, CRM 5s,
+    # Grandslam 4.5s, Leaderboard 2.6s and the rest, about half a minute a
+    # click. That is the delay Ed was describing when he said marking a message
+    # sent took thirty seconds to a minute. Rendering only the page in front of
+    # him makes a click cost that one page.
+    PAGES = [
+        ("✅ Actions", lambda: _render_tab("Actions", page_action_list, engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins, comp_results, archetype_by_name=archetype_by_name, data_records=data_records)),
+        ("📋 Outreach List", lambda: _render_tab("Outreach List", page_outreach, engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins, comp_results, archetype_by_name=archetype_by_name, data_records=data_records)),
+        ("🚨 Alerts", lambda: _render_tab("Alerts", page_alerts, engagement_results, trend_results, rec_alert_rows, consistency_wins, data_records=data_records, pr_records=pr_records, athletes=athletes, archetype_by_name=archetype_by_name)),
+        ("🃏 Squad", lambda: _render_tab("Squad", page_squad, athletes, engagement_results, rec_by_name, data_records=data_records, archetype_by_name=archetype_by_name, pr_records=pr_records, coach_progs=coach_progs)),
+        ("👥 Athletes", lambda: _render_tab("Athletes", page_athletes, pr_records, athletes, trend_results, engagement_results, rec_by_name, data_records, archetype_by_name=archetype_by_name, competition_rows=competition_rows, coach_progs=coach_progs, archetype_history_by_name=archetype_history_by_name)),
+        ("🗓️ Week Plan", lambda: _render_tab("Week Plan", page_week_planner, engagement_results, rec_alert_rows, comp_results, consistency_wins, milestones, data_records=data_records)),
+        ("🏁 Competitions", lambda: _render_tab("Competitions", page_competitions, comp_results, athletes, data_records, competition_rows=competition_rows, pr_records=pr_records)),
+        ("🎥 Videos", lambda: _render_tab("Videos", page_video_reviews, data_records=data_records)),
+        ("📊 Programmes", lambda: _render_tab("Programmes", page_programmes, athletes, pr_records, trend_results, data_records, load_results=load_results, engagement_results=engagement_results)),
+        ("🏋️ Load", lambda: _render_tab("Load", page_load, load_results)),
+        ("📈 Trends", lambda: _render_tab("Trends", page_trends, pr_records, athletes, data_records)),
+        ("🏆 Leaderboard", lambda: _render_tab("Leaderboard", page_leaderboard, pr_records, athletes)),
+        ("💤 Recovery", lambda: _render_tab("Recovery", page_recovery, rec_by_name, pr_records=pr_records)),
+        ("🌐 CRM", lambda: _render_tab("CRM", page_crm, athletes, engagement_results, data_records, pr_records=pr_records)),
+        ("📚 Playbook", lambda: _render_tab("Playbook", page_coaching_playbook)),
+        ("💎 Grandslam", lambda: _render_tab("Grandslam", page_grandslam, grandslam_results, data_records, pr_records=pr_records, athletes=athletes, competition_rows=competition_rows)),
+        ("📣 Marketing", lambda: _render_tab("Marketing", page_marketing, pr_records, grandslam_results, data_records, athletes, competition_rows=competition_rows, consistency_wins=consistency_wins, milestones=milestones)),
+        ("🏋️ Gym Referrals", lambda: _render_tab("Gym Referrals", page_gym_referrals, athletes=athletes)),
+        ("💷 Finance", lambda: _render_tab("Finance", page_finance, data_records, pr_records, athletes, gone_norm=gone_norm)),
+        ("⚙️ Sync", lambda: _render_tab("Sync", page_sync_health)),
+        ("❓ Help", lambda: _render_tab("Help", page_help)),
+    ]
+    _labels = [lbl for lbl, _ in PAGES]
+
+    _choice = st.segmented_control(
+        "Section", _labels, key="_nav_section", label_visibility="collapsed",
+        default=_labels[0],
+    )
+    # The control can be cleared by clicking the selected option again, which
+    # would otherwise leave the coach on a blank dashboard.
+    if _choice not in _labels:
+        _choice = _labels[0]
 
     # A tab that failed to load says so in its own tab. A failed *data* load is
     # worse and quieter: every tab still renders, just with less behind it. Say
@@ -9794,54 +10107,7 @@ def main():
               "minute normally fixes it. The daily health check reports it too."
         )
 
-    st.session_state[TAB_RENDER_FAILURES_KEY] = {}
-
-    with tabs[0]:
-        _render_tab("Actions", page_action_list, engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins, comp_results, archetype_by_name=archetype_by_name, data_records=data_records)
-    with tabs[1]:
-        _render_tab("Outreach List", page_outreach, engagement_results, trend_results, rec_alert_rows, milestones, consistency_wins, comp_results, archetype_by_name=archetype_by_name, data_records=data_records)
-    with tabs[2]:
-        _render_tab("Alerts", page_alerts, engagement_results, trend_results, rec_alert_rows, consistency_wins,
-                    data_records=data_records, pr_records=pr_records, athletes=athletes,
-                    archetype_by_name=archetype_by_name)
-    with tabs[3]:
-        _render_tab("Squad", page_squad, athletes, engagement_results, rec_by_name, data_records=data_records, archetype_by_name=archetype_by_name, pr_records=pr_records, coach_progs=coach_progs)
-    with tabs[4]:
-        _render_tab("Athletes", page_athletes, pr_records, athletes, trend_results, engagement_results, rec_by_name, data_records, archetype_by_name=archetype_by_name, competition_rows=competition_rows, coach_progs=coach_progs, archetype_history_by_name=archetype_history_by_name)
-    with tabs[5]:
-        _render_tab("Week Plan", page_week_planner, engagement_results, rec_alert_rows, comp_results, consistency_wins, milestones, data_records=data_records)
-    with tabs[6]:
-        _render_tab("Competitions", page_competitions, comp_results, athletes, data_records, competition_rows=competition_rows, pr_records=pr_records)
-    with tabs[7]:
-        _render_tab("Videos", page_video_reviews, data_records=data_records)
-    with tabs[8]:
-        _render_tab("Programmes", page_programmes, athletes, pr_records, trend_results, data_records, load_results=load_results, engagement_results=engagement_results)
-    with tabs[9]:
-        _render_tab("Load", page_load, load_results)
-    with tabs[10]:
-        _render_tab("Trends", page_trends, pr_records, athletes, data_records)
-    with tabs[11]:
-        _render_tab("Leaderboard", page_leaderboard, pr_records, athletes)
-    with tabs[12]:
-        _render_tab("Recovery", page_recovery, rec_by_name, pr_records=pr_records)
-    with tabs[13]:
-        _render_tab("CRM", page_crm, athletes, engagement_results, data_records, pr_records=pr_records)
-    with tabs[14]:
-        _render_tab("Playbook", page_coaching_playbook)
-    with tabs[15]:
-        _render_tab("Grandslam", page_grandslam, grandslam_results, data_records, pr_records=pr_records, athletes=athletes, competition_rows=competition_rows)
-    with tabs[16]:
-        _render_tab("Marketing", page_marketing, pr_records, grandslam_results, data_records, athletes,
-                    competition_rows=competition_rows, consistency_wins=consistency_wins,
-                    milestones=milestones)
-    with tabs[17]:
-        _render_tab("Gym Referrals", page_gym_referrals, athletes=athletes)
-    with tabs[18]:
-        _render_tab("Finance", page_finance, data_records, pr_records, athletes, gone_norm=gone_norm)
-    with tabs[19]:
-        _render_tab("Sync", page_sync_health)
-    with tabs[20]:
-        _render_tab("Help", page_help)
+    dict(PAGES)[_choice]()
 
 
 if __name__ == "__main__":
