@@ -1805,7 +1805,7 @@ def main():
     # out of date without ever looking broken. Ed could no longer tell what
     # updated and what did not, which is fair: almost nothing did.
     try:
-        _crm = crm_writeback.refresh_master_sheet(sheets, pr_records)
+        _crm = crm_writeback.refresh_master_sheet(sheets, pr_records, data_records=data_recs)
         print(f"CRM Master Sheet: {_crm}")
     except Exception as _exc:
         # Never let the CRM take the sync down. It is a downstream view.
