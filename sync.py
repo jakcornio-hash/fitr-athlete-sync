@@ -1804,12 +1804,14 @@ def main():
     # being maintained by hand, so the whole retention view had drifted months
     # out of date without ever looking broken. Ed could no longer tell what
     # updated and what did not, which is fair: almost nothing did.
+    _crm = None
     try:
         _crm = crm_writeback.refresh_master_sheet(sheets, pr_records, data_records=data_recs)
         print(f"CRM Master Sheet: {_crm}")
     except Exception as _exc:
         # Never let the CRM take the sync down. It is a downstream view.
         print(f"  ! CRM write-back failed: {_exc}")
+        _crm = {"failed": str(_exc)}
 
     # Cancelled athletes (CRM Exit Autopsy) are excluded from all engagement
     # flags and athlete-facing messages — someone who consciously cancelled
@@ -3099,7 +3101,13 @@ def main():
         sheets.append_rows(config.TAB_SYNC_LOG, [[
             TODAY.isoformat(), len(athletes), len(bench_rows), len(chal_rows), len(chat_notes),
             len(rec_notes), notes_written, onboarded, emails_sent,
-            ("Unknown athletes seen: " + ", ".join(unknown)) if unknown else "ok",
+            # The CRM figure goes in the status cell so a coach can see from the
+            # sheet itself whether last night's write-back happened, without
+            # opening the GitHub run log.
+            (("Unknown athletes seen: " + ", ".join(unknown)) if unknown else "ok")
+            + (f" · CRM: {_crm.get('activity', 0)} athletes updated, {_crm.get('email', 0)} emails filled"
+               if isinstance(_crm, dict) and "activity" in _crm
+               else f" · CRM: {_crm}" if _crm else ""),
         ]])
 
     # ---- health check: make the system report its own breakage ----
