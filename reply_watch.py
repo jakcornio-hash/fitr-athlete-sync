@@ -46,9 +46,43 @@ def _record(sheets, rows):
     sheets.append_rows(TAB, rows)
 
 
-def main():
+RUNS_TAB = "Reply Watch Runs"
+RUNS_HEADER = ["Started", "Source", "Rooms Checked", "Drafts", "Finished"]
+
+
+def record_run(sheets, started, source, checked=0, drafts=0, finished=""):
+    """Log that a check happened, so the dashboard can say when it last looked.
+
+    Also the throttle. GitHub's schedule is the backstop, a coach opening the
+    dashboard is the fast path, and neither should end up running twice within
+    a few minutes of the other.
+    """
+    try:
+        sheets.get_or_create(RUNS_TAB, RUNS_HEADER)
+        sheets.append_rows(RUNS_TAB, [[started.isoformat(timespec="seconds"), source,
+                                       str(checked), str(drafts), finished]])
+    except Exception as exc:
+        print(f"  ! could not record the run: {exc}")
+
+
+def last_run_at(sheets):
+    """When a check last started, or None. Cheap: one read of a small tab."""
+    try:
+        vals = sheets.worksheet(RUNS_TAB).get_all_values()
+    except Exception:
+        return None
+    for row in reversed(vals[1:]):
+        if row and str(row[0]).strip():
+            try:
+                return dt.datetime.fromisoformat(str(row[0]).strip())
+            except ValueError:
+                continue
+    return None
+
+
+def main(source="cron"):
     started = dt.datetime.now()
-    print(f"== Reply watch {started:%Y-%m-%d %H:%M} ==")
+    print(f"== Reply watch {started:%Y-%m-%d %H:%M} ({source}) ==")
     sheets = SheetsClient()
     fitr = FitrClient()
     fitr.authenticate()
@@ -180,7 +214,12 @@ def main():
         posted = notifier.send_reply_for_review(review)
         print(f"  posted to Slack: {posted}")
         _record(sheets, new_rows)
+    if not config.DRY_RUN:
+        record_run(sheets, started, source, checked, len(review),
+                   dt.datetime.now().isoformat(timespec="seconds"))
     print(f"== done in {(dt.datetime.now() - started).seconds}s ==")
+    return {"checked": checked, "drafts": len(review),
+            "athletes": [e["athlete"] for e in review]}
 
 
 if __name__ == "__main__":

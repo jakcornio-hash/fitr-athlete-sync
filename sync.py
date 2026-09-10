@@ -36,6 +36,7 @@ import health_check
 import notifier
 import summariser
 import coaching_voice
+import crm_writeback
 import recovery
 
 TODAY = dt.date.today()
@@ -1796,6 +1797,19 @@ def main():
 
     # ---- analytics: trends + engagement + milestones + consistency ----
     pr_records = sheets.read_records(config.TAB_PR_LOG)
+
+    # Put the truth back into the CRM's activity columns. Everything on that
+    # sheet that looks automatic — Slipping Away, Resurrection Priority, the MAU
+    # and retention dashboards — is a formula reading three columns that were
+    # being maintained by hand, so the whole retention view had drifted months
+    # out of date without ever looking broken. Ed could no longer tell what
+    # updated and what did not, which is fair: almost nothing did.
+    try:
+        _crm = crm_writeback.refresh_master_sheet(sheets, pr_records)
+        print(f"CRM Master Sheet: {_crm}")
+    except Exception as _exc:
+        # Never let the CRM take the sync down. It is a downstream view.
+        print(f"  ! CRM write-back failed: {_exc}")
 
     # Cancelled athletes (CRM Exit Autopsy) are excluded from all engagement
     # flags and athlete-facing messages — someone who consciously cancelled

@@ -6,6 +6,7 @@ Deploy:       Streamlit Community Cloud → connect GitHub repo → add secrets
 """
 import datetime as dt
 import hashlib
+import threading
 import json
 import os
 import re
@@ -901,6 +902,86 @@ def _pending_widget_key(record):
     """
     raw = "|".join(str(record.get(k, "")) for k in ("_row", "Athlete Name", "Message Type", "Date"))
     return hashlib.md5(raw.encode()).hexdigest()[:12]
+
+
+# ── Reply watch, run from the dashboard ──────────────────────────────────────
+# GitHub's scheduler asks for 48 runs a day and delivers about 8, with gaps of
+# two to four and a half hours. Measured end to end, the median athlete waited
+# 103 minutes for a draft to reach Slack and sixteen of thirty-five waited over
+# two hours. Nothing in the workflow file fixes that; GitHub treats scheduled
+# jobs as best effort.
+#
+# A coach with the dashboard open is a better trigger than a cron that does not
+# fire. This checks when Ed opens the page, which is exactly the hours the
+# question was asked in. The cron stays as the overnight backstop.
+WATCH_MIN_GAP_MINUTES = 30
+_WATCH_LOCK = threading.Lock()
+
+
+def _watch_last_run():
+    """When the reply watcher last started, from either trigger."""
+    try:
+        import reply_watch
+        return reply_watch.last_run_at(get_sheets())
+    except Exception:
+        return None
+
+
+def _run_reply_watch(source):
+    """Do a full check in the background. Never touches st.* — no script context."""
+    def _work():
+        try:
+            import reply_watch, sheets_client
+            # Its own clients: the cached one belongs to the page's thread.
+            sheets = sheets_client.SheetsClient()
+            last = reply_watch.last_run_at(sheets)
+            if last and (dt.datetime.now() - last).total_seconds() < 120:
+                return  # somebody else just did it
+            reply_watch.main(source=source)
+        except Exception as exc:
+            print(f"  ! dashboard reply watch failed: {exc}")
+        finally:
+            if _WATCH_LOCK.locked():
+                try:
+                    _WATCH_LOCK.release()
+                except RuntimeError:
+                    pass
+    if not _WATCH_LOCK.acquire(blocking=False):
+        return False   # one is already running in this app
+    threading.Thread(target=_work, daemon=True, name=f"reply-watch-{source}").start()
+    return True
+
+
+def _render_reply_watch_bar():
+    """Says when athlete messages were last checked, and checks them now."""
+    last = _watch_last_run()
+    mins = int((dt.datetime.now() - last).total_seconds() // 60) if last else None
+
+    # Opening the dashboard is the trigger. Throttled, because two coaches with
+    # the page open should not mean two runs and two sets of drafts.
+    if mins is None or mins >= WATCH_MIN_GAP_MINUTES:
+        if _run_reply_watch("dashboard"):
+            st.info("Checking Fitr for athletes waiting on a reply — drafts will "
+                    "appear in #athlete-replies in about a minute.")
+
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        if mins is None:
+            st.caption("💬 Athlete replies: no check recorded yet.")
+        elif mins < 60:
+            st.caption(f"💬 Athlete messages last checked **{mins} min ago**. "
+                       f"Drafts go to #athlete-replies for a coach to approve.")
+        else:
+            st.caption(f"💬 Athlete messages last checked **{mins // 60}h "
+                       f"{mins % 60}m ago**.")
+    with c2:
+        if st.button("🔄 Check now", key="watch_now", use_container_width=True):
+            if _run_reply_watch("manual"):
+                _flash("Checking Fitr now — drafts will land in #athlete-replies "
+                       "shortly.")
+            else:
+                _flash("A check is already running.")
+            st.rerun()
 
 
 def _render_pending_messages():
@@ -4320,6 +4401,7 @@ def page_action_list(engagement_results, trend_results, rec_alert_rows, mileston
                        for r in (data_records or [])}
 
     _show_flash()
+    _render_reply_watch_bar()
     _render_pending_messages()
 
     _render_archetype_deliveries({
